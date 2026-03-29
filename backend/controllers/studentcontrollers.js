@@ -1,8 +1,13 @@
 import jwt from "jsonwebtoken";
-import { PrismaClient } from "@prisma/client";
+import prisma from "../prisma/client.js";
 import { getAcademicYear } from "../utils/academicYear.js";
 
-const prisma = new PrismaClient();
+const stripStudentSecrets = (student) => {
+  if (!student || typeof student !== "object") return student;
+  const safe = { ...student };
+  delete safe.password;
+  return safe;
+};
 
 // =======================
 // ADMIN: GET ALL STUDENTS (WITH PAYMENT STATUS)
@@ -31,7 +36,7 @@ export const getStudents = async (req, res) => {
           p.month === currentMonth
       );
       return {
-        ...s,
+        ...stripStudentSecrets(s),
         feesStatus: hasPaidCurrentMonth ? "paid" : "unpaid",
       };
     });
@@ -39,6 +44,23 @@ export const getStudents = async (req, res) => {
     res.json(enriched);
   } catch (err) {
     console.error("getStudents error:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// =======================
+// ADMIN: GET TOTAL STUDENT COUNT
+// =======================
+export const getStudentCount = async (req, res) => {
+  try {
+    if (req.userRole !== "admin") {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const totalStudents = await prisma.student.count();
+    res.json({ totalStudents });
+  } catch (err) {
+    console.error("getStudentCount error:", err);
     res.status(500).json({ message: err.message });
   }
 };
@@ -63,7 +85,7 @@ export const getLoggedInStudent = async (req, res) => {
       return res.status(404).json({ message: "Student not found" });
     }
 
-    res.json(student);
+    res.json(stripStudentSecrets(student));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -92,7 +114,7 @@ export const getStudentById = async (req, res) => {
       return res.status(404).json({ message: "Student not found" });
     }
 
-    res.json(student);
+    res.json(stripStudentSecrets(student));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

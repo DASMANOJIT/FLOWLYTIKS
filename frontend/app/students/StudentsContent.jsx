@@ -10,6 +10,7 @@ export default function StudentsPage() {
   const searchParams = useSearchParams();
 
   const [students, setStudents] = useState([]);
+  const [totalStudents, setTotalStudents] = useState(null);
   const [search, setSearch] = useState(() => searchParams.get("search") || "");
   const [statusFilter, setStatusFilter] = useState(
     () => searchParams.get("status") || "all"
@@ -42,6 +43,15 @@ export default function StudentsPage() {
         if (Array.isArray(data)) setStudents(data);
         else if (Array.isArray(data.students)) setStudents(data.students);
         else setStudents([]);
+      })
+      .catch((err) => console.error(err));
+
+    fetch(`${API_BASE}/api/students/count`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (typeof data?.totalStudents === "number") setTotalStudents(data.totalStudents);
       })
       .catch((err) => console.error(err));
   }, []);
@@ -105,6 +115,13 @@ export default function StudentsPage() {
   return (
     <div className="students-container">
       <h1 className="students-title">Students</h1>
+
+      <div className="students-statbar">
+        <div className="students-statcard">
+          <span className="students-statlabel">Total Students</span>
+          <span className="students-statvalue">{totalStudents ?? "—"}</span>
+        </div>
+      </div>
 
       <Link href="/admin" className="back-btn">
         ← Back to Dashboard

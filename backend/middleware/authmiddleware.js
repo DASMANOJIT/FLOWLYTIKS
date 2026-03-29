@@ -1,10 +1,8 @@
 import jwt from "jsonwebtoken";
-import { PrismaClient } from "@prisma/client";
 import {
   isSessionActive,
 } from "../utils/sessionStore.js";
-
-const prisma = new PrismaClient();
+import prisma from "../prisma/client.js";
 
 export const protect = async (req, res, next) => {
   try {

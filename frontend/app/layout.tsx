@@ -1,7 +1,7 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Student Fee Management System",
+  title: "FLOWLYTIKS Fee Management Dashboard",
   description: "Manage student records, payments, and fee status.",
 };
 

@@ -244,7 +244,7 @@ export default function AdminDashboard() {
       {/* NAVBAR */}
       <nav className="admin-nav">
         <div className="nav-left">
-          <h2 className="nav-title">Admin Dashboard</h2>
+          <h2 className="nav-title">FLOWLYTIKS Fee Management Dashboard</h2>
         </div>
 
         <div className="nav-actions">

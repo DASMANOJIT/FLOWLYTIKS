@@ -15,6 +15,34 @@
   text-align: center;
 }
 
+.students-statbar {
+  display: flex;
+  justify-content: center;
+  margin: 10px 0 18px 0;
+}
+
+.students-statcard {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 12px 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.students-statlabel {
+  font-size: 14px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.students-statvalue {
+  font-size: 16px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
 
 /* =========================================================
    BACK BUTTON

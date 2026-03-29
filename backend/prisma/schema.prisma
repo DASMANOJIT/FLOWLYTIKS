@@ -18,17 +18,33 @@ model Admin {
 model Student {
   id         Int       @id @default(autoincrement())
   name       String
-  phone      String
+  phone      String    @unique
   email      String?
   password   String
   school     String
   class      String
   joinDate   DateTime  @default(now())
   monthlyFee Int       @default(600)
+  isVerified Boolean   @default(false)
+  isTwoFactorEnabled Boolean @default(false)
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
   payments   Payment[]
   
+}
+
+model Otp {
+  id        Int      @id @default(autoincrement())
+  phone     String
+  purpose   String
+  otpHash   String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([phone, purpose])
+  @@index([phone])
 }
 
 model Payment {
@@ -53,4 +69,3 @@ model AppSettings {
   id         Int @id @default(1)
   monthlyFee Int
 }
-

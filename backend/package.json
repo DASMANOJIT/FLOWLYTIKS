@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "dedupe:phones": "node scripts/dedupeStudentPhones.js",
+    "validate:env": "node -e \"import('./config/loadEnv.js').then(() => { console.log('ENV OK:', !!process.env.TWILIO_ACCOUNT_SID && !!process.env.TWILIO_VERIFY_SID); }).catch((e) => { console.error(e?.message || e); process.exit(1); })\""
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",
@@ -18,7 +20,8 @@
     "pdfkit": "^0.17.2",
     "pg": "^8.16.3",
     "prisma": "^6.19.0",
-    "razorpay": "^2.9.6"
+    "razorpay": "^2.9.6",
+    "twilio": "^5.13.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.11"

@@ -10,7 +10,7 @@
 /* Falling word pieces */
 .falling-word {
   position: absolute;
-  top: -50px;
+  top: -40px;
   font-size: 16px;
   padding: 6px 12px;
   background: rgba(255, 255, 255, 0.85);
@@ -21,20 +21,22 @@
   animation-name: fallAnim;
   animation-timing-function: linear;
   animation-iteration-count: infinite;
+  will-change: transform, opacity;
+  transform: translate3d(0, 0, 0);
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
 
 /* Falling animation */
 @keyframes fallAnim {
   0% {
-    top: -40px;
+    transform: translate3d(0, 0, 0);
     opacity: 0;
   }
   10% {
     opacity: 1;
   }
   100% {
-    top: 110vh;
+    transform: translate3d(0, 120vh, 0);
     opacity: 0;
   }
 }

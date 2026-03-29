@@ -1,8 +1,9 @@
+import "./config/loadEnv.js";
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import prisma from "./prisma/client.js";
 import cron from "node-cron";
+import { validateEnv } from "./config/env.js";
 
 // Import routes
 import authRoutes from "./routes/authroute.js";
@@ -13,8 +14,7 @@ import adminAssistantRoutes from "./routes/adminassistantroute.js";
 import { autoPromoteIfEligible } from "./controllers/studentcontrollers.js";
 import { runDailyFeeReminderJob } from "./services/reminderservice.js";
 
-// Load .env variables
-dotenv.config();
+validateEnv();
 
 // Initialize app
 const app = express();
@@ -53,10 +53,39 @@ async function ensureAppSettings() {
       console.log("✅ AppSettings initialized with ₹600");
     }
   } catch (err) {
-    console.error("❌ Failed to init AppSettings:", err);
+    console.error("Database unavailable, continuing without DB");
   }
 }
-ensureAppSettings();
+
+const initDatabase = async () => {
+  const maxAttempts = 5;
+  let attempt = 0;
+  let warned = false;
+
+  const tryConnect = async () => {
+    attempt += 1;
+    try {
+      await prisma.$connect();
+      await ensureAppSettings();
+    } catch (err) {
+      if (!warned) {
+        console.error("Database unavailable, continuing without DB");
+        warned = true;
+      }
+      if (process.env.DEBUG_DB === "1") {
+        console.error("DB init error:", err?.message || err);
+      }
+      if (attempt < maxAttempts) {
+        const delayMs = Math.min(30_000, 1000 * 2 ** (attempt - 1));
+        setTimeout(tryConnect, delayMs);
+      }
+    }
+  };
+
+  void tryConnect();
+};
+
+initDatabase();
 
 // ================================
 // CRON JOB: Promote all eligible students on 1st March every year
@@ -102,6 +131,24 @@ app.use("/api/admin-assistant", adminAssistantRoutes);
 // Health check
 app.get("/", (req, res) => {
   res.send("Server is running...");
+});
+
+process.on("unhandledRejection", (reason) => {
+  // eslint-disable-next-line no-console
+  console.error("UNHANDLED REJECTION:", reason?.message || reason);
+});
+
+process.on("uncaughtException", (err) => {
+  // eslint-disable-next-line no-console
+  console.error("UNCAUGHT EXCEPTION:", err?.message || err);
+});
+
+// Global express error handler (ensures JSON response instead of connection drop)
+app.use((err, req, res, next) => {
+  // eslint-disable-next-line no-console
+  console.error("EXPRESS ERROR:", err?.message || err);
+  if (res.headersSent) return next(err);
+  return res.status(500).json({ success: false, message: "Internal server error" });
 });
 
 // Start server
