@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useState, useEffect } from "react";
 import "./navbar.css";
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+// Use same-origin `/api/*` (Next.js rewrites proxy to backend).
+const API = "";
 
 export default function StudentNavbar() {
   const [studentName, setStudentName] = useState(""); // dynamic

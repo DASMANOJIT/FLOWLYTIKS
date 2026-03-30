@@ -33,7 +33,7 @@ export default function PayPage() {
         }
 
         const res = await fetch(
-          `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/students/me`,
+          `/api/students/me`,
           {
             headers: {
               "Content-Type": "application/json",
@@ -78,7 +78,7 @@ export default function PayPage() {
       setIsPaying(true);
 
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000"}/api/payments/phonepe/initiate`,
+        `/api/payments/phonepe/initiate`,
         {
           method: "POST",
           headers: {

@@ -7,7 +7,8 @@ export default function PaymentSuccessContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const transactionId = searchParams.get("txnid");
-  const apiBase = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+  // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
+  const apiBase = "";
 
   const [status, setStatus] = useState(
     transactionId ? "Checking payment status..." : "Invalid payment reference."

@@ -20,5 +20,17 @@ export const validateEnv = () => {
 
   required("TWILIO_ACCOUNT_SID");
   required("TWILIO_AUTH_TOKEN");
-  required("TWILIO_VERIFY_SID");
+
+  // Prefer the canonical Verify Service SID name.
+  if (process.env.TWILIO_VERIFY_SERVICE_SID) {
+    required("TWILIO_VERIFY_SERVICE_SID");
+  } else {
+    required("TWILIO_VERIFY_SID");
+    if (process.env.NODE_ENV !== "production") {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "ENV NOTICE: Using legacy TWILIO_VERIFY_SID. Prefer TWILIO_VERIFY_SERVICE_SID."
+      );
+    }
+  }
 };

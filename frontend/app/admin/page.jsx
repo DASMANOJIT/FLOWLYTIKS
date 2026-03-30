@@ -13,7 +13,8 @@ import {
 import { Pie } from "react-chartjs-2";
 
 ChartJS.register(ArcElement, Tooltip, Legend);
-const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+// Use same-origin `/api/*` (Next.js rewrites proxy to backend).
+const API_BASE = "";
 
 export default function AdminDashboard() {
   const [menuOpen, setMenuOpen] = useState(false);

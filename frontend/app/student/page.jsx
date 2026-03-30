@@ -5,7 +5,8 @@ import "./student.css";
 import Nav from "../components/navbar/navbar.jsx";
 import jsPDF from "jspdf";
 
-const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+// Use same-origin `/api/*` (Next.js rewrites proxy to backend).
+const API_BASE = "";
 
 export default function StudentDashboard() {
   const router = useRouter();

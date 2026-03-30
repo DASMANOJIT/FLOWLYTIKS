@@ -29,10 +29,23 @@ export const formatIndianPhone = (raw) => {
   return digits ? `+${digits}` : "";
 };
 
-const requireVerifySid = () => {
-  const sid = String(process.env.TWILIO_VERIFY_SID || "").trim();
-  if (!sid) throw new Error("Missing TWILIO_VERIFY_SID");
-  return sid;
+const requireVerifyServiceSid = () => {
+  const primary = String(process.env.TWILIO_VERIFY_SERVICE_SID || "").trim();
+  if (primary) return primary;
+
+  // Back-compat for older env naming.
+  const legacy = String(process.env.TWILIO_VERIFY_SID || "").trim();
+  if (legacy) {
+    if (process.env.NODE_ENV !== "production") {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "Using legacy env var TWILIO_VERIFY_SID. Prefer TWILIO_VERIFY_SERVICE_SID."
+      );
+    }
+    return legacy;
+  }
+
+  throw new Error("Missing TWILIO_VERIFY_SERVICE_SID");
 };
 
 export const sendOTP = async (rawPhone) => {
@@ -44,7 +57,7 @@ export const sendOTP = async (rawPhone) => {
   }
 
   const client = getTwilioClient();
-  const serviceSid = requireVerifySid();
+  const serviceSid = requireVerifyServiceSid();
 
   try {
     if (shouldLogSensitive()) {
@@ -94,7 +107,7 @@ export const verifyOTP = async (rawPhone, rawCode) => {
   }
 
   const client = getTwilioClient();
-  const serviceSid = requireVerifySid();
+  const serviceSid = requireVerifyServiceSid();
 
   try {
     if (shouldLogSensitive()) {

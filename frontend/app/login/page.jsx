@@ -55,7 +55,8 @@ export default function Login() {
   const [twoFaOtp, setTwoFaOtp] = useState("");
   const [twoFaLoading, setTwoFaLoading] = useState(false);
 
-  const API = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+  // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
+  const API = "";
 
   const isStrongPassword = (password) =>
     /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/.test(

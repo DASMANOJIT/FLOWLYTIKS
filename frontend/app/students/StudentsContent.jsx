@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import "./students.css";
-const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+// Use same-origin `/api/*` (Next.js rewrites proxy to backend).
+const API_BASE = "";
 export default function StudentsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();

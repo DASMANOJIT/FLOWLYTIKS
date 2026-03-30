@@ -1,6 +1,7 @@
 import axios from "axios";
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
-const API = process.env.NEXT_PUBLIC_API_URL || `${BACKEND_URL}/api`;
+// Use same-origin `/api/*` and let Next.js rewrite/proxy to the backend.
+// Can be overridden if needed (e.g. direct backend calls), but the default is stable for production.
+const API = process.env.NEXT_PUBLIC_API_URL || "/api";
 
 
 export const loginApi = (email, password) =>
