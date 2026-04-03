@@ -20,14 +20,22 @@ export const protect = async (req, res, next) => {
     }
 
     // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, {
+      algorithms: ["HS256"],
+    });
 
     // Fetch user from DB
     let user = null;
     if (decoded.role === "admin") {
-      user = await prisma.admin.findUnique({ where: { id: decoded.id } });
+      user = await prisma.admin.findUnique({
+        where: { id: decoded.id },
+        select: { id: true, name: true, email: true },
+      });
     } else if (decoded.role === "student") {
-      user = await prisma.student.findUnique({ where: { id: decoded.id } });
+      user = await prisma.student.findUnique({
+        where: { id: decoded.id },
+        select: { id: true, name: true, email: true, phone: true },
+      });
     }
 
     if (!user) {
@@ -47,7 +55,7 @@ export const protect = async (req, res, next) => {
 
     next();
   } catch (error) {
-    console.error("Auth error:", error.message);
+    console.error("Auth error:", error?.message || error);
     return res.status(401).json({ message: "Not authorized, token failed" });
   }
 };

@@ -5,6 +5,7 @@ import "./login.css";
 import Fall from "../animation/fallingword.jsx";
 import { MotionButton } from "../components/motion/primitives.jsx";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
+import { readApiResponse } from "../../lib/api.js";
 
 export default function Login() {
   const debugRenders = process.env.NEXT_PUBLIC_RENDER_DEBUG === "1";
@@ -163,9 +164,11 @@ export default function Login() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
-
-      const data = await res.json();
-      if (!res.ok) return alert(data.message);
+      const { ok, data, error } = await readApiResponse(
+        res,
+        "Login failed. Please try again."
+      );
+      if (!ok) return alert(error);
 
       if (data.requires2fa) {
         setTwoFaRequired(true);
@@ -219,8 +222,11 @@ export default function Login() {
           password: signupValues.password,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) return alert(data.message);
+      const { ok, error } = await readApiResponse(
+        res,
+        "Failed to send OTP. Please try again."
+      );
+      if (!ok) return alert(error);
 
       setSignupOtpSent(true);
       setSignupOtpVerified(false);
@@ -262,11 +268,14 @@ export default function Login() {
           otp: signupOtpInput.trim(),
         }),
       });
-      const data = await res.json();
+      const { ok, data, error } = await readApiResponse(
+        res,
+        "Signup failed. Please try again."
+      );
 
-      if (!res.ok) {
+      if (!ok) {
         setSignupOtpVerified(false);
-        return alert(data.message || "Signup failed.");
+        return alert(error);
       }
 
       localStorage.setItem("token", data.token);
@@ -336,9 +345,11 @@ export default function Login() {
           otp: signupOtpInput.trim(),
         }),
       });
-
-      const data = await res.json();
-      if (!res.ok) return alert(data.message);
+      const { ok, data, error } = await readApiResponse(
+        res,
+        "Signup failed. Please try again."
+      );
+      if (!ok) return alert(error);
 
       localStorage.setItem("token", data.token);
       localStorage.setItem("studentName", data.name);
@@ -374,8 +385,11 @@ export default function Login() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: forgotEmail, purpose: "reset" }),
       });
-      const data = await res.json();
-      if (!res.ok) return alert(data.message);
+      const { ok, error } = await readApiResponse(
+        res,
+        "Failed to send OTP. Please try again."
+      );
+      if (!ok) return alert(error);
       setForgotOtpSent(true);
       setForgotCooldown(60);
       alert("OTP sent to your email.");
@@ -424,9 +438,11 @@ export default function Login() {
           newPassword,
         }),
       });
-
-      const data = await res.json();
-      if (!res.ok) return alert(data.message);
+      const { ok, error } = await readApiResponse(
+        res,
+        "Password reset failed. Please try again."
+      );
+      if (!ok) return alert(error);
 
       alert("Password reset successfully!");
       setForgotOtpSent(false);
@@ -461,8 +477,11 @@ export default function Login() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: otpLoginEmail, purpose: "login" }),
       });
-      const data = await res.json();
-      if (!res.ok) return alert(data.message);
+      const { ok, error } = await readApiResponse(
+        res,
+        "Failed to send OTP. Please try again."
+      );
+      if (!ok) return alert(error);
 
       setOtpLoginSent(true);
       setOtpLoginCooldown(60);
@@ -488,8 +507,11 @@ export default function Login() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: otpLoginEmail, otp: otpLoginOtp.trim() }),
       });
-      const data = await res.json();
-      if (!res.ok) return alert(data.message);
+      const { ok, data, error } = await readApiResponse(
+        res,
+        "Login failed. Please try again."
+      );
+      if (!ok) return alert(error);
 
       localStorage.setItem("token", data.token);
       localStorage.setItem("studentName", data.name);
@@ -517,8 +539,11 @@ export default function Login() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: twoFaEmail, otp: twoFaOtp.trim() }),
       });
-      const data = await res.json();
-      if (!res.ok) return alert(data.message);
+      const { ok, data, error } = await readApiResponse(
+        res,
+        "OTP verification failed. Please try again."
+      );
+      if (!ok) return alert(error);
 
       localStorage.setItem("token", data.token);
       localStorage.setItem("studentName", data.name);

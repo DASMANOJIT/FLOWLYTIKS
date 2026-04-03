@@ -2,13 +2,12 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import prisma from "../prisma/client.js";
 import { sendOtpEmail } from "./emailService.js";
+import { isValidEmail, isValidOtp, normalizeEmail, normalizeOtp } from "../utils/authValidation.js";
 
 const OTP_EXPIRY_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
 const LOCK_DURATION_MS = 10 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 60 * 1000;
-
-const rateLimitMap = new Map();
 
 const maskEmail = (email) => {
   if (!email) return "";
@@ -17,34 +16,48 @@ const maskEmail = (email) => {
   return `${local[0]}***@${domain}`;
 };
 
-const enforceCooldown = (email, purpose) => {
-  const key = `${email}:${purpose}:cooldown`;
-  const now = Date.now();
-  const last = rateLimitMap.get(key) || 0;
-  if (now - last < RESEND_COOLDOWN_MS) {
-    const retryAfter = Math.ceil((RESEND_COOLDOWN_MS - (now - last)) / 1000);
-    const err = new Error("Please wait before requesting another OTP.");
-    err.status = 429;
-    err.retryAfter = retryAfter;
-    throw err;
-  }
-  rateLimitMap.set(key, now);
-};
-
 const generateOtp = () => {
   const num = crypto.randomInt(0, 1_000_000);
   return String(num).padStart(6, "0");
 };
 
 export const sendEmailOtp = async ({ email, purpose = "login" }) => {
-  const trimmed = String(email || "").trim().toLowerCase();
-  if (!trimmed || !trimmed.includes("@")) {
+  const trimmed = normalizeEmail(email);
+  if (!isValidEmail(trimmed)) {
     const err = new Error("Invalid email address.");
     err.status = 400;
     throw err;
   }
 
-  enforceCooldown(trimmed, purpose);
+  const now = new Date();
+  const existing = await prisma.emailOtp.findUnique({
+    where: {
+      EmailOtp_email_purpose_key: {
+        email: trimmed,
+        purpose,
+      },
+    },
+  });
+
+  if (existing?.lockedUntil && existing.lockedUntil > now) {
+    const retryAfter = Math.ceil((existing.lockedUntil.getTime() - now.getTime()) / 1000);
+    const err = new Error(`Too many attempts. Try again after ${retryAfter} seconds.`);
+    err.status = 429;
+    err.retryAfter = retryAfter;
+    throw err;
+  }
+
+  if (existing?.updatedAt) {
+    const elapsedMs = now.getTime() - existing.updatedAt.getTime();
+    if (elapsedMs < RESEND_COOLDOWN_MS) {
+      const retryAfter = Math.ceil((RESEND_COOLDOWN_MS - elapsedMs) / 1000);
+      const err = new Error("Please wait before requesting another OTP.");
+      err.status = 429;
+      err.retryAfter = retryAfter;
+      throw err;
+    }
+  }
+
   const otp = generateOtp();
   const otpHash = await bcrypt.hash(otp, 10);
   const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
@@ -72,15 +85,38 @@ export const sendEmailOtp = async ({ email, purpose = "login" }) => {
     },
   });
 
-  await sendOtpEmail(trimmed, otp);
-  console.log("OTP sent for", maskEmail(trimmed), "purpose:", purpose);
+  try {
+    await sendOtpEmail(trimmed, otp);
+  } catch (err) {
+    await prisma.emailOtp
+      .delete({
+        where: {
+          EmailOtp_email_purpose_key: {
+            email: trimmed,
+            purpose,
+          },
+        },
+      })
+      .catch(() => {});
+    throw err;
+  }
+
+  if (process.env.NODE_ENV !== "production" || process.env.DEBUG_AUTH === "1") {
+    console.log("OTP sent for", maskEmail(trimmed), "purpose:", purpose);
+  }
   return { maskedEmail: maskEmail(trimmed) };
 };
 
 export const verifyEmailOtp = async ({ email, purpose = "login", code }) => {
-  const trimmed = String(email || "").trim().toLowerCase();
-  if (!trimmed || !trimmed.includes("@")) {
+  const trimmed = normalizeEmail(email);
+  if (!isValidEmail(trimmed)) {
     const err = new Error("Invalid email address.");
+    err.status = 400;
+    throw err;
+  }
+
+  if (!isValidOtp(code)) {
+    const err = new Error("Invalid OTP.");
     err.status = 400;
     throw err;
   }
@@ -118,7 +154,7 @@ export const verifyEmailOtp = async ({ email, purpose = "login", code }) => {
     throw err;
   }
 
-  const valid = await bcrypt.compare(String(code || "").trim(), record.otpHash);
+  const valid = await bcrypt.compare(normalizeOtp(code), record.otpHash);
   if (!valid) {
     const attempts = record.attempts + 1;
     const data = { attempts };
@@ -137,6 +173,8 @@ export const verifyEmailOtp = async ({ email, purpose = "login", code }) => {
   await prisma.emailOtp.delete({
     where: { id: record.id },
   });
-  console.log("OTP verified for", maskEmail(trimmed), "purpose:", purpose);
+  if (process.env.NODE_ENV !== "production" || process.env.DEBUG_AUTH === "1") {
+    console.log("OTP verified for", maskEmail(trimmed), "purpose:", purpose);
+  }
   return { success: true };
 };

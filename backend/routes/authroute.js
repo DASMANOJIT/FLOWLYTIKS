@@ -8,17 +8,27 @@ import {
 } from "../controllers/authcontrollers.js";
 import { sendOtp, verifyOtp, signupWithOtp } from "../controllers/otpauthcontrollers.js";
 import { protect } from "../middleware/authmiddleware.js";
+import {
+  authNoStore,
+  loginRateLimit,
+  otpSendRateLimit,
+  otpVerifyRateLimit,
+  passwordResetRateLimit,
+  signupRateLimit,
+} from "../middleware/security.js";
 
 const router = express.Router();
 
-router.post("/send-otp", sendOtp);
-router.post("/verify-otp", verifyOtp);
-router.post("/signup", signupWithOtp);
-router.post("/2fa/verify", verifyTwoFactor);
+router.use(authNoStore);
 
-router.post("/login", loginUser);
-router.post("/register", registerUser);
-router.post("/reset-password", resetPassword);
+router.post("/send-otp", otpSendRateLimit, sendOtp);
+router.post("/verify-otp", otpVerifyRateLimit, verifyOtp);
+router.post("/signup", signupRateLimit, signupWithOtp);
+router.post("/2fa/verify", otpVerifyRateLimit, verifyTwoFactor);
+
+router.post("/login", loginRateLimit, loginUser);
+router.post("/register", signupRateLimit, registerUser);
+router.post("/reset-password", passwordResetRateLimit, resetPassword);
 router.post("/logout", protect, logoutUser);
 
 export default router;

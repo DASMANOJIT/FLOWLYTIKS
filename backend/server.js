@@ -1,6 +1,7 @@
 import "./config/loadEnv.js";
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import prisma from "./prisma/client.js";
 import cron from "node-cron";
 import { validateEnv } from "./config/env.js";
@@ -18,24 +19,75 @@ validateEnv();
 
 // Initialize app
 const app = express();
-const corsOrigins = (process.env.CORS_ORIGIN || process.env.FRONTEND_URL || "")
+const isProduction = process.env.NODE_ENV === "production";
+const defaultDevOrigins = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3001",
+];
+
+const sanitizeOrigin = (origin) => {
+  const trimmed = String(origin || "").trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      return null;
+    }
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+};
+
+const configuredOrigins = (process.env.CORS_ORIGIN || process.env.FRONTEND_URL || "")
   .split(",")
-  .map((origin) => origin.trim())
+  .map(sanitizeOrigin)
   .filter(Boolean);
+
+const corsOrigins = [...new Set(isProduction ? configuredOrigins : [...configuredOrigins, ...defaultDevOrigins])];
+
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
 
 // Middlewares
 app.use(
   cors(
-    corsOrigins.length
-      ? {
-          origin: corsOrigins,
-          credentials: true,
+    {
+      origin(origin, callback) {
+        if (!origin) return callback(null, true);
+        if (!isProduction && !corsOrigins.length) {
+          return callback(null, true);
         }
-      : undefined
+        if (corsOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+        return callback(new Error("CORS origin not allowed"));
+      },
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization"],
+      maxAge: 86400,
+    }
   )
 );
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    frameguard: { action: "deny" },
+    referrerPolicy: { policy: "no-referrer" },
+  })
+);
+app.use((req, res, next) => {
+  res.setHeader(
+    "Permissions-Policy",
+    "accelerometer=(), autoplay=(), camera=(), geolocation=(), gyroscope=(), microphone=(), payment=(), usb=()"
+  );
+  next();
+});
+app.use(express.json({ limit: "16kb" }));
+app.use(express.urlencoded({ extended: true, limit: "16kb" }));
 app.use("/api/payments", paymentRoutes);
 // ================================
 // ENSURE APP SETTINGS EXISTS
@@ -148,7 +200,11 @@ app.use((err, req, res, next) => {
   // eslint-disable-next-line no-console
   console.error("EXPRESS ERROR:", err?.message || err);
   if (res.headersSent) return next(err);
-  return res.status(500).json({ success: false, message: "Internal server error" });
+  return res.status(500).json({
+    success: false,
+    error: "Internal server error",
+    message: "Internal server error",
+  });
 });
 
 // Start server

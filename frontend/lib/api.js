@@ -3,6 +3,37 @@ import axios from "axios";
 // Can be overridden if needed (e.g. direct backend calls), but the default is stable for production.
 const API = process.env.NEXT_PUBLIC_API_URL || "/api";
 
+const isProbablyHtml = (value) => /<!doctype html|<html/i.test(String(value || ""));
+
+const normalizeApiMessage = (value, fallback) => {
+  const text = String(value || "").trim();
+  if (!text || isProbablyHtml(text) || /^internal server error$/i.test(text)) {
+    return fallback;
+  }
+  return text;
+};
+
+export async function readApiResponse(res, fallbackMessage = "Request failed. Please try again.") {
+  const contentType = String(res.headers.get("content-type") || "").toLowerCase();
+
+  if (contentType.includes("application/json")) {
+    const data = await res.json().catch(() => ({}));
+    const message = normalizeApiMessage(data?.error || data?.message, fallbackMessage);
+    return {
+      ok: res.ok,
+      data,
+      error: message,
+    };
+  }
+
+  const text = await res.text().catch(() => "");
+  return {
+    ok: res.ok,
+    data: { success: res.ok, error: text, message: text },
+    error: normalizeApiMessage(text, fallbackMessage),
+  };
+}
+
 
 export const loginApi = (email, password) =>
 axios.post(`${API}/auth/login`, { email, password }).then((r) => r.data);
@@ -26,11 +57,10 @@ export async function apiCall(endpoint, method = "GET", body = null, token = nul
   if (body) options.body = JSON.stringify(body);
 
   const res = await fetch(`${BASE_URL}${endpoint}`, options);
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ message: "Unknown error" }));
-    throw new Error(err.message || "API Error");
+  const { ok, data, error } = await readApiResponse(res, "API request failed.");
+  if (!ok) {
+    throw new Error(error);
   }
 
-  return res.json();
+  return data;
 }

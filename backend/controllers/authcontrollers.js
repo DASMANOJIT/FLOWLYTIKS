@@ -7,10 +7,40 @@ import {
   getActiveSessionCount,
   removeSession,
 } from "../utils/sessionStore.js";
-import { formatIndianPhone } from "../utils/phone.js";
 import { sendEmailOtp, verifyEmailOtp } from "../services/emailOtpService.js";
+import {
+  getPhoneSearchCandidates,
+  isStrongPassword,
+  isValidEmail,
+  isValidName,
+  isValidOtp,
+  isValidPhone,
+  isValidSchoolText,
+  isValidStudentClass,
+  normalizeEmail,
+  normalizeName,
+  normalizeOtp,
+  normalizePhone,
+  parseStudentClass,
+  resolveSchoolValue,
+} from "../utils/authValidation.js";
 
 const MAX_DEVICES_PER_ACCOUNT = 2;
+const INVALID_CREDENTIALS_MESSAGE = "Invalid credentials.";
+
+const authError = (res, status, error, extra = {}) =>
+  res.status(status).json({
+    success: false,
+    error,
+    message: error,
+    ...extra,
+  });
+
+const authSuccess = (res, payload = {}, status = 200) =>
+  res.status(status).json({
+    success: true,
+    ...payload,
+  });
 
 const isDbUnavailableError = (err) => {
   const message = String(err?.message || "");
@@ -51,25 +81,25 @@ const selectStudentAuthFieldsFallback = {
   phone: true,
 };
 
-const isStrongPassword = (password) =>
-  /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/.test(
-    String(password || "")
-  );
-
-const isValidPhone = (phone) =>
-  /^\+?\d{10,15}$/.test(String(phone || "").trim());
-
-const isValidEmail = (value) => {
-  const normalized = String(value || "").trim();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized);
-};
-
-const maskEmail = (email) => {
-  if (!email) return "";
-  const [local, domain] = email.split("@");
-  if (!local || !domain) return "";
-  if (local.length <= 2) return `${local[0]}***@${domain}`;
-  return `${local[0]}***${local.slice(-1)}@${domain}`;
+const getStudentRegistrationValidationError = ({
+  name,
+  school,
+  studentClass,
+  phone,
+  email,
+  password,
+}) => {
+  if (!isValidName(name)) return "Full name is required.";
+  if (!isValidSchoolText(school)) return "School is required.";
+  if (!isValidStudentClass(studentClass)) {
+    return "Please select a valid class (3 to 12).";
+  }
+  if (!isValidPhone(phone)) return "Please enter a valid phone number.";
+  if (!isValidEmail(email)) return "Please enter a valid email address.";
+  if (!isStrongPassword(password)) {
+    return "Password must be at least 8 characters and include uppercase, lowercase, number, and special character.";
+  }
+  return null;
 };
 
 const issueToken = ({ role, id }) => {
@@ -83,6 +113,7 @@ const issueToken = ({ role, id }) => {
   }
 
   const token = jwt.sign({ id, role }, process.env.JWT_SECRET, {
+    algorithm: "HS256",
     expiresIn: "7d",
   });
   const decoded = jwt.decode(token);
@@ -110,23 +141,24 @@ export const registerUser = async (req, res) => {
     // ADMIN REGISTRATION
     // =========================
     if (role === "admin") {
-      return res.status(403).json({
-        message: "Admin self-registration is disabled. Contact system owner.",
-      });
+      return authError(res, 403, "Admin self-registration is disabled. Contact system owner.");
     }
 
-    if (!isStrongPassword(password)) {
-      return res.status(400).json({
-        message:
-          "Password must be at least 8 characters and include uppercase, lowercase, number, and special character.",
-      });
-    }
-
-    const normalizedPhone = formatIndianPhone(phone);
-    if (!isValidPhone(normalizedPhone)) {
-      return res.status(400).json({
-        message: "Please enter a valid phone number.",
-      });
+    const normalizedName = normalizeName(name);
+    const normalizedEmail = normalizeEmail(email);
+    const normalizedPhone = normalizePhone(phone);
+    const normalizedSchool = resolveSchoolValue({ school });
+    const classNum = parseStudentClass(studentClass);
+    const validationError = getStudentRegistrationValidationError({
+      name: normalizedName,
+      school: normalizedSchool,
+      studentClass: classNum,
+      phone: normalizedPhone,
+      email: normalizedEmail,
+      password,
+    });
+    if (validationError) {
+      return authError(res, 400, validationError);
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -134,16 +166,19 @@ export const registerUser = async (req, res) => {
     // =========================
     // STUDENT REGISTRATION
     // =========================
-    const exists = await prisma.student.findFirst({ where: { email } });
+    const exists = await prisma.student.findFirst({ where: { email: normalizedEmail } });
     if (exists) {
-      return res.status(400).json({ message: "Student already exists" });
+      return authError(res, 400, "Email is already registered.");
     }
 
+    const phoneCandidates = getPhoneSearchCandidates(phone);
     const existsPhone = await prisma.student.findFirst({
-      where: { phone: normalizedPhone },
+      where: {
+        OR: phoneCandidates.map((value) => ({ phone: value })),
+      },
     });
     if (existsPhone) {
-      return res.status(400).json({ message: "Phone number is already registered" });
+      return authError(res, 400, "Phone number is already registered.");
     }
 
     // 🔥 FETCH GLOBAL MONTHLY FEE
@@ -152,27 +187,28 @@ export const registerUser = async (req, res) => {
     });
 
     if (!settings) {
-      return res.status(500).json({ message: "App settings not found" });
+      return authError(res, 500, "App settings not found");
     }
 
     const student = await prisma.student.create({
       data: {
-        name,
-        email,
+        name: normalizedName,
+        email: normalizedEmail,
         phone: normalizedPhone,
         password: hashedPassword,
-        school,
-        class: studentClass,
+        school: normalizedSchool,
+        class: String(classNum),
         monthlyFee: settings.monthlyFee, // ✅ CORRECT SOURCE
       },
     });
 
     const safeStudent = { ...student };
     delete safeStudent.password;
-    res.json({ message: "Student registered", student: safeStudent });
+    return authSuccess(res, { message: "Student registered", student: safeStudent });
 
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("REGISTER ERROR:", err?.message || err);
+    return authError(res, 500, "Registration failed");
   }
 };
 
@@ -185,15 +221,14 @@ export const registerUser = async (req, res) => {
 export const loginUser = async (req, res) => {
   try {
     const { email, password, otp } = req.body;
-    const normalizedEmail = String(email || "").trim().toLowerCase();
+    const normalizedEmail = normalizeEmail(email);
 
     if (email && !password && !otp) {
       if (!isValidEmail(normalizedEmail)) {
-        return res.status(400).json({ message: "Please provide a valid email." });
+        return authError(res, 400, "Please provide a valid email.");
       }
       const result = await sendEmailOtp({ email: normalizedEmail, purpose: "login" });
-      return res.status(200).json({
-        success: true,
+      return authSuccess(res, {
         message: "OTP sent successfully",
         maskedEmail: result.maskedEmail,
       });
@@ -201,18 +236,21 @@ export const loginUser = async (req, res) => {
 
     if (email && otp) {
       if (!isValidEmail(normalizedEmail)) {
-        return res.status(400).json({ message: "Please provide a valid email." });
+        return authError(res, 400, "Please provide a valid email.");
       }
-      await verifyEmailOtp({ email: normalizedEmail, purpose: "login", code: otp });
+      if (!isValidOtp(otp)) {
+        return authError(res, 400, "Please enter the 6-digit OTP.");
+      }
+      await verifyEmailOtp({ email: normalizedEmail, purpose: "login", code: normalizeOtp(otp) });
       const student = await prisma.student.findFirst({
         where: { email: normalizedEmail },
         select: selectStudentAuthFields,
       });
       if (!student) {
-        return res.status(404).json({ message: "User not found" });
+        return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
       }
       const token = issueToken({ role: "student", id: student.id });
-      return res.json({
+      return authSuccess(res, {
         token,
         role: "student",
         name: student.name,
@@ -220,15 +258,14 @@ export const loginUser = async (req, res) => {
     }
 
     if (email && password) {
-      const normalizedEmail = String(email || "").trim().toLowerCase();
       const admin = await prisma.admin.findUnique({ where: { email: normalizedEmail } });
       if (admin) {
         const isMatch = await bcrypt.compare(password, admin.password);
         if (!isMatch) {
-          return res.status(400).json({ message: "Incorrect password" });
+          return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
         }
         const token = issueToken({ role: "admin", id: admin.id });
-        return res.json({
+        return authSuccess(res, {
           token,
           role: "admin",
           name: admin.name,
@@ -257,17 +294,17 @@ export const loginUser = async (req, res) => {
       }
 
       if (!student) {
-        return res.status(404).json({ message: "User not found" });
+        return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
       }
 
       const isMatch = await bcrypt.compare(password, student.password);
       if (!isMatch) {
-        return res.status(400).json({ message: "Incorrect password" });
+        return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
       }
 
       if (student.isTwoFactorEnabled && student.email) {
         await sendEmailOtp({ email: student.email, purpose: "2fa" });
-        return res.json({
+        return authSuccess(res, {
           requires2fa: true,
           role: "student",
           email: student.email,
@@ -275,69 +312,61 @@ export const loginUser = async (req, res) => {
       }
 
       const token = issueToken({ role: "student", id: student.id });
-      return res.json({
+      return authSuccess(res, {
         token,
         role: "student",
         name: student.name,
       });
     }
 
-    return res.status(400).json({ message: "Provide email (with OTP or password)." });
+    return authError(res, 400, "Provide email (with OTP or password).");
   } catch (err) {
     if (err?.status) {
-      const payload = { message: err.message };
-      if (err.retryAfter) {
-        payload.retryAfter = err.retryAfter;
-      }
-      return res.status(err.status).json(payload);
+      return authError(res, err.status, err.message, err.retryAfter ? { retryAfter: err.retryAfter } : {});
     }
     if (isDbUnavailableError(err)) {
       console.error("LOGIN ERROR: Database unavailable");
-      return res.status(503).json({
-        success: false,
-        message: "Database unavailable",
-      });
+      return authError(res, 503, "Database unavailable");
     }
     console.error("LOGIN ERROR:", err?.message || err);
-    return res.status(500).json({ message: "Login failed" });
+    return authError(res, 500, "Login failed");
   }
 };
 
 export const verifyTwoFactor = async (req, res) => {
   try {
     const { email, otp } = req.body;
-    const normalizedEmail = String(email || "").trim().toLowerCase();
+    const normalizedEmail = normalizeEmail(email);
     if (!isValidEmail(normalizedEmail)) {
-      return res.status(400).json({ message: "Please provide a valid email." });
+      return authError(res, 400, "Please provide a valid email.");
     }
-    await verifyEmailOtp({ email: normalizedEmail, purpose: "2fa", code: otp });
+    if (!isValidOtp(otp)) {
+      return authError(res, 400, "Please enter the 6-digit OTP.");
+    }
+    await verifyEmailOtp({ email: normalizedEmail, purpose: "2fa", code: normalizeOtp(otp) });
     const student = await prisma.student.findFirst({
       where: { email: normalizedEmail },
       select: selectStudentAuthFields,
     });
     if (!student) {
-      return res.status(404).json({ message: "User not found" });
+      return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
     }
     const token = issueToken({ role: "student", id: student.id });
-    return res.json({
+    return authSuccess(res, {
       token,
       role: "student",
       name: student.name,
     });
   } catch (err) {
     if (err?.status) {
-      const payload = { message: err.message };
-      if (err.retryAfter) {
-        payload.retryAfter = err.retryAfter;
-      }
-      return res.status(err.status).json(payload);
+      return authError(res, err.status, err.message, err.retryAfter ? { retryAfter: err.retryAfter } : {});
     }
     if (isDbUnavailableError(err)) {
       console.error("2FA ERROR: Database unavailable");
-      return res.status(503).json({ success: false, message: "Database unavailable" });
+      return authError(res, 503, "Database unavailable");
     }
     console.error("2FA ERROR:", err?.message || err);
-    return res.status(500).json({ message: "2FA verification failed" });
+    return authError(res, 500, "2FA verification failed");
   }
 };
 
@@ -348,73 +377,61 @@ export const verifyTwoFactor = async (req, res) => {
 export const resetPassword = async (req, res) => {
   try {
     const { email, otp, newPassword } = req.body;
-    const normalizedEmail = String(email || "").trim().toLowerCase();
+    const normalizedEmail = normalizeEmail(email);
+
+    if (!isValidEmail(normalizedEmail)) {
+      return authError(res, 400, "Please enter a valid email address.");
+    }
 
     if (!isStrongPassword(newPassword)) {
-      return res.status(400).json({
-        message:
-          "Password must be at least 8 characters and include uppercase, lowercase, number, and special character.",
-      });
+      return authError(
+        res,
+        400,
+        "Password must be at least 8 characters and include uppercase, lowercase, number, and special character."
+      );
     }
 
-    if (email && otp) {
-      if (!isValidEmail(normalizedEmail)) {
-        return res.status(400).json({ message: "Please enter a valid email address." });
-      }
-      await verifyEmailOtp({ email: normalizedEmail, purpose: "reset", code: otp });
-      const student = await prisma.student.findFirst({
-        where: { email: normalizedEmail },
-        select: selectStudentAuthFieldsFallback,
-      });
-      if (!student) {
-        return res.status(404).json({ message: "User not found" });
-      }
-      const hashedPassword = await bcrypt.hash(newPassword, 10);
-      try {
-        await prisma.student.update({
-          where: { id: student.id },
-          data: { password: hashedPassword, isVerified: true },
-        });
-      } catch (err) {
-        if (!isMissingColumnError(err, "isVerified")) throw err;
-        await prisma.student.update({
-          where: { id: student.id },
-          data: { password: hashedPassword },
-        });
-      }
-      clearUserSessions("student", student.id);
-      return res.json({ message: "Student password reset successful" });
+    if (!otp) {
+      return authError(res, 400, "OTP verification is required to reset password.");
     }
 
+    if (!isValidOtp(otp)) {
+      return authError(res, 400, "Please enter the 6-digit OTP.");
+    }
+
+    await verifyEmailOtp({ email: normalizedEmail, purpose: "reset", code: normalizeOtp(otp) });
+    const student = await prisma.student.findFirst({
+      where: { email: normalizedEmail },
+      select: selectStudentAuthFieldsFallback,
+    });
+    if (!student) {
+      return authError(res, 400, "Reset password failed");
+    }
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    const admin = await prisma.admin.findUnique({ where: { email: normalizedEmail } });
-    if (admin) {
-      await prisma.admin.update({
-        where: { email: normalizedEmail },
+    try {
+      await prisma.student.update({
+        where: { id: student.id },
+        data: { password: hashedPassword, isVerified: true },
+      });
+    } catch (err) {
+      if (!isMissingColumnError(err, "isVerified")) throw err;
+      await prisma.student.update({
+        where: { id: student.id },
         data: { password: hashedPassword },
       });
-      clearUserSessions("admin", admin.id);
-      return res.json({ message: "Admin password reset successful" });
     }
-
-    const student = await prisma.student.findFirst({ where: { email: normalizedEmail } });
-    if (!student) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    await prisma.student.update({
-      where: { id: student.id },
-      data: { password: hashedPassword },
-    });
     clearUserSessions("student", student.id);
-    return res.json({ message: "Student password reset successful" });
+    return authSuccess(res, { message: "Student password reset successful" });
   } catch (err) {
     if (isDbUnavailableError(err)) {
       console.error("RESET PASSWORD ERROR: Database unavailable");
-      return res.status(503).json({ success: false, message: "Database unavailable" });
+      return authError(res, 503, "Database unavailable");
+    }
+    if (err?.status) {
+      return authError(res, err.status, err.message, err.retryAfter ? { retryAfter: err.retryAfter } : {});
     }
     console.error("RESET PASSWORD ERROR:", err?.message || err);
-    return res.status(500).json({ message: err?.message || "Reset password failed" });
+    return authError(res, 500, "Reset password failed");
   }
 };
 
@@ -424,12 +441,13 @@ export const resetPassword = async (req, res) => {
 export const logoutUser = async (req, res) => {
   try {
     if (!req.user || !req.userRole || !req.token) {
-      return res.status(400).json({ message: "Invalid logout request" });
+      return authError(res, 400, "Invalid logout request");
     }
 
     removeSession(req.userRole, req.user.id, req.token);
-    return res.json({ message: "Logged out successfully" });
+    return authSuccess(res, { message: "Logged out successfully" });
   } catch (err) {
-    return res.status(500).json({ message: err.message });
+    console.error("LOGOUT ERROR:", err?.message || err);
+    return authError(res, 500, "Logout failed");
   }
 };

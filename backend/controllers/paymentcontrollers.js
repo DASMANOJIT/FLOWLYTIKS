@@ -83,7 +83,7 @@ export const getMyPayments = async (req, res) => {
     res.json(payments);
   } catch (err) {
     console.error("getMyPayments error:", err);
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ message: "Failed to fetch payments" });
   }
 };
 
@@ -104,7 +104,7 @@ export const getAllPayments = async (req, res) => {
     res.json(payments);
   } catch (err) {
     console.error("getAllPayments error:", err);
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ message: "Failed to fetch payments" });
   }
 };
 
@@ -185,7 +185,7 @@ export const markPaid = async (req, res) => {
 
   } catch (err) {
     console.error("markPaid error:", err);
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ message: "Failed to mark payment" });
   }
 };
 

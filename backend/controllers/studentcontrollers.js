@@ -44,7 +44,7 @@ export const getStudents = async (req, res) => {
     res.json(enriched);
   } catch (err) {
     console.error("getStudents error:", err);
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ message: "Failed to fetch students" });
   }
 };
 
@@ -61,7 +61,7 @@ export const getStudentCount = async (req, res) => {
     res.json({ totalStudents });
   } catch (err) {
     console.error("getStudentCount error:", err);
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ message: "Failed to fetch student count" });
   }
 };
 
@@ -87,7 +87,8 @@ export const getLoggedInStudent = async (req, res) => {
 
     res.json(stripStudentSecrets(student));
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("getLoggedInStudent error:", err);
+    res.status(500).json({ message: "Failed to fetch student profile" });
   }
 };
 
@@ -116,7 +117,8 @@ export const getStudentById = async (req, res) => {
 
     res.json(stripStudentSecrets(student));
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("getStudentById error:", err);
+    res.status(500).json({ message: "Failed to fetch student" });
   }
 };
 
@@ -136,7 +138,8 @@ export const deleteStudent = async (req, res) => {
 
     res.json({ message: "Student deleted successfully" });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("deleteStudent error:", err);
+    res.status(500).json({ message: "Failed to delete student" });
   }
 };
 
