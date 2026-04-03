@@ -1,7 +1,10 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import "./login.css";
 import Fall from "../animation/fallingword.jsx";
+import { MotionButton } from "../components/motion/primitives.jsx";
+import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 
 export default function Login() {
   const debugRenders = process.env.NEXT_PUBLIC_RENDER_DEBUG === "1";
@@ -28,14 +31,16 @@ export default function Login() {
   const [activeForm, setActiveForm] = useState("login");
   const [forgotOtpSent, setForgotOtpSent] = useState(false);
   const [forgotOtpInput, setForgotOtpInput] = useState("");
-  const [forgotPhone, setForgotPhone] = useState("");
+  const [forgotEmail, setForgotEmail] = useState("");
   const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotCooldown, setForgotCooldown] = useState(0);
 
   const [signupOtpSent, setSignupOtpSent] = useState(false);
   const [signupOtpInput, setSignupOtpInput] = useState("");
-  const [signupPhone, setSignupPhone] = useState("");
-  const [signupPhoneVerified, setSignupPhoneVerified] = useState(false);
+  const [signupEmail, setSignupEmail] = useState("");
+  const [signupOtpVerified, setSignupOtpVerified] = useState(false);
   const [signupLoading, setSignupLoading] = useState(false);
+  const [signupCooldown, setSignupCooldown] = useState(0);
   const [signupPassword, setSignupPassword] = useState("");
   const [signupSchool, setSignupSchool] = useState("");
   const [signupCustomSchool, setSignupCustomSchool] = useState("");
@@ -45,10 +50,11 @@ export default function Login() {
   const [showResetPassword, setShowResetPassword] = useState(false);
 
   const [loginMode, setLoginMode] = useState("password"); // password | otp
-  const [otpLoginPhone, setOtpLoginPhone] = useState("");
+  const [otpLoginEmail, setOtpLoginEmail] = useState("");
   const [otpLoginSent, setOtpLoginSent] = useState(false);
   const [otpLoginOtp, setOtpLoginOtp] = useState("");
   const [otpLoginLoading, setOtpLoginLoading] = useState(false);
+  const [otpLoginCooldown, setOtpLoginCooldown] = useState(0);
 
   const [twoFaRequired, setTwoFaRequired] = useState(false);
   const [twoFaEmail, setTwoFaEmail] = useState("");
@@ -63,7 +69,70 @@ export default function Login() {
       String(password || "")
     );
 
-  const isValidPhone = (phone) => /^\+?\d{10,15}$/.test(String(phone || "").trim());
+  const isValidPhone = (phone) =>
+    /^\+?\d{10,15}$/.test(String(phone || "").trim());
+
+  const isValidEmail = (email) =>
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
+
+  const getSignupFormValues = () => {
+    const form = document.querySelector("form.card-form.signup-side");
+
+    return {
+      name: form?.querySelector('input[name="name"]')?.value?.trim() || "",
+      school: signupSchool || form?.querySelector('select[name="school"]')?.value || "",
+      customSchool:
+        signupCustomSchool || form?.querySelector('input[name="customSchool"]')?.value || "",
+      studentClass: signupClass || form?.querySelector('select[name="class"]')?.value || "",
+      phone: form?.querySelector('input[name="phone"]')?.value?.trim() || "",
+      email: (signupEmail || form?.querySelector('input[name="email"]')?.value || "").trim(),
+      password: signupPassword || form?.querySelector('input[name="password"]')?.value || "",
+    };
+  };
+
+  const getSignupValidationMessage = ({
+    name,
+    school,
+    customSchool,
+    studentClass,
+    phone,
+    email,
+    password,
+  }) => {
+    if (!name) return "Full name is required.";
+    if (!school) return "School is required.";
+    if (school === "other" && !String(customSchool || "").trim()) {
+      return "Please enter your school name.";
+    }
+    if (!studentClass) return "Class is required.";
+    if (!phone) return "Phone number is required.";
+    if (!isValidPhone(phone)) return "Please enter a valid phone number.";
+    if (!email) return "Email is required.";
+    if (!isValidEmail(email)) return "Please enter a valid email address.";
+    if (!password) return "Password is required.";
+    if (!isStrongPassword(password)) {
+      return "Password must be 8+ chars with uppercase, lowercase, number, and special character.";
+    }
+    return "";
+  };
+
+  useEffect(() => {
+    if (signupCooldown <= 0) return;
+    const timer = setTimeout(() => setSignupCooldown((prev) => Math.max(prev - 1, 0)), 1000);
+    return () => clearTimeout(timer);
+  }, [signupCooldown]);
+
+  useEffect(() => {
+    if (forgotCooldown <= 0) return;
+    const timer = setTimeout(() => setForgotCooldown((prev) => Math.max(prev - 1, 0)), 1000);
+    return () => clearTimeout(timer);
+  }, [forgotCooldown]);
+
+  useEffect(() => {
+    if (otpLoginCooldown <= 0) return;
+    const timer = setTimeout(() => setOtpLoginCooldown((prev) => Math.max(prev - 1, 0)), 1000);
+    return () => clearTimeout(timer);
+  }, [otpLoginCooldown]);
   const passwordChecks = {
     minLen: signupPassword.length >= 8,
     upper: /[A-Z]/.test(signupPassword),
@@ -71,6 +140,13 @@ export default function Login() {
     number: /\d/.test(signupPassword),
     special: /[^A-Za-z0-9]/.test(signupPassword),
   };
+
+  const renderLoadingLabel = (label) => (
+    <span className="button-loading-content">
+      <PremiumLoader inline compact />
+      <span>{label}</span>
+    </span>
+  );
 
   // =====================
   // LOGIN
@@ -113,11 +189,17 @@ export default function Login() {
   };
 
   // =====================
-  // SIGNUP OTP (TWILIO)
+  // SIGNUP OTP
   // =====================
   const sendSignupOtp = async () => {
-    if (!isValidPhone(signupPhone)) {
-      alert("Please enter a valid phone number before OTP.");
+    if (signupCooldown > 0) {
+      return alert(`Please wait ${signupCooldown}s before resending OTP.`);
+    }
+
+    const signupValues = getSignupFormValues();
+    const validationMessage = getSignupValidationMessage(signupValues);
+    if (validationMessage) {
+      alert(validationMessage);
       return;
     }
 
@@ -126,14 +208,24 @@ export default function Login() {
       const res = await fetch(`${API}/api/auth/send-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: signupPhone, purpose: "signup" }),
+        body: JSON.stringify({
+          email: signupValues.email,
+          purpose: "signup",
+          name: signupValues.name,
+          school: signupValues.school,
+          customSchool: signupValues.customSchool,
+          class: signupValues.studentClass,
+          phone: signupValues.phone,
+          password: signupValues.password,
+        }),
       });
       const data = await res.json();
       if (!res.ok) return alert(data.message);
 
       setSignupOtpSent(true);
-      setSignupPhoneVerified(false);
-      alert("OTP sent to your phone.");
+      setSignupOtpVerified(false);
+      setSignupCooldown(60);
+      alert("OTP sent to your email.");
     } catch (err) {
       alert("Cannot connect to backend!");
       console.error(err);
@@ -144,88 +236,36 @@ export default function Login() {
 
   const verifySignupOtp = async () => {
     if (!signupOtpSent) return alert("Send OTP first.");
-    const debugSignup =
-      process.env.NODE_ENV !== "production" ||
-      process.env.NEXT_PUBLIC_DEBUG_SIGNUP === "1";
-    const code = String(signupOtpInput || "").trim();
-    const maskedPhone =
-      signupPhone && signupPhone.length >= 6
-        ? `${signupPhone.slice(0, 3)}***${signupPhone.slice(-2)}`
-        : "***";
 
-    if (!/^\d{6}$/.test(code)) {
+    const signupValues = getSignupFormValues();
+    const validationMessage = getSignupValidationMessage(signupValues);
+    if (validationMessage) {
+      return alert(validationMessage);
+    }
+    if (!/^\d{6}$/.test(String(signupOtpInput || "").trim())) {
       return alert("Please enter the 6-digit OTP.");
-    }
-
-    if (!isValidPhone(signupPhone)) {
-      return alert("Please enter a valid phone number.");
-    }
-
-    if (!isStrongPassword(signupPassword)) {
-      return alert(
-        "Password must be 8+ chars with uppercase, lowercase, number, and special character."
-      );
     }
 
     setSignupLoading(true);
     try {
-      // NOTE: We verify OTP and create the user in ONE backend call to avoid
-      // double-checking the same code (Twilio Verify can reject repeat checks).
-      const form = document.querySelector("form.card-form.signup-side");
-      const name = form?.querySelector('input[name="name"]')?.value || "";
-      const email = form?.querySelector('input[name="email"]')?.value || "";
-      const phone = form?.querySelector('input[name="phone"]')?.value || signupPhone || "";
-      const school = signupSchool || "";
-      const customSchool = signupCustomSchool || "";
-      const studentClass = signupClass || "";
-
-      if (!name || !email || !school || !studentClass) {
-        return alert("Please fill in all signup details before verifying OTP.");
-      }
-      if (school === "other" && !String(customSchool || "").trim()) {
-        return alert("Please enter your school name.");
-      }
-
-      if (debugSignup) {
-        console.log("OTP VERIFIED: starting signup");
-        console.log("Calling signup API...");
-        console.log("Signup payload:", {
-          name: name ? "<present>" : "<missing>",
-          email: email ? "<present>" : "<missing>",
-          phone: maskedPhone,
-          school: school ? "<present>" : "<missing>",
-          class: studentClass ? "<present>" : "<missing>",
-          password: signupPassword ? `<len:${String(signupPassword).length}>` : "<missing>",
-          otp: `<len:${code.length}>`,
-        });
-      }
-
       const res = await fetch(`${API}/api/auth/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name,
-          email,
-          phone,
-          password: signupPassword,
-          school,
-          customSchool,
-          class: studentClass,
-          otp: code,
+          name: signupValues.name,
+          email: signupValues.email,
+          phone: signupValues.phone,
+          password: signupValues.password,
+          school: signupValues.school,
+          customSchool: signupValues.customSchool,
+          class: signupValues.studentClass,
+          otp: signupOtpInput.trim(),
         }),
       });
       const data = await res.json();
 
-      if (debugSignup) {
-        console.log("OTP VERIFIED RESPONSE:", {
-          ok: res.ok,
-          status: res.status,
-          body: data,
-        });
-      }
-
       if (!res.ok) {
-        setSignupPhoneVerified(false);
+        setSignupOtpVerified(false);
         return alert(data.message || "Signup failed.");
       }
 
@@ -234,7 +274,7 @@ export default function Login() {
       alert("Registered successfully!");
       setSignupOtpSent(false);
       setSignupOtpInput("");
-      setSignupPhoneVerified(true);
+      setSignupOtpVerified(true);
       window.location.href = "/student";
     } catch (err) {
       alert("Cannot connect to backend!");
@@ -258,18 +298,26 @@ export default function Login() {
     const customSchool = e.target.customSchool?.value;
     const studentClass = e.target.class.value;
 
-    if (!isStrongPassword(password)) {
-      return alert(
-        "Password must be 8+ chars with uppercase, lowercase, number, and special character."
-      );
-    }
+    const validationMessage = getSignupValidationMessage({
+      name,
+      school,
+      customSchool,
+      studentClass,
+      phone,
+      email,
+      password,
+    });
+    if (validationMessage) return alert(validationMessage);
 
-    if (!signupPhoneVerified) {
-      return alert("Please verify phone number with OTP before signing up.");
+    if (!signupOtpVerified) {
+      return alert("Please verify your email with OTP before signing up.");
     }
 
     if (!/^\d{6}$/.test(String(signupOtpInput || "").trim())) {
       return alert("Please enter the 6-digit OTP.");
+    }
+    if (!isValidPhone(phone)) {
+      return alert("Please enter a valid phone number.");
     }
 
     setSignupLoading(true);
@@ -297,7 +345,7 @@ export default function Login() {
       alert("Registered successfully!");
       setSignupOtpSent(false);
       setSignupOtpInput("");
-      setSignupPhoneVerified(false);
+      setSignupOtpVerified(false);
       window.location.href = "/student";
     } catch (err) {
       alert("Cannot connect to backend!");
@@ -308,11 +356,14 @@ export default function Login() {
   };
 
   // =====================
-  // FORGOT OTP (TWILIO)
+  // FORGOT OTP
   // =====================
   const sendForgotOtp = async () => {
-    if (!isValidPhone(forgotPhone)) {
-      alert("Please enter a valid phone number before OTP.");
+    if (forgotCooldown > 0) {
+      return alert(`Please wait ${forgotCooldown}s before resending OTP.`);
+    }
+    if (!isValidEmail(forgotEmail)) {
+      alert("Please enter a valid email address before OTP.");
       return;
     }
 
@@ -321,12 +372,13 @@ export default function Login() {
       const res = await fetch(`${API}/api/auth/send-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: forgotPhone, purpose: "reset" }),
+        body: JSON.stringify({ email: forgotEmail, purpose: "reset" }),
       });
       const data = await res.json();
       if (!res.ok) return alert(data.message);
       setForgotOtpSent(true);
-      alert("OTP sent to your phone.");
+      setForgotCooldown(60);
+      alert("OTP sent to your email.");
     } catch (err) {
       alert("Cannot connect to backend!");
       console.error(err);
@@ -341,8 +393,12 @@ export default function Login() {
   const handleResetPassword = async (e) => {
     e.preventDefault();
 
-    const phone = e.target.phone?.value;
+    const email = forgotEmail || e.target.email?.value;
     const newPassword = e.target.newPassword.value;
+
+    if (!isValidEmail(email)) {
+      return alert("Please enter a valid email address before resetting password.");
+    }
 
     if (!forgotOtpSent) {
       return alert("Please send OTP first.");
@@ -363,7 +419,7 @@ export default function Login() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          phone,
+          email,
           otp: forgotOtpInput.trim(),
           newPassword,
         }),
@@ -375,6 +431,8 @@ export default function Login() {
       alert("Password reset successfully!");
       setForgotOtpSent(false);
       setForgotOtpInput("");
+      setForgotEmail("");
+      setForgotCooldown(0);
       setActiveForm("login");
     } catch (err) {
       alert("Cannot connect to backend!");
@@ -388,8 +446,11 @@ export default function Login() {
   // OTP LOGIN (PASSWORDLESS)
   // =====================
   const sendLoginOtp = async () => {
-    if (!isValidPhone(otpLoginPhone)) {
-      alert("Please enter a valid phone number before OTP.");
+    if (otpLoginCooldown > 0) {
+      return alert(`Please wait ${otpLoginCooldown}s before resending OTP.`);
+    }
+    if (!isValidEmail(otpLoginEmail)) {
+      alert("Please enter a valid email before OTP.");
       return;
     }
 
@@ -398,13 +459,14 @@ export default function Login() {
       const res = await fetch(`${API}/api/auth/send-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: otpLoginPhone, purpose: "login" }),
+        body: JSON.stringify({ email: otpLoginEmail, purpose: "login" }),
       });
       const data = await res.json();
       if (!res.ok) return alert(data.message);
 
       setOtpLoginSent(true);
-      alert("OTP sent to your phone.");
+      setOtpLoginCooldown(60);
+      alert("OTP sent to your email.");
     } catch (err) {
       alert("Cannot connect to backend!");
       console.error(err);
@@ -424,7 +486,7 @@ export default function Login() {
       const res = await fetch(`${API}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: otpLoginPhone, otp: otpLoginOtp.trim() }),
+        body: JSON.stringify({ email: otpLoginEmail, otp: otpLoginOtp.trim() }),
       });
       const data = await res.json();
       if (!res.ok) return alert(data.message);
@@ -476,39 +538,49 @@ export default function Login() {
     <div className="login-container">
       <Fall />
 
-      <header className="login-header">
+      <motion.header
+        className="login-header"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+      >
         <h1>
           WELCOME TO THE <br /> SUBHO&apos;S COMPUTER INSTITUTE
         </h1>
         <p className="login-subtitle">
           Secure student access with a modern experience.
         </p>
-      </header>
+      </motion.header>
 
-      <div className="auth-shell">
+      <motion.div
+        className="auth-shell"
+        initial={{ opacity: 0, y: 24, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1], delay: 0.08 }}
+      >
       <div className={`card-wrapper ${activeForm}`}>
         <div className="auth-switch">
-          <button
+          <MotionButton
             type="button"
             className={`switch-btn ${activeForm === "login" ? "active" : ""}`}
             onClick={() => setActiveForm("login")}
           >
             Login
-          </button>
-          <button
+          </MotionButton>
+          <MotionButton
             type="button"
             className={`switch-btn ${activeForm === "signup" ? "active" : ""}`}
             onClick={() => setActiveForm("signup")}
           >
             Sign Up
-          </button>
-          <button
+          </MotionButton>
+          <MotionButton
             type="button"
             className={`switch-btn ${activeForm === "forgot" ? "active" : ""}`}
             onClick={() => setActiveForm("forgot")}
           >
             Reset
-          </button>
+          </MotionButton>
         </div>
 
         {/* LOGIN */}
@@ -532,14 +604,14 @@ export default function Login() {
                 value={twoFaOtp}
                 onChange={(e) => setTwoFaOtp(e.target.value)}
               />
-              <button
+              <MotionButton
                 type="button"
                 className="form-btn"
                 onClick={verifyTwoFactorOtp}
                 disabled={twoFaLoading}
               >
-                {twoFaLoading ? "Verifying..." : "Verify OTP"}
-              </button>
+                {twoFaLoading ? renderLoadingLabel("Verifying") : "Verify OTP"}
+              </MotionButton>
               <p
                 className="switch-link soft"
                 onClick={() => {
@@ -554,47 +626,59 @@ export default function Login() {
           ) : loginMode === "otp" ? (
             <>
               <input
-                placeholder="Phone Number"
+                placeholder="Email"
                 className="form-input"
-                value={otpLoginPhone}
+                value={otpLoginEmail}
                 onChange={(e) => {
-                  setOtpLoginPhone(e.target.value);
+                  setOtpLoginEmail(e.target.value);
                   setOtpLoginSent(false);
                 }}
               />
-              <button
+              <MotionButton
                 type="button"
                 className="form-btn"
                 onClick={sendLoginOtp}
                 disabled={otpLoginLoading}
               >
-                {otpLoginLoading ? "Sending..." : otpLoginSent ? "Resend OTP" : "Send OTP"}
-              </button>
+                {otpLoginLoading
+                  ? renderLoadingLabel("Sending OTP")
+                  : otpLoginSent
+                  ? "Resend OTP"
+                  : "Send OTP"}
+              </MotionButton>
+              <AnimatePresence initial={false}>
               {otpLoginSent && (
-                <>
+                <motion.div
+                  initial={{ opacity: 0, y: 12, height: 0 }}
+                  animate={{ opacity: 1, y: 0, height: "auto" }}
+                  exit={{ opacity: 0, y: -8, height: 0 }}
+                  transition={{ duration: 0.28 }}
+                  style={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}
+                >
                   <input
                     placeholder="Enter OTP"
                     className="form-input"
                     value={otpLoginOtp}
                     onChange={(e) => setOtpLoginOtp(e.target.value)}
                   />
-                  <button
+                  <MotionButton
                     type="button"
                     className="form-btn"
                     onClick={verifyOtpLogin}
                     disabled={otpLoginLoading}
                   >
-                    {otpLoginLoading ? "Logging in..." : "Login"}
-                  </button>
-                </>
+                    {otpLoginLoading ? renderLoadingLabel("Logging In") : "Login"}
+                  </MotionButton>
+                </motion.div>
               )}
+              </AnimatePresence>
               <p
                 className="switch-link soft"
                 onClick={() => {
-                  setLoginMode("password");
-                  setOtpLoginPhone("");
-                  setOtpLoginSent(false);
-                  setOtpLoginOtp("");
+                setLoginMode("password");
+                setOtpLoginEmail("");
+                setOtpLoginSent(false);
+                setOtpLoginOtp("");
                 }}
               >
                 Use email + password instead
@@ -619,14 +703,14 @@ export default function Login() {
                   {showLoginPassword ? "🙈" : "👁"}
                 </button>
               </div>
-              <button className="form-btn">Login</button>
+              <MotionButton className="form-btn">Login</MotionButton>
               <p
                 className="switch-link soft"
                 onClick={() => {
-                  setLoginMode("otp");
-                  setOtpLoginPhone("");
-                  setOtpLoginSent(false);
-                  setOtpLoginOtp("");
+                setLoginMode("otp");
+                setOtpLoginEmail("");
+                setOtpLoginSent(false);
+                setOtpLoginOtp("");
                 }}
               >
                 Login with OTP instead
@@ -640,10 +724,11 @@ export default function Login() {
         <form className="card-form signup-side" onSubmit={handleRegister}>
           <h2>Sign Up</h2>
 
-          <input name="name" placeholder="Full Name" className="form-input" />
+          <input name="name" placeholder="Full Name" className="form-input" required />
           <select
             name="school"
             className="form-input"
+            required
             value={signupSchool}
             onChange={(e) => {
               const value = e.target.value;
@@ -667,6 +752,7 @@ export default function Login() {
               name="customSchool"
               placeholder="Enter your school name"
               className="form-input"
+              required
               value={signupCustomSchool}
               onChange={(e) => setSignupCustomSchool(e.target.value)}
             />
@@ -674,6 +760,7 @@ export default function Login() {
           <select
             name="class"
             className="form-input"
+            required
             value={signupClass}
             onChange={(e) => setSignupClass(e.target.value)}
           >
@@ -684,35 +771,62 @@ export default function Login() {
               </option>
             ))}
           </select>
-          <input name="email" placeholder="Email" className="form-input" />
           <input
             name="phone"
             placeholder="Phone Number"
             className="form-input"
-            value={signupPhone}
+            required
+          />
+          <input
+            name="email"
+            placeholder="Email"
+            className="form-input"
+            required
+            value={signupEmail}
             onChange={(e) => {
-              setSignupPhone(e.target.value);
-              setSignupPhoneVerified(false);
+              setSignupEmail(e.target.value);
+              setSignupOtpSent(false);
+              setSignupOtpVerified(false);
             }}
           />
-          <button type="button" className="form-btn" onClick={sendSignupOtp}>
-            {signupLoading ? "Sending..." : signupOtpSent ? "Resend OTP" : "Send OTP"}
-          </button>
+          <MotionButton
+            type="button"
+            className="form-btn"
+            onClick={sendSignupOtp}
+            disabled={signupLoading || signupCooldown > 0}
+          >
+            {signupLoading
+              ? renderLoadingLabel("Sending OTP")
+              : signupCooldown > 0
+              ? `Resend in ${signupCooldown}s`
+              : signupOtpSent
+              ? "Resend OTP"
+              : "Send OTP"}
+          </MotionButton>
+          <AnimatePresence initial={false}>
           {signupOtpSent && (
-            <>
+            <motion.div
+              initial={{ opacity: 0, y: 12, height: 0 }}
+              animate={{ opacity: 1, y: 0, height: "auto" }}
+              exit={{ opacity: 0, y: -8, height: 0 }}
+              transition={{ duration: 0.28 }}
+              style={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}
+            >
               <input
                 placeholder="Enter OTP"
                 className="form-input"
+                required
                 value={signupOtpInput}
                 onChange={(e) => setSignupOtpInput(e.target.value)}
               />
-              <button type="button" className="form-btn" onClick={verifySignupOtp}>
-                {signupLoading ? "Verifying..." : "Verify OTP"}
-              </button>
-            </>
+              <MotionButton type="button" className="form-btn" onClick={verifySignupOtp}>
+                {signupLoading ? renderLoadingLabel("Verifying") : "Verify OTP"}
+              </MotionButton>
+            </motion.div>
           )}
+          </AnimatePresence>
           <p className="switch-link">
-            {signupPhoneVerified ? "Phone verified" : "Phone not verified"}
+            {signupOtpVerified ? "Email verified" : "Email not verified"}
           </p>
 
           <div className="password-field">
@@ -721,6 +835,7 @@ export default function Login() {
               type={showSignupPassword ? "text" : "password"}
               placeholder="Password"
               className="form-input"
+              required
               value={signupPassword}
               onChange={(e) => setSignupPassword(e.target.value)}
             />
@@ -741,16 +856,16 @@ export default function Login() {
             {passwordChecks.special ? "✓" : "•"} special
           </p>
 
-          <button
+          <MotionButton
             className="form-btn"
             disabled={
               signupLoading ||
-              !signupPhoneVerified ||
+              !signupOtpVerified ||
               !isStrongPassword(signupPassword)
             }
           >
-            Sign Up
-          </button>
+            {signupLoading ? renderLoadingLabel("Creating Account") : "Sign Up"}
+          </MotionButton>
           <p className="switch-link soft" onClick={() => setActiveForm("login")}>
             Already have an account?
           </p>
@@ -760,30 +875,41 @@ export default function Login() {
         <form className="card-form forgot-side" onSubmit={handleResetPassword}>
           <h2>Reset Password</h2>
           <input
-            name="phone"
-            placeholder="Phone Number"
+            name="email"
+            placeholder="Email"
             className="form-input"
-            value={forgotPhone}
+            value={forgotEmail}
             onChange={(e) => {
-              setForgotPhone(e.target.value);
+              setForgotEmail(e.target.value);
               setForgotOtpSent(false);
               setForgotOtpInput("");
             }}
           />
 
           {!forgotOtpSent && (
-            <button
+            <MotionButton
               type="button"
               className="form-btn"
               onClick={sendForgotOtp}
-              disabled={forgotLoading}
+              disabled={forgotLoading || forgotCooldown > 0}
             >
-              {forgotLoading ? "Sending..." : "Send OTP"}
-            </button>
+              {forgotLoading
+                ? renderLoadingLabel("Sending OTP")
+                : forgotCooldown > 0
+                ? `Resend in ${forgotCooldown}s`
+                : "Send OTP"}
+            </MotionButton>
           )}
 
+          <AnimatePresence initial={false}>
           {forgotOtpSent && (
-            <>
+            <motion.div
+              initial={{ opacity: 0, y: 12, height: 0 }}
+              animate={{ opacity: 1, y: 0, height: "auto" }}
+              exit={{ opacity: 0, y: -8, height: 0 }}
+              transition={{ duration: 0.28 }}
+              style={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}
+            >
               <input
                 placeholder="Enter OTP"
                 className="form-input"
@@ -806,16 +932,17 @@ export default function Login() {
                   {showResetPassword ? "🙈" : "👁"}
                 </button>
               </div>
-              <button className="form-btn" disabled={forgotLoading}>
-                {forgotLoading ? "Resetting..." : "Reset Password"}
-              </button>
-            </>
+              <MotionButton className="form-btn" disabled={forgotLoading}>
+                {forgotLoading ? renderLoadingLabel("Resetting") : "Reset Password"}
+              </MotionButton>
+            </motion.div>
           )}
+          </AnimatePresence>
 
           
         </form>
       </div>
-      </div>
+      </motion.div>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+import PremiumLoader from "./components/ui/PremiumLoader.jsx";
 
 export default function Home() {
   const router = useRouter();
@@ -9,5 +10,5 @@ export default function Home() {
     router.replace("/login");
   }, [router]);
 
-  return null;
+  return <PremiumLoader fullScreen label="Launching Flowlytiks" />;
 }

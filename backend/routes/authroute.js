@@ -4,20 +4,15 @@ import {
   registerUser,
   resetPassword,
   logoutUser,
-} from "../controllers/authcontrollers.js";
-import {
-  sendOtp,
-  verifyOtp,
-  signupWithOtp,
   verifyTwoFactor,
-} from "../controllers/otpauthcontrollers.js";
+} from "../controllers/authcontrollers.js";
+import { sendOtp, verifyOtp, signupWithOtp } from "../controllers/otpauthcontrollers.js";
 import { protect } from "../middleware/authmiddleware.js";
-import { otpSendRateLimit, otpVerifyRateLimit } from "../middleware/otpRateLimit.js";
 
 const router = express.Router();
 
-router.post("/send-otp", otpSendRateLimit, sendOtp);
-router.post("/verify-otp", otpVerifyRateLimit, verifyOtp);
+router.post("/send-otp", sendOtp);
+router.post("/verify-otp", verifyOtp);
 router.post("/signup", signupWithOtp);
 router.post("/2fa/verify", verifyTwoFactor);
 

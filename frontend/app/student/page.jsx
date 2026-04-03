@@ -1,9 +1,12 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { motion } from "framer-motion";
 import "./student.css";
 import Nav from "../components/navbar/navbar.jsx";
 import jsPDF from "jspdf";
+import PremiumLoader from "../components/ui/PremiumLoader.jsx";
+import { MotionButton, MotionCard, MotionSection } from "../components/motion/primitives.jsx";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
@@ -243,30 +246,35 @@ export default function StudentDashboard() {
 
 
 
-  if (loading) return <p>Loading...</p>;
+  if (loading) return <PremiumLoader fullScreen label="Loading student dashboard" />;
 
   return (
-    <div className="dashboard-wrapper">
+    <motion.div
+      className="dashboard-wrapper"
+      initial={{ opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+    >
       <Nav />
 
-      <div className="student-header">
+      <MotionSection className="student-header" delay={0.04}>
         <h1 className="student-name">____________</h1>
         <h1 className="student-name">____________</h1>
         <p className="student-subtitle">Student Dashboard</p>
-      </div>
-<div className="dashboard-top">
-      <div className="total-fees-container">
+      </MotionSection>
+<MotionSection className="dashboard-top" delay={0.08}>
+      <MotionCard className="total-fees-container">
         <h2 className="total-title">Total Monthly Fees</h2>
         <p className="total-amount">₹{totalMonthlyFees}</p>
        
 
-      </div>
+      </MotionCard>
  
  
 
-</div>
+</MotionSection>
 
-      <div className="progress-section">
+      <MotionSection className="progress-section" delay={0.12}>
         <p className="progress-label">
           Fees Paid: {paidCount}/{months.length}
         </p>
@@ -276,7 +284,7 @@ export default function StudentDashboard() {
             style={{ width: `${progressPercent}%` }}
           />
         </div>
-      </div>
+      </MotionSection>
 
       <h3 className="section-heading">Monthly Fee Details</h3>
 
@@ -287,35 +295,35 @@ export default function StudentDashboard() {
           );
 
           return (
-            <div key={month} className="month-card">
+            <MotionCard key={month} className="month-card" delay={0.04}>
               <div className="month-info">
                 <p className="month-name">{month}</p>
                 <p className="month-fee">₹{totalMonthlyFees}</p>
               </div>
 
               {isPaid ? (
-                <button
+                <MotionButton
                   className="receipt-button"
                   onClick={() => downloadReceiptPDF(month)}
                 >
                   Download PDF Receipt
-                </button>
+                </MotionButton>
               ) : (
-                <button
+                <MotionButton
                   className="pay-button"
                   onClick={() => handlePay(month)}
                 >
                   Pay Now
-                </button>
+                </MotionButton>
 
 
               )}
-            </div>
+            </MotionCard>
           );
         })}
       </div>
 
-      <div className="upcoming-container">
+      <MotionCard className="upcoming-container" delay={0.18}>
         <h3 className="upcoming-title">Upcoming Fee</h3>
         <div className="upcoming-content">
           <div>
@@ -326,7 +334,7 @@ export default function StudentDashboard() {
             {upcomingMonth.month === "All Paid" ? "✔ No Dues" : "Due Soon"}
           </span>
         </div>
-      </div>
-    </div>
+      </MotionCard>
+    </motion.div>
   );
 }

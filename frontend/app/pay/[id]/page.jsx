@@ -2,8 +2,11 @@
 import { useRouter } from "next/navigation";
 import { useParams, useSearchParams } from "next/navigation";
 import { useState, useEffect } from "react";
+import { motion } from "framer-motion";
 
 import "./pay.css";
+import PremiumLoader from "../../components/ui/PremiumLoader.jsx";
+import { MotionButton, MotionCard } from "../../components/motion/primitives.jsx";
 
 export default function PayPage() {
   const { id: studentId } = useParams();
@@ -114,14 +117,19 @@ export default function PayPage() {
 
 
   return (
-    <div className="pay-wrapper">
+    <motion.div
+      className="pay-wrapper"
+      initial={{ opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+    >
      
-  <button
+  <MotionButton
   className="back-btn"
   onClick={() => router.back()}
 >
   ← Back
-</button>
+</MotionButton>
 
 
  
@@ -131,7 +139,7 @@ export default function PayPage() {
 
       <h1 className="pay-heading">Fee Payment</h1>
 
-      <div className="pay-card">
+      <MotionCard className="pay-card" hover={false}>
         <h2 className="student-title">Student ID: {studentId}</h2>
         {student ? (
           <div className="student-info">
@@ -140,7 +148,7 @@ export default function PayPage() {
             <p><strong>School:</strong> {student.school}</p>
           </div>
         ) : (
-          <p>Loading student details...</p>
+          <PremiumLoader label="Loading student details" />
         )}
 
 
@@ -151,26 +159,26 @@ export default function PayPage() {
         <h3 className="pay-method-title">Choose Payment Method</h3>
 
         <div className="method-list">
-          <button
+          <MotionButton
             className={`method-btn ${method === "upi" ? "active" : ""}`}
             onClick={() => setMethod("upi")}
           >
             UPI
-          </button>
+          </MotionButton>
 
-          <button
+          <MotionButton
             className={`method-btn ${method === "card" ? "active" : ""}`}
             onClick={() => setMethod("card")}
           >
             Card
-          </button>
+          </MotionButton>
 
-          <button
+          <MotionButton
             className={`method-btn ${method === "netbank" ? "active" : ""}`}
             onClick={() => setMethod("netbank")}
           >
             Net Banking
-          </button>
+          </MotionButton>
         </div>
 
         {/* ------------------- UPI SECTION ------------------- */}
@@ -180,21 +188,21 @@ export default function PayPage() {
             <p className="method-label">Pay using UPI Apps</p>
 
             <div className="upi-app-buttons">
-              <button
+              <MotionButton
                 type="button"
                 className={`upi-icon-btn ${selectedUpiApp === "gpay" ? "active" : ""}`}
                 onClick={() => setSelectedUpiApp("gpay")}
               >
                 <img src="/gpay.png" alt="Google Pay" />
-              </button>
+              </MotionButton>
 
-              <button
+              <MotionButton
                 type="button"
                 className={`upi-icon-btn ${selectedUpiApp === "phonepe" ? "active" : ""}`}
                 onClick={() => setSelectedUpiApp("phonepe")}
               >
                 <img src="/phonpe.png" alt="PhonePe" />
-              </button>
+              </MotionButton>
             </div>
 
             <p className="method-note">OR</p>
@@ -243,11 +251,18 @@ export default function PayPage() {
         )}
 
         {/* PAYMENT BUTTON */}
-        <button className="final-pay-btn" onClick={handlePhonePePay} disabled={isPaying}>
-          {isPaying ? "Redirecting..." : `Pay ₹${amount}`}
-        </button>
+        <MotionButton className="final-pay-btn" onClick={handlePhonePePay} disabled={isPaying}>
+          {isPaying ? (
+            <span className="button-loading-content">
+              <PremiumLoader inline compact />
+              <span>Redirecting Securely</span>
+            </span>
+          ) : (
+            `Pay ₹${amount}`
+          )}
+        </MotionButton>
 
-      </div>
-    </div>
+      </MotionCard>
+    </motion.div>
   );
 }

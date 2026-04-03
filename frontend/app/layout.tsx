@@ -1,4 +1,5 @@
 import "./globals.css";
+import AppMotionShell from "./components/motion/AppMotionShell.jsx";
 
 export const metadata = {
   title: "FLOWLYTIKS Fee Management Dashboard",
@@ -13,7 +14,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        {children}
+        <AppMotionShell>{children}</AppMotionShell>
       </body>
     </html>
   );

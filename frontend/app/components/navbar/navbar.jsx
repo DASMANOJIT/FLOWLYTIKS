@@ -2,7 +2,9 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState, useEffect } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import "./navbar.css";
+import { MotionButton } from "../motion/primitives.jsx";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API = "";
@@ -46,7 +48,12 @@ export default function StudentNavbar() {
   };
 
   return (
-    <nav className="student-navbar">
+    <motion.nav
+      className="student-navbar"
+      initial={{ opacity: 0, y: -18 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+    >
       <div className="nav-inner">
 
         {/* LEFT → Logo */}
@@ -73,7 +80,7 @@ export default function StudentNavbar() {
             />
             <span className="student-name">HELLO {studentName.toUpperCase()}</span>
           </Link>
-          <button className="logout-btn" onClick={handleLogout}>Logout</button>
+          <MotionButton className="logout-btn" onClick={handleLogout}>Logout</MotionButton>
         </div>
 
         {/* RIGHT → Hamburger on mobile */}
@@ -85,8 +92,15 @@ export default function StudentNavbar() {
       </div>
 
       {/* MOBILE MENU */}
+      <AnimatePresence>
       {open && (
-        <div className="mobile-menu">
+        <motion.div
+          className="mobile-menu"
+          initial={{ opacity: 0, y: -10, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: -8, scale: 0.98 }}
+          transition={{ duration: 0.22 }}
+        >
           <Link href="/profile" className="student-profile-link">
             <Image
               src="/user.png" // replace with your icon path
@@ -97,9 +111,10 @@ export default function StudentNavbar() {
             />
             <span className="student-name-mobile">HELLO {studentName.toUpperCase()}</span>
           </Link>
-          <button className="logout-btn-mobile" onClick={handleLogout}>Logout</button>
-        </div>
+          <MotionButton className="logout-btn-mobile" onClick={handleLogout}>Logout</MotionButton>
+        </motion.div>
       )}
-    </nav>
+      </AnimatePresence>
+    </motion.nav>
   );
 }

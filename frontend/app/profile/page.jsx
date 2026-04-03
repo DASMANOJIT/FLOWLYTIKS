@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
 import { useRouter } from "next/navigation";
 import "./page.css";
+import PremiumLoader from "../components/ui/PremiumLoader.jsx";
+import { MotionButton, MotionCard, MotionSection } from "../components/motion/primitives.jsx";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
@@ -48,22 +51,27 @@ export default function StudentSelfProfile() {
       .finally(() => setLoading(false));
   }, [router]);
 
-  if (loading) return <p className="loading-text">Loading profile...</p>;
+  if (loading) return <PremiumLoader fullScreen label="Loading profile" />;
 
   return (
-    <div className="self-profile-page">
-      <div className="profile-card">
+    <motion.div
+      className="self-profile-page"
+      initial={{ opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+    >
+      <MotionCard className="profile-card" hover={false}>
 
         {/* BACK BUTTON */}
-        <button
+        <MotionButton
           className="back-dashboard-btn"
           onClick={() => router.push("/student")}
         >
           ← Back to Dashboard
-        </button>
+        </MotionButton>
 
         {/* HEADER */}
-        <div className="profile-header">
+        <MotionSection className="profile-header" delay={0.04}>
           <div className="avatar">
             {student.name?.charAt(0).toUpperCase()}
           </div>
@@ -71,7 +79,7 @@ export default function StudentSelfProfile() {
             <h1 className="profile-title">{student.name}</h1>
             <p className="profile-subtitle">Your Profile</p>
           </div>
-        </div>
+        </MotionSection>
 
         {/* PROFILE INFO */}
         <div className="profile-grid">
@@ -131,7 +139,7 @@ export default function StudentSelfProfile() {
             <p className="no-data">No payment records found</p>
           )}
         </div>
-      </div>
-    </div>
+      </MotionCard>
+    </motion.div>
   );
 }

@@ -27,5 +27,8 @@ if (process.env.DEBUG_ENV_LOAD === "1") {
   // eslint-disable-next-line no-console
   console.log("ENV loaded (.env keys):", Object.keys(result.parsed || {}).length);
   // eslint-disable-next-line no-console
-  console.log("Twilio SID exists:", !!process.env.TWILIO_ACCOUNT_SID);
+  console.log(
+    "EMAIL creds present:",
+    !!process.env.EMAIL_USER && !!process.env.EMAIL_PASS
+  );
 }

@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
 import { useParams, useRouter } from "next/navigation";
 import "./stu.css";
+import PremiumLoader from "../../components/ui/PremiumLoader.jsx";
+import { MotionButton, MotionCard, MotionSection } from "../../components/motion/primitives.jsx";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
@@ -60,37 +63,49 @@ export default function StudentProfile() {
     }
   };
 
-  if (!student) return <p className="loading-text">Loading student profile...</p>;
+  if (!student) return <PremiumLoader fullScreen label="Loading student profile" />;
 
   return (
-    <div className="profile-page">
+    <motion.div
+      className="profile-page"
+      initial={{ opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+    >
 
      
       
 
-      <div className="profile-card">
-         <button className="back-btn" onClick={() => router.back()}>
+      <MotionCard className="profile-card" hover={false}>
+         <MotionButton className="back-btn" onClick={() => router.back()}>
         ← Back to Students
-      </button>
+      </MotionButton>
 
-        <div className="profile-header">
+        <MotionSection className="profile-header" delay={0.04}>
           <div className="avatar">
             {student.name?.charAt(0).toUpperCase()}
           </div>
           {/* 🔴 DELETE BUTTON */}
-      <button
+      <MotionButton
         className="delete-student-btn"
         onClick={deleteStudent}
         disabled={loading}
       >
-        {loading ? "Deleting..." : "Delete Student"}
-      </button>
+        {loading ? (
+          <span className="button-loading-content">
+            <PremiumLoader inline compact />
+            <span>Deleting</span>
+          </span>
+        ) : (
+          "Delete Student"
+        )}
+      </MotionButton>
       
           <div>
             <h1 className="profile-title">{student.name}</h1>
             <p className="profile-subtitle">Student Profile</p>
           </div>
-        </div>
+        </MotionSection>
 
         <div className="profile-grid">
           <div className="info-item"><span>Class</span><p>{student.class || "—"}</p></div>
@@ -123,7 +138,7 @@ export default function StudentProfile() {
             <p className="no-data">No payment history found</p>
           )}
         </div>
-      </div>
-    </div>
+      </MotionCard>
+    </motion.div>
   );
 }

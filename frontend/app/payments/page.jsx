@@ -1,17 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
 import "./page.css";
 import Link from "next/link";
+import PremiumLoader from "../components/ui/PremiumLoader.jsx";
+import { MotionButton, MotionCard } from "../components/motion/primitives.jsx";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
 
 export default function PaymentsPage() {
   const [students, setStudents] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   // Session months: March → next February
   const months = [
@@ -28,7 +33,8 @@ export default function PaymentsPage() {
     })
       .then((res) => res.json())
       .then((data) => setStudents(Array.isArray(data) ? data : []))
-      .catch((err) => console.error(err));
+      .catch((err) => console.error(err))
+      .finally(() => setLoading(false));
   }, []);
 
   const handlePayment = async () => {
@@ -38,33 +44,47 @@ export default function PaymentsPage() {
     }
 
     const token = localStorage.getItem("token");
+    setSubmitting(true);
 
-    const res = await fetch(`${API_BASE}/api/payments/mark-paid`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        studentId: selectedStudent.id,
-        month: selectedMonth,
-      }),
-    });
+    try {
+      const res = await fetch(`${API_BASE}/api/payments/mark-paid`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          studentId: selectedStudent.id,
+          month: selectedMonth,
+        }),
+      });
 
-    const data = await res.json();
+      const data = await res.json();
 
-    if (!res.ok) {
-      alert(data.message);
-      return;
+      if (!res.ok) {
+        alert(data.message);
+        return;
+      }
+
+      alert("Payment marked successfully!");
+      setSelectedStudent(null);
+      setSelectedMonth("");
+    } finally {
+      setSubmitting(false);
     }
-
-    alert("Payment marked successfully!");
-    setSelectedStudent(null);
-    setSelectedMonth("");
   };
 
+  if (loading) {
+    return <PremiumLoader fullScreen label="Loading payment entry" />;
+  }
+
   return (
-    <div className="payment-container">
+    <motion.div
+      className="payment-container"
+      initial={{ opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+    >
 
       {/* BACK BUTTON */}
       <Link href="/admin" className="back-btn">
@@ -73,7 +93,7 @@ export default function PaymentsPage() {
 
       <h1 className="payment-title">Cash Payment Entry</h1>
 
-      <div className="payment-box">
+      <MotionCard className="payment-box" hover={false}>
         <label>Search Student</label>
         <input
           type="text"
@@ -130,14 +150,21 @@ export default function PaymentsPage() {
           ))}
         </select>
 
-        <button
+        <MotionButton
           className="pay-btn"
-          disabled={!selectedStudent || !selectedMonth}
+          disabled={!selectedStudent || !selectedMonth || submitting}
           onClick={handlePayment}
         >
-          Mark as Paid
-        </button>
-      </div>
-    </div>
+          {submitting ? (
+            <span className="button-loading-content">
+              <PremiumLoader inline compact />
+              <span>Saving Payment</span>
+            </span>
+          ) : (
+            "Mark as Paid"
+          )}
+        </MotionButton>
+      </MotionCard>
+    </motion.div>
   );
 }

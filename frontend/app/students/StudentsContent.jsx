@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { motion } from "framer-motion";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import "./students.css";
+import PremiumLoader from "../components/ui/PremiumLoader.jsx";
+import { MotionButton, MotionCard, MotionSection, fadeUpItem, staggerContainer } from "../components/motion/primitives.jsx";
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
 export default function StudentsPage() {
@@ -12,6 +15,7 @@ export default function StudentsPage() {
 
   const [students, setStudents] = useState([]);
   const [totalStudents, setTotalStudents] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState(() => searchParams.get("search") || "");
   const [statusFilter, setStatusFilter] = useState(
     () => searchParams.get("status") || "all"
@@ -36,7 +40,7 @@ export default function StudentsPage() {
       return;
     }
 
-    fetch(`${API_BASE}/api/students`, {
+    const studentsRequest = fetch(`${API_BASE}/api/students`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => res.json())
@@ -47,7 +51,7 @@ export default function StudentsPage() {
       })
       .catch((err) => console.error(err));
 
-    fetch(`${API_BASE}/api/students/count`, {
+    const countRequest = fetch(`${API_BASE}/api/students/count`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => res.json())
@@ -55,6 +59,10 @@ export default function StudentsPage() {
         if (typeof data?.totalStudents === "number") setTotalStudents(data.totalStudents);
       })
       .catch((err) => console.error(err));
+
+    Promise.allSettled([studentsRequest, countRequest]).finally(() => {
+      setLoading(false);
+    });
   }, []);
 
   // 🔹 Sync filters TO URL
@@ -113,16 +121,25 @@ export default function StudentsPage() {
   const classes = [...new Set(students.map((s) => s.class).filter(Boolean))];
   const schools = [...new Set(students.map((s) => s.school).filter(Boolean))];
 
+  if (loading) {
+    return <PremiumLoader fullScreen label="Loading students" />;
+  }
+
   return (
-    <div className="students-container">
+    <motion.div
+      className="students-container"
+      initial={{ opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+    >
       <h1 className="students-title">Students</h1>
 
-      <div className="students-statbar">
-        <div className="students-statcard">
+      <MotionSection className="students-statbar" delay={0.04}>
+        <MotionCard className="students-statcard">
           <span className="students-statlabel">Total Students</span>
           <span className="students-statvalue">{totalStudents ?? "—"}</span>
-        </div>
-      </div>
+        </MotionCard>
+      </MotionSection>
 
       <Link href="/admin" className="back-btn">
         ← Back to Dashboard
@@ -169,29 +186,35 @@ export default function StudentsPage() {
         <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
 
         {/* ✅ CLEAR ALL BUTTON */}
-        <button
+        <MotionButton
           type="button"
           className="clear-filters-btn"
           onClick={clearAllFilters}
         >
           Clear All
-        </button>
+        </MotionButton>
       </div>
 
       {/* STUDENT LIST */}
-      <div className="students-list">
+      <motion.div
+        className="students-list"
+        variants={staggerContainer}
+        initial="hidden"
+        animate="visible"
+      >
         {filtered.map((student) => (
-          <Link
-            key={student.id}
-            href={`/students/${student.id}`}
-            className="student-card"
-          >
-            <h3>{student.name}</h3>
-            <p>Class: {student.class}</p>
-            <p>School: {student.school}</p>
-          </Link>
+          <motion.div key={student.id} variants={fadeUpItem} whileHover={{ y: -4 }}>
+            <Link
+              href={`/students/${student.id}`}
+              className="student-card"
+            >
+              <h3>{student.name}</h3>
+              <p>Class: {student.class}</p>
+              <p>School: {student.school}</p>
+            </Link>
+          </motion.div>
         ))}
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }

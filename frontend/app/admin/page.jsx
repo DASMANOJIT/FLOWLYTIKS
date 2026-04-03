@@ -2,8 +2,17 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { AnimatePresence, motion } from "framer-motion";
 import "./admin.css";
 import Cal from "../components/calender/calender.jsx";
+import PremiumLoader from "../components/ui/PremiumLoader.jsx";
+import {
+  MotionButton,
+  MotionCard,
+  MotionSection,
+  fadeUpItem,
+  staggerContainer,
+} from "../components/motion/primitives.jsx";
 import {
   Chart as ChartJS,
   ArcElement,
@@ -17,6 +26,7 @@ ChartJS.register(ArcElement, Tooltip, Legend);
 const API_BASE = "";
 
 export default function AdminDashboard() {
+  const [loading, setLoading] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
@@ -52,8 +62,7 @@ export default function AdminDashboard() {
       return;
     }
 
-    // Fetch students
-    fetch(`${API_BASE}/api/students`, {
+    const studentsRequest = fetch(`${API_BASE}/api/students`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(res => res.json())
@@ -66,13 +75,16 @@ export default function AdminDashboard() {
       })
       .catch(err => console.error(err));
 
-    // Fetch total revenue
-    fetch(`${API_BASE}/api/payments/revenue`, {
+    const revenueRequest = fetch(`${API_BASE}/api/payments/revenue`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(res => res.json())
       .then(data => setTotalRevenue(data.totalRevenue || 0))
       .catch(err => console.error(err));
+
+    Promise.allSettled([studentsRequest, revenueRequest]).finally(() => {
+      setLoading(false);
+    });
 
   }, []);
   // Logout function
@@ -239,40 +251,50 @@ export default function AdminDashboard() {
   
 
 
+  if (loading) {
+    return <PremiumLoader fullScreen label="Loading admin dashboard" />;
+  }
+
   return (
-    <div className="admin-dashboard" id="dashboard-root">
+    <motion.div
+      className="admin-dashboard"
+      id="dashboard-root"
+      initial={{ opacity: 0, y: 18 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+    >
 
       {/* NAVBAR */}
-      <nav className="admin-nav">
+      <MotionSection className="admin-nav" delay={0.02}>
         <div className="nav-left">
           <h2 className="nav-title">FLOWLYTIKS Fee Management Dashboard</h2>
         </div>
 
         <div className="nav-actions">
-          <button
+          <MotionButton
             className="search-toggle-btn"
             onClick={() => setMobileSearchOpen(!mobileSearchOpen)}
           >
             🔍
-          </button>
-          <button
+          </MotionButton>
+          <MotionButton
             className="hamburger"
             onClick={() => setMenuOpen(!menuOpen)}
           >
             ☰
-          </button>
+          </MotionButton>
         </div>
 
         <div className={`nav-links ${menuOpen ? "open" : ""}`}>
           <Link href="/students">Students</Link>
           <Link href="/payments">Payments</Link>
-          <button className="logout-btn" onClick={handleLogout}>Logout</button>
+          <MotionButton className="logout-btn" onClick={handleLogout}>Logout</MotionButton>
 
         </div>
-      </nav>
+      </MotionSection>
 
       {/* SEARCH */}
-      <div className={`sliding-search-wrapper ${mobileSearchOpen ? "open" : ""}`}>
+      <MotionSection className={`sliding-search-wrapper ${mobileSearchOpen ? "open" : ""}`} delay={0.04}>
         <div className="modern-search-wrapper">
           <input
             type="text"
@@ -281,32 +303,37 @@ export default function AdminDashboard() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <button className="modern-search-btn">Search</button>
+          <MotionButton className="modern-search-btn">Search</MotionButton>
         </div>
-      </div>
+      </MotionSection>
 
       {/* SUMMARY */}
-      <div className="monthly-summary">
-        <div className="summary-box">
+      <motion.div
+        className="monthly-summary"
+        variants={staggerContainer}
+        initial="hidden"
+        animate="visible"
+      >
+        <motion.div className="summary-box" variants={fadeUpItem}>
           <h3>Total Students</h3>
           <p>{stats.totalStudents}</p>
-        </div>
-        <div className="summary-box">
+        </motion.div>
+        <motion.div className="summary-box" variants={fadeUpItem}>
           <h3>Paid</h3>
           <p>{stats.paid}</p>
-        </div>
-        <div className="summary-box">
+        </motion.div>
+        <motion.div className="summary-box" variants={fadeUpItem}>
           <h3>Unpaid</h3>
           <p>{stats.unpaid}</p>
-        </div>
-        <div className="summary-box">
+        </motion.div>
+        <motion.div className="summary-box" variants={fadeUpItem}>
           <h3>Total Revenue</h3>
           <p>₹{stats.revenue}</p>
-        </div>
-      </div>
+        </motion.div>
+      </motion.div>
 
       {/* DATE FILTER */}
-      <div className="date-filter-wrapper">
+      <MotionCard className="date-filter-wrapper" delay={0.08}>
         <div className="date-inputs">
           <div className="date-input">
             <label>From:</label>
@@ -326,29 +353,30 @@ export default function AdminDashboard() {
           </div>
         </div>
         <div className="filter-actions">
-          <button className="apply-btn" onClick={applyFilter}>Apply</button>
-          <button className="clear-btn" onClick={clearFilter}>Clear</button>
+          <MotionButton className="apply-btn" onClick={applyFilter}>Apply</MotionButton>
+          <MotionButton className="clear-btn" onClick={clearFilter}>Clear</MotionButton>
         </div>
         <div className="filter-result">
           <p>Total Revenue: ₹{filteredRevenue}</p>
           <p>Fees Paid: ₹{filteredPaid}</p>
         </div>
-      </div>
+      </MotionCard>
      
 
 
       {/* CHART + CALENDAR */}
-      <div className="chart-calendar-row">
-        <div className="chart-container">
+      <MotionSection className="chart-calendar-row" delay={0.12}>
+        <MotionCard className="chart-container" hover={false}>
           <h2 className="chart-title">Monthly Fee Status</h2>
           <Pie data={pieData} options={pieOptions} />
-        </div>
+        </MotionCard>
         <Cal />
-      </div>
+      </MotionSection>
 
       {/* SET MONTHLY FEES */}
+      <MotionSection delay={0.16}>
       <h2>Set Monthly Fees</h2>
-      <div className="set-fee-box">
+      <MotionCard className="set-fee-box" hover={false}>
         <input
           type="number"
           className="fee-input"
@@ -356,40 +384,56 @@ export default function AdminDashboard() {
           value={monthlyFee}
           onChange={(e) => setMonthlyFee(e.target.value)}
         />
-        <button className="fee-save-btn" onClick={saveMonthlyFee}>Save Fee</button>
-      </div>
+        <MotionButton className="fee-save-btn" onClick={saveMonthlyFee}>Save Fee</MotionButton>
+      </MotionCard>
+      </MotionSection>
 
       {/* STUDENTS LIST */}
+      <MotionSection delay={0.2}>
       <h2>Students List</h2>
-      <div className="student-list">
+      <motion.div
+        className="student-list"
+        variants={staggerContainer}
+        initial="hidden"
+        animate="visible"
+      >
         {filteredStudents.map((s, i) => (
-          <Link
-            href={`/students/${s.id}`}
-            className="student-item"
-            key={s.id}
-            style={{ animationDelay: `${i * 0.1}s` }}
-          >
-            <div>
-              <h3>
-                {s.name}
-                <span style={{ fontWeight: 400, fontSize: "14px", opacity: 0.85 }}>
-                  {" "}— Class {s.class}, {s.school}
-                </span>
-              </h3>
-            </div>
-            <span className={s.feesStatus === "paid" ? "status-paid" : "status-unpaid"}>
-              {s.feesStatus === "paid" ? "Paid" : "Unpaid"}
-            </span>
-          </Link>
+          <motion.div key={s.id} variants={fadeUpItem} whileHover={{ y: -4 }}>
+            <Link
+              href={`/students/${s.id}`}
+              className="student-item"
+              style={{ animationDelay: `${i * 0.1}s` }}
+            >
+              <div>
+                <h3>
+                  {s.name}
+                  <span style={{ fontWeight: 400, fontSize: "14px", opacity: 0.85 }}>
+                    {" "}— Class {s.class}, {s.school}
+                  </span>
+                </h3>
+              </div>
+              <span className={s.feesStatus === "paid" ? "status-paid" : "status-unpaid"}>
+                {s.feesStatus === "paid" ? "Paid" : "Unpaid"}
+              </span>
+            </Link>
+          </motion.div>
         ))}
-      </div>
+      </motion.div>
+      </MotionSection>
 
-      <button className="assistant-toggle" onClick={() => setChatOpen((v) => !v)}>
+      <MotionButton className="assistant-toggle" onClick={() => setChatOpen((v) => !v)}>
         {chatOpen ? "Close Assistant" : "Admin Assistant"}
-      </button>
+      </MotionButton>
 
+      <AnimatePresence>
       {chatOpen && (
-        <div className="assistant-panel">
+        <motion.div
+          className="assistant-panel"
+          initial={{ opacity: 0, y: 20, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 12, scale: 0.98 }}
+          transition={{ duration: 0.25 }}
+        >
           <h3>Admin Chatbot</h3>
           <div className="assistant-messages">
             {chatMessages.map((message, index) => (
@@ -412,12 +456,13 @@ export default function AdminDashboard() {
                 if (e.key === "Enter") sendAdminPrompt();
               }}
             />
-            <button onClick={sendAdminPrompt} disabled={chatLoading}>
-              {chatLoading ? "Sending..." : "Send"}
-            </button>
+            <MotionButton onClick={sendAdminPrompt} disabled={chatLoading}>
+              {chatLoading ? <span className="button-loading-content"><PremiumLoader inline compact /><span>Sending</span></span> : "Send"}
+            </MotionButton>
           </div>
-        </div>
+        </motion.div>
       )}
-    </div>
+      </AnimatePresence>
+    </motion.div>
   );
 }
