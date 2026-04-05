@@ -28,7 +28,7 @@ if (process.env.DEBUG_ENV_LOAD === "1") {
   console.log("ENV loaded (.env keys):", Object.keys(result.parsed || {}).length);
   // eslint-disable-next-line no-console
   console.log(
-    "EMAIL creds present:",
-    !!process.env.EMAIL_USER && !!process.env.EMAIL_PASS
+    "EMAIL API configured:",
+    !!process.env.RESEND_API_KEY && !!process.env.EMAIL_FROM
   );
 }

@@ -44,10 +44,12 @@ export const validateEnv = () => {
     throw new Error("JWT_SECRET must be at least 32 characters long.");
   }
 
-  required("EMAIL_USER");
-  required("EMAIL_PASS");
+  required("EMAIL_FROM");
 
   const isProduction = process.env.NODE_ENV === "production";
+  if (isProduction) {
+    required("RESEND_API_KEY");
+  }
   assertOptionalHttpUrls("FRONTEND_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("BACKEND_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("CORS_ORIGIN", { allowLocal: !isProduction });
