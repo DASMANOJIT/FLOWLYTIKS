@@ -14,6 +14,9 @@ const transporter = nodemailer.createTransport({
     user: requireEnv("EMAIL_USER"),
     pass: requireEnv("EMAIL_PASS"),
   },
+  connectionTimeout: 10_000,
+  greetingTimeout: 10_000,
+  socketTimeout: 15_000,
 });
 
 export const sendOtpEmail = async (to, otp) => {
@@ -24,5 +27,30 @@ export const sendOtpEmail = async (to, otp) => {
     <p>Your verification code is <strong>${otp}</strong>.</p>
     <p>It expires in 5 minutes. Please do not share this code with anyone.</p>
   `;
-  await transporter.sendMail({ from, to, subject, text, html });
+
+  try {
+    await transporter.sendMail({ from, to, subject, text, html });
+  } catch (error) {
+    const message = String(error?.message || "");
+    const code = String(error?.code || "");
+    const looksLikeSmtpNetworkIssue =
+      /timeout|greeting|socket|connect|connection/i.test(message) ||
+      ["ETIMEDOUT", "ESOCKET", "ECONNECTION", "ECONNRESET"].includes(code);
+
+    if (looksLikeSmtpNetworkIssue) {
+      console.error(
+        "EMAIL DELIVERY ERROR:",
+        "SMTP connection failed.",
+        "If this backend runs on a Render free web service, outbound SMTP ports are blocked and Gmail SMTP will not work there."
+      );
+      const err = new Error("Email service unavailable. Please try again later.");
+      err.status = 503;
+      throw err;
+    }
+
+    console.error("EMAIL DELIVERY ERROR:", error?.message || error);
+    const err = new Error("Failed to send verification email.");
+    err.status = 502;
+    throw err;
+  }
 };
