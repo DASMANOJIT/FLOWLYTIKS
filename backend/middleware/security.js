@@ -34,10 +34,12 @@ export const createRateLimiter = ({
     if (bucket.length >= max) {
       const retryAfter = Math.max(1, Math.ceil((windowMs - (now - bucket[0])) / 1000));
       res.setHeader("Retry-After", String(retryAfter));
+      const resolvedMessage =
+        typeof message === "function" ? message(req) : message;
       return res.status(429).json({
         success: false,
-        error: message,
-        message,
+        error: resolvedMessage,
+        message: resolvedMessage,
         retryAfter,
       });
     }
@@ -48,10 +50,32 @@ export const createRateLimiter = ({
   };
 };
 
-const authKeyGenerator = (req) => {
-  const ip = getRequesterIp(req);
+const getPurpose = (req, fallback = "login") => {
+  const purpose = String(req.body?.purpose || fallback).trim().toLowerCase();
+  return purpose || fallback;
+};
+
+const getLoginMode = (req) => {
+  if (req.body?.otp) return "otp";
+  if (req.body?.password) return "password";
+  return "request";
+};
+
+const authKeyGenerator = (req, { fallbackToIp = true, includePurpose = false, mode } = {}) => {
   const email = normalizeEmail(req.body?.email);
-  return email ? `${ip}:${email}` : ip;
+  const parts = [];
+  if (includePurpose) {
+    parts.push(getPurpose(req));
+  }
+  if (mode) {
+    parts.push(typeof mode === "function" ? mode(req) : mode);
+  }
+  if (email) {
+    parts.push(email);
+  } else if (fallbackToIp) {
+    parts.push(getRequesterIp(req));
+  }
+  return parts.join(":");
 };
 
 export const authNoStore = (req, res, next) => {
@@ -63,40 +87,41 @@ export const authNoStore = (req, res, next) => {
 
 export const otpSendRateLimit = createRateLimiter({
   namespace: "auth:send-otp",
-  windowMs: 10 * 60 * 1000,
-  max: 8,
-  message: "Too many OTP requests. Please try again later.",
-  keyGenerator: authKeyGenerator,
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: "You have requested OTP too many times for this email. Please try again after 15 minutes.",
+  keyGenerator: (req) => authKeyGenerator(req, { includePurpose: true }),
 });
 
 export const otpVerifyRateLimit = createRateLimiter({
   namespace: "auth:verify-otp",
   windowMs: 10 * 60 * 1000,
-  max: 15,
-  message: "Too many OTP verification attempts. Please try again later.",
-  keyGenerator: authKeyGenerator,
+  max: 10,
+  message:
+    "Too many OTP verification attempts for this email. Please try again after 10 minutes.",
+  keyGenerator: (req) => authKeyGenerator(req, { includePurpose: true }),
 });
 
 export const loginRateLimit = createRateLimiter({
   namespace: "auth:login",
   windowMs: 15 * 60 * 1000,
   max: 12,
-  message: "Too many login attempts. Please try again later.",
-  keyGenerator: authKeyGenerator,
+  message: "Too many login attempts for this account. Please try again later.",
+  keyGenerator: (req) => authKeyGenerator(req, { mode: getLoginMode }),
 });
 
 export const signupRateLimit = createRateLimiter({
   namespace: "auth:signup",
-  windowMs: 20 * 60 * 1000,
+  windowMs: 15 * 60 * 1000,
   max: 10,
-  message: "Too many signup attempts. Please try again later.",
-  keyGenerator: authKeyGenerator,
+  message: "Too many signup attempts for this email. Please try again later.",
+  keyGenerator: (req) => authKeyGenerator(req),
 });
 
 export const passwordResetRateLimit = createRateLimiter({
   namespace: "auth:reset-password",
-  windowMs: 20 * 60 * 1000,
+  windowMs: 15 * 60 * 1000,
   max: 8,
-  message: "Too many password reset attempts. Please try again later.",
-  keyGenerator: authKeyGenerator,
+  message: "Too many password reset attempts for this email. Please try again later.",
+  keyGenerator: (req) => authKeyGenerator(req),
 });

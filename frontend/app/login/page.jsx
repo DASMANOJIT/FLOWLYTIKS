@@ -8,6 +8,7 @@ import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { readApiResponse } from "../../lib/api.js";
 
 export default function Login() {
+  const OTP_RESEND_COOLDOWN_SECONDS = 15;
   const debugRenders = process.env.NEXT_PUBLIC_RENDER_DEBUG === "1";
   const renderCount = useRef(0);
   const warned = useRef(false);
@@ -49,6 +50,9 @@ export default function Login() {
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [showResetPassword, setShowResetPassword] = useState(false);
+
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
 
   const [loginMode, setLoginMode] = useState("password"); // password | otp
   const [otpLoginEmail, setOtpLoginEmail] = useState("");
@@ -134,6 +138,7 @@ export default function Login() {
     const timer = setTimeout(() => setOtpLoginCooldown((prev) => Math.max(prev - 1, 0)), 1000);
     return () => clearTimeout(timer);
   }, [otpLoginCooldown]);
+
   const passwordChecks = {
     minLen: signupPassword.length >= 8,
     upper: /[A-Z]/.test(signupPassword),
@@ -155,8 +160,8 @@ export default function Login() {
   const handlePasswordLogin = async (e) => {
     e.preventDefault();
 
-    const email = e.target.email?.value;
-    const password = e.target.password?.value;
+    const email = loginEmail.trim();
+    const password = loginPassword;
 
     try {
       const res = await fetch(`${API}/api/auth/login`, {
@@ -195,6 +200,7 @@ export default function Login() {
   // SIGNUP OTP
   // =====================
   const sendSignupOtp = async () => {
+    if (signupLoading) return;
     if (signupCooldown > 0) {
       return alert(`Please wait ${signupCooldown}s before resending OTP.`);
     }
@@ -222,15 +228,20 @@ export default function Login() {
           password: signupValues.password,
         }),
       });
-      const { ok, error } = await readApiResponse(
+      const { ok, data, error } = await readApiResponse(
         res,
         "Failed to send OTP. Please try again."
       );
-      if (!ok) return alert(error);
+      if (!ok) {
+        if (data?.retryAfter) {
+          setSignupCooldown(Number(data.retryAfter));
+        }
+        return alert(error);
+      }
 
       setSignupOtpSent(true);
       setSignupOtpVerified(false);
-      setSignupCooldown(60);
+      setSignupCooldown(OTP_RESEND_COOLDOWN_SECONDS);
       alert("OTP sent to your email.");
     } catch (err) {
       alert("Cannot connect to backend!");
@@ -241,6 +252,7 @@ export default function Login() {
   };
 
   const verifySignupOtp = async () => {
+    if (signupLoading) return;
     if (!signupOtpSent) return alert("Send OTP first.");
 
     const signupValues = getSignupFormValues();
@@ -370,6 +382,7 @@ export default function Login() {
   // FORGOT OTP
   // =====================
   const sendForgotOtp = async () => {
+    if (forgotLoading) return;
     if (forgotCooldown > 0) {
       return alert(`Please wait ${forgotCooldown}s before resending OTP.`);
     }
@@ -385,13 +398,18 @@ export default function Login() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: forgotEmail, purpose: "reset" }),
       });
-      const { ok, error } = await readApiResponse(
+      const { ok, data, error } = await readApiResponse(
         res,
         "Failed to send OTP. Please try again."
       );
-      if (!ok) return alert(error);
+      if (!ok) {
+        if (data?.retryAfter) {
+          setForgotCooldown(Number(data.retryAfter));
+        }
+        return alert(error);
+      }
       setForgotOtpSent(true);
-      setForgotCooldown(60);
+      setForgotCooldown(OTP_RESEND_COOLDOWN_SECONDS);
       alert("OTP sent to your email.");
     } catch (err) {
       alert("Cannot connect to backend!");
@@ -462,6 +480,7 @@ export default function Login() {
   // OTP LOGIN (PASSWORDLESS)
   // =====================
   const sendLoginOtp = async () => {
+    if (otpLoginLoading) return;
     if (otpLoginCooldown > 0) {
       return alert(`Please wait ${otpLoginCooldown}s before resending OTP.`);
     }
@@ -477,14 +496,19 @@ export default function Login() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: otpLoginEmail, purpose: "login" }),
       });
-      const { ok, error } = await readApiResponse(
+      const { ok, data, error } = await readApiResponse(
         res,
         "Failed to send OTP. Please try again."
       );
-      if (!ok) return alert(error);
+      if (!ok) {
+        if (data?.retryAfter) {
+          setOtpLoginCooldown(Number(data.retryAfter));
+        }
+        return alert(error);
+      }
 
       setOtpLoginSent(true);
-      setOtpLoginCooldown(60);
+      setOtpLoginCooldown(OTP_RESEND_COOLDOWN_SECONDS);
       alert("OTP sent to your email.");
     } catch (err) {
       alert("Cannot connect to backend!");
@@ -495,6 +519,7 @@ export default function Login() {
   };
 
   const verifyOtpLogin = async () => {
+    if (otpLoginLoading) return;
     if (!otpLoginSent) return alert("Send OTP first.");
     if (!/^\d{6}$/.test(String(otpLoginOtp || "").trim())) {
       return alert("Please enter the 6-digit OTP.");
@@ -528,6 +553,7 @@ export default function Login() {
   // 2FA VERIFY
   // =====================
   const verifyTwoFactorOtp = async () => {
+    if (twoFaLoading) return;
     if (!/^\d{6}$/.test(String(twoFaOtp || "").trim())) {
       return alert("Please enter the 6-digit OTP.");
     }
@@ -583,96 +609,268 @@ export default function Login() {
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1], delay: 0.08 }}
       >
-      <div className={`card-wrapper ${activeForm}`}>
-        <div className="auth-switch">
-          <MotionButton
-            type="button"
-            className={`switch-btn ${activeForm === "login" ? "active" : ""}`}
-            onClick={() => setActiveForm("login")}
-          >
-            Login
-          </MotionButton>
-          <MotionButton
-            type="button"
-            className={`switch-btn ${activeForm === "signup" ? "active" : ""}`}
-            onClick={() => setActiveForm("signup")}
-          >
-            Sign Up
-          </MotionButton>
-          <MotionButton
-            type="button"
-            className={`switch-btn ${activeForm === "forgot" ? "active" : ""}`}
-            onClick={() => setActiveForm("forgot")}
-          >
-            Reset
-          </MotionButton>
-        </div>
+        <div className={`card-wrapper ${activeForm}`}>
+          <div className="auth-switch">
+            <MotionButton
+              type="button"
+              className={`switch-btn ${activeForm === "login" ? "active" : ""}`}
+              onClick={() => setActiveForm("login")}
+            >
+              Login
+            </MotionButton>
+            <MotionButton
+              type="button"
+              className={`switch-btn ${activeForm === "signup" ? "active" : ""}`}
+              onClick={() => setActiveForm("signup")}
+            >
+              Sign Up
+            </MotionButton>
+            <MotionButton
+              type="button"
+              className={`switch-btn ${activeForm === "forgot" ? "active" : ""}`}
+              onClick={() => setActiveForm("forgot")}
+            >
+              Reset
+            </MotionButton>
+          </div>
 
-        {/* LOGIN */}
-        <form
-          className="card-form login-side"
-          onSubmit={(e) => {
-            if (twoFaRequired || loginMode !== "password") {
-              e.preventDefault();
-              return;
-            }
-            handlePasswordLogin(e);
-          }}
-        >
-          <h2>{twoFaRequired ? "Verify OTP" : loginMode === "otp" ? "Login with OTP" : "Login"}</h2>
+          {/* LOGIN */}
+          <form
+            className="card-form login-side"
+            onSubmit={(e) => {
+              if (twoFaRequired || loginMode !== "password") {
+                e.preventDefault();
+                return;
+              }
+              handlePasswordLogin(e);
+            }}
+          >
+            <h2>{twoFaRequired ? "Verify OTP" : loginMode === "otp" ? "Login with OTP" : "Login"}</h2>
 
-          {twoFaRequired ? (
-            <>
+            {twoFaRequired ? (
+              <>
+                <input
+                  placeholder="Enter OTP"
+                  className="form-input"
+                  value={twoFaOtp}
+                  onChange={(e) => setTwoFaOtp(e.target.value)}
+                />
+                <MotionButton
+                  type="button"
+                  className="form-btn"
+                  onClick={verifyTwoFactorOtp}
+                  disabled={twoFaLoading}
+                >
+                  {twoFaLoading ? renderLoadingLabel("Verifying") : "Verify OTP"}
+                </MotionButton>
+                <p
+                  className="switch-link soft"
+                  onClick={() => {
+                    setTwoFaRequired(false);
+                    setTwoFaEmail("");
+                    setTwoFaOtp("");
+                  }}
+                >
+                  Back to login
+                </p>
+              </>
+            ) : loginMode === "otp" ? (
+              <>
+                <input
+                  placeholder="Email"
+                  className="form-input"
+                  value={otpLoginEmail}
+                  onChange={(e) => {
+                    setOtpLoginEmail(e.target.value);
+                    setOtpLoginSent(false);
+                    setOtpLoginCooldown(0);
+                  }}
+                />
+                <MotionButton
+                  type="button"
+                  className="form-btn"
+                  onClick={sendLoginOtp}
+                  disabled={otpLoginLoading || otpLoginCooldown > 0}
+                >
+                  {otpLoginLoading
+                    ? renderLoadingLabel("Sending OTP")
+                    : otpLoginCooldown > 0
+                    ? `Resend OTP in ${otpLoginCooldown}s`
+                    : otpLoginSent
+                    ? "Resend OTP"
+                    : "Send OTP"}
+                </MotionButton>
+                <AnimatePresence initial={false}>
+                  {otpLoginSent && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 12, height: 0 }}
+                      animate={{ opacity: 1, y: 0, height: "auto" }}
+                      exit={{ opacity: 0, y: -8, height: 0 }}
+                      transition={{ duration: 0.28 }}
+                      style={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}
+                    >
+                      <input
+                        placeholder="Enter OTP"
+                        className="form-input"
+                        value={otpLoginOtp}
+                        onChange={(e) => setOtpLoginOtp(e.target.value)}
+                      />
+                      <MotionButton
+                        type="button"
+                        className="form-btn"
+                        onClick={verifyOtpLogin}
+                        disabled={otpLoginLoading}
+                      >
+                        {otpLoginLoading ? renderLoadingLabel("Logging In") : "Login"}
+                      </MotionButton>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                <p
+                  className="switch-link soft"
+                  onClick={() => {
+                    setLoginMode("password");
+                    setOtpLoginEmail("");
+                    setOtpLoginSent(false);
+                    setOtpLoginOtp("");
+                    setLoginEmail("");
+                    setLoginPassword("");
+                  }}
+                >
+                  Use email + password instead
+                </p>
+              </>
+            ) : (
+              <>
+                <input
+                  name="email"
+                  placeholder="Email"
+                  className="form-input"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                />
+                <div className="password-field">
+                  <input
+                    name="password"
+                    type={showLoginPassword ? "text" : "password"}
+                    placeholder="Password"
+                    className="form-input"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="eye-btn"
+                    onClick={() => setShowLoginPassword((v) => !v)}
+                    aria-label={showLoginPassword ? "Hide password" : "Show password"}
+                  >
+                    {showLoginPassword ? "🙈" : "👁"}
+                  </button>
+                </div>
+                <MotionButton className="form-btn">Login</MotionButton>
+                <p
+                  className="switch-link soft"
+                  onClick={() => {
+                    setLoginMode("otp");
+                    setOtpLoginEmail("");
+                    setOtpLoginSent(false);
+                    setOtpLoginOtp("");
+                    setLoginEmail("");
+                    setLoginPassword("");
+                  }}
+                >
+                  Login with OTP instead
+                </p>
+              </>
+            )}
+          </form>
+
+          {/* SIGNUP */}
+          <form className="card-form signup-side" onSubmit={handleRegister}>
+            <h2>Sign Up</h2>
+
+            <input name="name" placeholder="Full Name" className="form-input" required />
+            <select
+              name="school"
+              className="form-input"
+              required
+              value={signupSchool}
+              onChange={(e) => {
+                const value = e.target.value;
+                setSignupSchool(value);
+                if (value !== "other") setSignupCustomSchool("");
+              }}
+            >
+              <option value="">Select School</option>
+              <option>St. Augustine's Day School - Barrackpore</option>
+              <option>St. Augustine's Day School - Shyamnagar</option>
+              <option>Modern English Academy</option>
+              <option>St. Claret School</option>
+              <option>Douglas Memorial Higher Secondary School</option>
+              <option>Assembly of Angels Secondary School</option>
+              <option>STEM World School</option>
+              <option value="other">Other</option>
+            </select>
+            {signupSchool === "other" && (
               <input
-                placeholder="Enter OTP"
+                type="text"
+                name="customSchool"
+                placeholder="Enter your school name"
                 className="form-input"
-                value={twoFaOtp}
-                onChange={(e) => setTwoFaOtp(e.target.value)}
+                required
+                value={signupCustomSchool}
+                onChange={(e) => setSignupCustomSchool(e.target.value)}
               />
-              <MotionButton
-                type="button"
-                className="form-btn"
-                onClick={verifyTwoFactorOtp}
-                disabled={twoFaLoading}
-              >
-                {twoFaLoading ? renderLoadingLabel("Verifying") : "Verify OTP"}
-              </MotionButton>
-              <p
-                className="switch-link soft"
-                onClick={() => {
-                  setTwoFaRequired(false);
-                  setTwoFaEmail("");
-                  setTwoFaOtp("");
-                }}
-              >
-                Back to login
-              </p>
-            </>
-          ) : loginMode === "otp" ? (
-            <>
-              <input
-                placeholder="Email"
-                className="form-input"
-                value={otpLoginEmail}
-                onChange={(e) => {
-                  setOtpLoginEmail(e.target.value);
-                  setOtpLoginSent(false);
-                }}
-              />
-              <MotionButton
-                type="button"
-                className="form-btn"
-                onClick={sendLoginOtp}
-                disabled={otpLoginLoading}
-              >
-                {otpLoginLoading
-                  ? renderLoadingLabel("Sending OTP")
-                  : otpLoginSent
-                  ? "Resend OTP"
-                  : "Send OTP"}
-              </MotionButton>
-              <AnimatePresence initial={false}>
-              {otpLoginSent && (
+            )}
+            <select
+              name="class"
+              className="form-input"
+              required
+              value={signupClass}
+              onChange={(e) => setSignupClass(e.target.value)}
+            >
+              <option value="">Select Class</option>
+              {[3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+            <input
+              name="phone"
+              placeholder="Phone Number"
+              className="form-input"
+              required
+            />
+            <input
+              name="email"
+              placeholder="Email"
+              className="form-input"
+              required
+              value={signupEmail}
+              onChange={(e) => {
+                setSignupEmail(e.target.value);
+                setSignupOtpSent(false);
+                setSignupOtpVerified(false);
+                setSignupCooldown(0);
+              }}
+            />
+            <MotionButton
+              type="button"
+              className="form-btn"
+              onClick={sendSignupOtp}
+              disabled={signupLoading || signupCooldown > 0}
+            >
+              {signupLoading
+                ? renderLoadingLabel("Sending OTP")
+                : signupCooldown > 0
+                ? `Resend OTP in ${signupCooldown}s`
+                : signupOtpSent
+                ? "Resend OTP"
+                : "Send OTP"}
+            </MotionButton>
+            <AnimatePresence initial={false}>
+              {signupOtpSent && (
                 <motion.div
                   initial={{ opacity: 0, y: 12, height: 0 }}
                   animate={{ opacity: 1, y: 0, height: "auto" }}
@@ -683,235 +881,83 @@ export default function Login() {
                   <input
                     placeholder="Enter OTP"
                     className="form-input"
-                    value={otpLoginOtp}
-                    onChange={(e) => setOtpLoginOtp(e.target.value)}
+                    required
+                    value={signupOtpInput}
+                    onChange={(e) => setSignupOtpInput(e.target.value)}
                   />
                   <MotionButton
                     type="button"
                     className="form-btn"
-                    onClick={verifyOtpLogin}
-                    disabled={otpLoginLoading}
+                    onClick={verifySignupOtp}
+                    disabled={signupLoading}
                   >
-                    {otpLoginLoading ? renderLoadingLabel("Logging In") : "Login"}
+                    {signupLoading ? renderLoadingLabel("Verifying") : "Verify OTP"}
                   </MotionButton>
                 </motion.div>
               )}
-              </AnimatePresence>
-              <p
-                className="switch-link soft"
-                onClick={() => {
-                setLoginMode("password");
-                setOtpLoginEmail("");
-                setOtpLoginSent(false);
-                setOtpLoginOtp("");
-                }}
-              >
-                Use email + password instead
-              </p>
-            </>
-          ) : (
-            <>
-              <input name="email" placeholder="Email" className="form-input" />
-              <div className="password-field">
-                <input
-                  name="password"
-                  type={showLoginPassword ? "text" : "password"}
-                  placeholder="Password"
-                  className="form-input"
-                />
-                <button
-                  type="button"
-                  className="eye-btn"
-                  onClick={() => setShowLoginPassword((v) => !v)}
-                  aria-label={showLoginPassword ? "Hide password" : "Show password"}
-                >
-                  {showLoginPassword ? "🙈" : "👁"}
-                </button>
-              </div>
-              <MotionButton className="form-btn">Login</MotionButton>
-              <p
-                className="switch-link soft"
-                onClick={() => {
-                setLoginMode("otp");
-                setOtpLoginEmail("");
-                setOtpLoginSent(false);
-                setOtpLoginOtp("");
-                }}
-              >
-                Login with OTP instead
-              </p>
-            </>
-          )}
-          
-        </form>
+            </AnimatePresence>
+            <p className="switch-link">
+              {signupOtpVerified ? "Email verified" : "Email not verified"}
+            </p>
 
-        {/* SIGNUP */}
-        <form className="card-form signup-side" onSubmit={handleRegister}>
-          <h2>Sign Up</h2>
-
-          <input name="name" placeholder="Full Name" className="form-input" required />
-          <select
-            name="school"
-            className="form-input"
-            required
-            value={signupSchool}
-            onChange={(e) => {
-              const value = e.target.value;
-              setSignupSchool(value);
-              if (value !== "other") setSignupCustomSchool("");
-            }}
-          >
-            <option value="">Select School</option>
-            <option>St. Augustine's Day School - Barrackpore</option>
-            <option>St. Augustine's Day School - Shyamnagar</option>
-            <option>Modern English Academy</option>
-            <option>St. Claret School</option>
-            <option>Douglas Memorial Higher Secondary School</option>
-            <option>Assembly of Angels Secondary School</option>
-            <option>STEM World School</option>
-            <option value="other">Other</option>
-          </select>
-          {signupSchool === "other" && (
-            <input
-              type="text"
-              name="customSchool"
-              placeholder="Enter your school name"
-              className="form-input"
-              required
-              value={signupCustomSchool}
-              onChange={(e) => setSignupCustomSchool(e.target.value)}
-            />
-          )}
-          <select
-            name="class"
-            className="form-input"
-            required
-            value={signupClass}
-            onChange={(e) => setSignupClass(e.target.value)}
-          >
-            <option value="">Select Class</option>
-            {[3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-          <input
-            name="phone"
-            placeholder="Phone Number"
-            className="form-input"
-            required
-          />
-          <input
-            name="email"
-            placeholder="Email"
-            className="form-input"
-            required
-            value={signupEmail}
-            onChange={(e) => {
-              setSignupEmail(e.target.value);
-              setSignupOtpSent(false);
-              setSignupOtpVerified(false);
-            }}
-          />
-          <MotionButton
-            type="button"
-            className="form-btn"
-            onClick={sendSignupOtp}
-            disabled={signupLoading || signupCooldown > 0}
-          >
-            {signupLoading
-              ? renderLoadingLabel("Sending OTP")
-              : signupCooldown > 0
-              ? `Resend in ${signupCooldown}s`
-              : signupOtpSent
-              ? "Resend OTP"
-              : "Send OTP"}
-          </MotionButton>
-          <AnimatePresence initial={false}>
-          {signupOtpSent && (
-            <motion.div
-              initial={{ opacity: 0, y: 12, height: 0 }}
-              animate={{ opacity: 1, y: 0, height: "auto" }}
-              exit={{ opacity: 0, y: -8, height: 0 }}
-              transition={{ duration: 0.28 }}
-              style={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}
-            >
+            <div className="password-field">
               <input
-                placeholder="Enter OTP"
+                name="password"
+                type={showSignupPassword ? "text" : "password"}
+                placeholder="Password"
                 className="form-input"
                 required
-                value={signupOtpInput}
-                onChange={(e) => setSignupOtpInput(e.target.value)}
+                value={signupPassword}
+                onChange={(e) => setSignupPassword(e.target.value)}
               />
-              <MotionButton type="button" className="form-btn" onClick={verifySignupOtp}>
-                {signupLoading ? renderLoadingLabel("Verifying") : "Verify OTP"}
-              </MotionButton>
-            </motion.div>
-          )}
-          </AnimatePresence>
-          <p className="switch-link">
-            {signupOtpVerified ? "Email verified" : "Email not verified"}
-          </p>
+              <button
+                type="button"
+                className="eye-btn"
+                onClick={() => setShowSignupPassword((v) => !v)}
+                aria-label={showSignupPassword ? "Hide password" : "Show password"}
+              >
+                {showSignupPassword ? "🙈" : "👁"}
+              </button>
+            </div>
+            <p className="password-rules">
+              {passwordChecks.minLen ? "✓" : "•"} 8+ chars |{" "}
+              {passwordChecks.upper ? "✓" : "•"} uppercase |{" "}
+              {passwordChecks.lower ? "✓" : "•"} lowercase |{" "}
+              {passwordChecks.number ? "✓" : "•"} number |{" "}
+              {passwordChecks.special ? "✓" : "•"} special
+            </p>
 
-          <div className="password-field">
-            <input
-              name="password"
-              type={showSignupPassword ? "text" : "password"}
-              placeholder="Password"
-              className="form-input"
-              required
-              value={signupPassword}
-              onChange={(e) => setSignupPassword(e.target.value)}
-            />
-            <button
-              type="button"
-              className="eye-btn"
-              onClick={() => setShowSignupPassword((v) => !v)}
-              aria-label={showSignupPassword ? "Hide password" : "Show password"}
+            <MotionButton
+              className="form-btn"
+              disabled={
+                signupLoading ||
+                !signupOtpVerified ||
+                !isStrongPassword(signupPassword)
+              }
             >
-              {showSignupPassword ? "🙈" : "👁"}
-            </button>
-          </div>
-          <p className="password-rules">
-            {passwordChecks.minLen ? "✓" : "•"} 8+ chars |{" "}
-            {passwordChecks.upper ? "✓" : "•"} uppercase |{" "}
-            {passwordChecks.lower ? "✓" : "•"} lowercase |{" "}
-            {passwordChecks.number ? "✓" : "•"} number |{" "}
-            {passwordChecks.special ? "✓" : "•"} special
-          </p>
+              {signupLoading ? renderLoadingLabel("Creating Account") : "Sign Up"}
+            </MotionButton>
+            <p className="switch-link soft" onClick={() => setActiveForm("login")}>
+              Already have an account?
+            </p>
+          </form>
 
-          <MotionButton
-            className="form-btn"
-            disabled={
-              signupLoading ||
-              !signupOtpVerified ||
-              !isStrongPassword(signupPassword)
-            }
-          >
-            {signupLoading ? renderLoadingLabel("Creating Account") : "Sign Up"}
-          </MotionButton>
-          <p className="switch-link soft" onClick={() => setActiveForm("login")}>
-            Already have an account?
-          </p>
-        </form>
+          {/* FORGOT */}
+          <form className="card-form forgot-side" onSubmit={handleResetPassword}>
+            <h2>Reset Password</h2>
+            <input
+              name="email"
+              placeholder="Email"
+              className="form-input"
+              value={forgotEmail}
+              onChange={(e) => {
+                setForgotEmail(e.target.value);
+                setForgotOtpSent(false);
+                setForgotOtpInput("");
+                setForgotCooldown(0);
+              }}
+            />
 
-        {/* FORGOT */}
-        <form className="card-form forgot-side" onSubmit={handleResetPassword}>
-          <h2>Reset Password</h2>
-          <input
-            name="email"
-            placeholder="Email"
-            className="form-input"
-            value={forgotEmail}
-            onChange={(e) => {
-              setForgotEmail(e.target.value);
-              setForgotOtpSent(false);
-              setForgotOtpInput("");
-            }}
-          />
-
-          {!forgotOtpSent && (
             <MotionButton
               type="button"
               className="form-btn"
@@ -921,52 +967,51 @@ export default function Login() {
               {forgotLoading
                 ? renderLoadingLabel("Sending OTP")
                 : forgotCooldown > 0
-                ? `Resend in ${forgotCooldown}s`
+                ? `Resend OTP in ${forgotCooldown}s`
+                : forgotOtpSent
+                ? "Resend OTP"
                 : "Send OTP"}
             </MotionButton>
-          )}
 
-          <AnimatePresence initial={false}>
-          {forgotOtpSent && (
-            <motion.div
-              initial={{ opacity: 0, y: 12, height: 0 }}
-              animate={{ opacity: 1, y: 0, height: "auto" }}
-              exit={{ opacity: 0, y: -8, height: 0 }}
-              transition={{ duration: 0.28 }}
-              style={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}
-            >
-              <input
-                placeholder="Enter OTP"
-                className="form-input"
-                value={forgotOtpInput}
-                onChange={(e) => setForgotOtpInput(e.target.value)}
-              />
-              <div className="password-field">
-                <input
-                  name="newPassword"
-                  type={showResetPassword ? "text" : "password"}
-                  placeholder="New Password"
-                  className="form-input"
-                />
-                <button
-                  type="button"
-                  className="eye-btn"
-                  onClick={() => setShowResetPassword((v) => !v)}
-                  aria-label={showResetPassword ? "Hide password" : "Show password"}
+            <AnimatePresence initial={false}>
+              {forgotOtpSent && (
+                <motion.div
+                  initial={{ opacity: 0, y: 12, height: 0 }}
+                  animate={{ opacity: 1, y: 0, height: "auto" }}
+                  exit={{ opacity: 0, y: -8, height: 0 }}
+                  transition={{ duration: 0.28 }}
+                  style={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}
                 >
-                  {showResetPassword ? "🙈" : "👁"}
-                </button>
-              </div>
-              <MotionButton className="form-btn" disabled={forgotLoading}>
-                {forgotLoading ? renderLoadingLabel("Resetting") : "Reset Password"}
-              </MotionButton>
-            </motion.div>
-          )}
-          </AnimatePresence>
-
-          
-        </form>
-      </div>
+                  <input
+                    placeholder="Enter OTP"
+                    className="form-input"
+                    value={forgotOtpInput}
+                    onChange={(e) => setForgotOtpInput(e.target.value)}
+                  />
+                  <div className="password-field">
+                    <input
+                      name="newPassword"
+                      type={showResetPassword ? "text" : "password"}
+                      placeholder="New Password"
+                      className="form-input"
+                    />
+                    <button
+                      type="button"
+                      className="eye-btn"
+                      onClick={() => setShowResetPassword((v) => !v)}
+                      aria-label={showResetPassword ? "Hide password" : "Show password"}
+                    >
+                      {showResetPassword ? "🙈" : "👁"}
+                    </button>
+                  </div>
+                  <MotionButton className="form-btn" disabled={forgotLoading}>
+                    {forgotLoading ? renderLoadingLabel("Resetting") : "Reset Password"}
+                  </MotionButton>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </form>
+        </div>
       </motion.div>
     </div>
   );

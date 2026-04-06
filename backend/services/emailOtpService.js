@@ -5,9 +5,9 @@ import { sendOtpEmail } from "./emailService.js";
 import { isValidEmail, isValidOtp, normalizeEmail, normalizeOtp } from "../utils/authValidation.js";
 
 const OTP_EXPIRY_MS = 5 * 60 * 1000;
-const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 10;
 const LOCK_DURATION_MS = 10 * 60 * 1000;
-const RESEND_COOLDOWN_MS = 60 * 1000;
+const RESEND_COOLDOWN_MS = 15 * 1000;
 
 const maskEmail = (email) => {
   if (!email) return "";
@@ -39,19 +39,11 @@ export const sendEmailOtp = async ({ email, purpose = "login" }) => {
     },
   });
 
-  if (existing?.lockedUntil && existing.lockedUntil > now) {
-    const retryAfter = Math.ceil((existing.lockedUntil.getTime() - now.getTime()) / 1000);
-    const err = new Error(`Too many attempts. Try again after ${retryAfter} seconds.`);
-    err.status = 429;
-    err.retryAfter = retryAfter;
-    throw err;
-  }
-
   if (existing?.updatedAt) {
     const elapsedMs = now.getTime() - existing.updatedAt.getTime();
     if (elapsedMs < RESEND_COOLDOWN_MS) {
       const retryAfter = Math.ceil((RESEND_COOLDOWN_MS - elapsedMs) / 1000);
-      const err = new Error("Please wait before requesting another OTP.");
+      const err = new Error("Please wait 15 seconds before resending OTP.");
       err.status = 429;
       err.retryAfter = retryAfter;
       throw err;
@@ -139,7 +131,9 @@ export const verifyEmailOtp = async ({ email, purpose = "login", code }) => {
 
   if (record.lockedUntil && record.lockedUntil > now) {
     const wait = Math.ceil((record.lockedUntil - now) / 1000);
-    const err = new Error(`Too many attempts. Try again after ${wait} seconds.`);
+    const err = new Error(
+      "Too many OTP verification attempts for this email. Please try again after 10 minutes."
+    );
     err.status = 429;
     err.retryAfter = wait;
     throw err;
@@ -158,15 +152,23 @@ export const verifyEmailOtp = async ({ email, purpose = "login", code }) => {
   if (!valid) {
     const attempts = record.attempts + 1;
     const data = { attempts };
+    let status = 400;
+    let message = "Invalid OTP";
     if (attempts >= MAX_ATTEMPTS) {
       data.lockedUntil = new Date(now.getTime() + LOCK_DURATION_MS);
+      status = 429;
+      message =
+        "Too many OTP verification attempts for this email. Please try again after 10 minutes.";
     }
     await prisma.emailOtp.update({
       where: { id: record.id },
       data,
     });
-    const err = new Error(attempts >= MAX_ATTEMPTS ? "Too many attempts" : "Invalid OTP");
-    err.status = 400;
+    const err = new Error(message);
+    err.status = status;
+    if (status === 429) {
+      err.retryAfter = Math.ceil(LOCK_DURATION_MS / 1000);
+    }
     throw err;
   }
 
