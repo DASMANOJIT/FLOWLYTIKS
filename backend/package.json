@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "jobs": "node jobs.js",
     "dedupe:phones": "node scripts/dedupeStudentPhones.js",
     "postinstall": "prisma generate",
     "validate:env": "node -e \"Promise.all([import('./config/loadEnv.js'), import('./config/env.js')]).then(([, env]) => { env.validateEnv(); console.log('ENV OK: true'); }).catch((e) => { console.error(e?.message || e); process.exit(1); })\""

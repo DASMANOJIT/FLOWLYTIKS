@@ -57,4 +57,9 @@ export const validateEnv = () => {
   assertOptionalHttpUrls("CORS_ORIGIN", { allowLocal: !isProduction });
   assertOptionalHttpUrls("PHONEPE_BASE_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("WHATSAPP_GRAPH_URL", { allowLocal: !isProduction });
+
+  const runScheduledJobs = String(process.env.RUN_SCHEDULED_JOBS || "").trim();
+  if (runScheduledJobs && !["0", "1"].includes(runScheduledJobs)) {
+    throw new Error("RUN_SCHEDULED_JOBS must be either 0 or 1.");
+  }
 };

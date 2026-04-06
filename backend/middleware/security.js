@@ -1,6 +1,8 @@
 import { normalizeEmail } from "../utils/authValidation.js";
+import prisma from "../prisma/client.js";
 
-const buckets = new Map();
+const fallbackBuckets = new Map();
+const canUseFallbackRateLimitStore = process.env.NODE_ENV !== "production";
 
 const getRequesterIp = (req) => {
   const forwarded = req.headers["x-forwarded-for"];
@@ -10,12 +12,6 @@ const getRequesterIp = (req) => {
   return req.ip || req.socket?.remoteAddress || "unknown";
 };
 
-const pruneBucket = (bucket, now, windowMs) => {
-  while (bucket.length && now - bucket[0] > windowMs) {
-    bucket.shift();
-  }
-};
-
 export const createRateLimiter = ({
   namespace,
   windowMs,
@@ -23,31 +19,129 @@ export const createRateLimiter = ({
   message,
   keyGenerator,
 }) => {
-  return (req, res, next) => {
-    const now = Date.now();
+  return async (req, res, next) => {
+    const now = new Date();
     const suffix = keyGenerator ? keyGenerator(req) : getRequesterIp(req);
-    const key = `${namespace}:${suffix}`;
-    const bucket = buckets.get(key) || [];
+    const key = `${namespace}:${suffix || "unknown"}`;
+    const windowStart = new Date(now.getTime() - windowMs);
 
-    pruneBucket(bucket, now, windowMs);
+    try {
+      const requestCount = await prisma.authRateLimitEvent.count({
+        where: {
+          namespace,
+          key,
+          createdAt: {
+            gte: windowStart,
+          },
+        },
+      });
 
-    if (bucket.length >= max) {
-      const retryAfter = Math.max(1, Math.ceil((windowMs - (now - bucket[0])) / 1000));
-      res.setHeader("Retry-After", String(retryAfter));
-      const resolvedMessage =
-        typeof message === "function" ? message(req) : message;
-      return res.status(429).json({
+      if (requestCount >= max) {
+        const oldestEvent = await prisma.authRateLimitEvent.findFirst({
+          where: {
+            namespace,
+            key,
+            createdAt: {
+              gte: windowStart,
+            },
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+          select: {
+            createdAt: true,
+          },
+        });
+
+        const oldestTime = oldestEvent?.createdAt?.getTime?.() || now.getTime();
+        const retryAfter = Math.max(
+          1,
+          Math.ceil((windowMs - (now.getTime() - oldestTime)) / 1000)
+        );
+        res.setHeader("Retry-After", String(retryAfter));
+        const resolvedMessage = typeof message === "function" ? message(req) : message;
+        return res.status(429).json({
+          success: false,
+          error: resolvedMessage,
+          message: resolvedMessage,
+          retryAfter,
+        });
+      }
+
+      await prisma.authRateLimitEvent.create({
+        data: {
+          namespace,
+          key,
+        },
+      });
+      return next();
+    } catch (error) {
+      if (canUseFallbackRateLimitStore && shouldUseFallbackRateLimitStore(error)) {
+        return applyFallbackRateLimit({
+          namespace,
+          windowMs,
+          max,
+          message,
+          key,
+          req,
+          res,
+          next,
+        });
+      }
+      console.error("RATE LIMIT ERROR:", error?.message || error);
+      return res.status(503).json({
         success: false,
-        error: resolvedMessage,
-        message: resolvedMessage,
-        retryAfter,
+        error: "Rate limiter unavailable. Please try again.",
+        message: "Rate limiter unavailable. Please try again.",
       });
     }
-
-    bucket.push(now);
-    buckets.set(key, bucket);
-    return next();
   };
+};
+
+const pruneBucket = (bucket, now, windowMs) => {
+  while (bucket.length && now - bucket[0] > windowMs) {
+    bucket.shift();
+  }
+};
+
+const shouldUseFallbackRateLimitStore = (error) => {
+  const message = String(error?.message || "");
+  return (
+    error?.name === "PrismaClientInitializationError" ||
+    /does not exist|Unknown field|Unknown arg|The table .* does not exist/i.test(message) ||
+    /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|Can't reach database server/i.test(message)
+  );
+};
+
+const applyFallbackRateLimit = ({
+  namespace,
+  windowMs,
+  max,
+  message,
+  key,
+  req,
+  res,
+  next,
+}) => {
+  const now = Date.now();
+  const bucket = fallbackBuckets.get(key) || [];
+  pruneBucket(bucket, now, windowMs);
+
+  if (bucket.length >= max) {
+    const retryAfter = Math.max(1, Math.ceil((windowMs - (now - bucket[0])) / 1000));
+    res.setHeader("Retry-After", String(retryAfter));
+    const resolvedMessage = typeof message === "function" ? message(req) : message;
+    return res.status(429).json({
+      success: false,
+      error: resolvedMessage,
+      message: resolvedMessage,
+      retryAfter,
+    });
+  }
+
+  bucket.push(now);
+  fallbackBuckets.set(key, bucket);
+  return next();
 };
 
 const getPurpose = (req, fallback = "login") => {
@@ -125,3 +219,20 @@ export const passwordResetRateLimit = createRateLimiter({
   message: "Too many password reset attempts for this email. Please try again later.",
   keyGenerator: (req) => authKeyGenerator(req),
 });
+
+export const purgeAuthRateLimitEvents = async () => {
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  try {
+    await prisma.authRateLimitEvent.deleteMany({
+      where: {
+        createdAt: {
+          lt: cutoff,
+        },
+      },
+    });
+  } catch (error) {
+    if (!canUseFallbackRateLimitStore || !shouldUseFallbackRateLimitStore(error)) {
+      throw error;
+    }
+  }
+};

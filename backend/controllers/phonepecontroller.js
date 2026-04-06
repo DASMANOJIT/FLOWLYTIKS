@@ -3,6 +3,7 @@ import { phonepeConfig, generateChecksum } from "../config/phonepe.config.js";
 import { getAcademicYear } from "../utils/academicYear.js";
 import { sendFeePaidWhatsAppNotification } from "../services/whatsappservice.js";
 import { autoPromoteIfEligible } from "./studentcontrollers.js";
+import { withPgAdvisoryLock } from "../utils/dbLocks.js";
 
 export const initiatePhonePePayment = async (req, res) => {
   try {
@@ -35,80 +36,108 @@ export const initiatePhonePePayment = async (req, res) => {
       return res.status(500).json({ message: "PhonePe is not configured on server" });
     }
 
-    const existing = await prisma.payment.findFirst({
-      where: {
-        studentId: requestedStudentId,
-        month,
-        academicYear,
-      },
-    });
+    const paymentKey = `phonepe:initiate:${requestedStudentId}:${academicYear}:${month}`;
+    const result = await withPgAdvisoryLock(
+      prisma,
+      paymentKey,
+      async () => {
+        const existing = await prisma.payment.findUnique({
+          where: {
+            studentId_month_academicYear: {
+              studentId: requestedStudentId,
+              month,
+              academicYear,
+            },
+          },
+        });
 
-    if (existing?.status === "paid") {
+        if (existing?.status === "paid") {
+          return { alreadyPaid: true };
+        }
+
+        const transactionId = `TXN_${requestedStudentId}_${Date.now()}`;
+        const payload = {
+          merchantId: phonepeConfig.merchantId,
+          merchantTransactionId: transactionId,
+          merchantUserId: `STU_${requestedStudentId}`,
+          amount: numericAmount * 100,
+          redirectUrl: `${frontendBaseUrl}/payment-success?txnid=${transactionId}`,
+          redirectMode: "REDIRECT",
+          callbackUrl: `${backendBaseUrl}/api/payments/phonepe/callback`,
+          paymentInstrument: {
+            type: "PAY_PAGE",
+          },
+        };
+
+        const { base64Payload, checksum } = generateChecksum(payload);
+        const phonePeResponse = await fetch(`${phonepeConfig.baseUrl}/pg/v1/pay`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-VERIFY": checksum,
+            accept: "application/json",
+          },
+          body: JSON.stringify({ request: base64Payload }),
+        });
+
+        const phonePeData = await phonePeResponse.json();
+        const redirectUrl =
+          phonePeData?.data?.instrumentResponse?.redirectInfo?.url || null;
+
+        if (!phonePeResponse.ok || !phonePeData?.success || !redirectUrl) {
+          console.error("PhonePe initiation failed:", phonePeData);
+          return { initiationFailed: true };
+        }
+
+        await prisma.payment.upsert({
+          where: {
+            studentId_month_academicYear: {
+              studentId: requestedStudentId,
+              month,
+              academicYear,
+            },
+          },
+          update: {
+            amount: numericAmount,
+            status: "created",
+            phonepeTransactionId: transactionId,
+            phonepePaymentId: null,
+          },
+          create: {
+            studentId: requestedStudentId,
+            month,
+            amount: numericAmount,
+            academicYear,
+            status: "created",
+            phonepeTransactionId: transactionId,
+          },
+        });
+
+        return {
+          redirectUrl,
+          merchantTransactionId: transactionId,
+        };
+      },
+      {
+        onLocked: () => ({ locked: true }),
+      }
+    );
+
+    if (result?.locked) {
+      return res.status(409).json({
+        message: "A payment request for this month is already in progress. Please wait a moment.",
+      });
+    }
+
+    if (result?.alreadyPaid) {
       return res.status(400).json({ message: "This month is already paid" });
     }
 
-    const transactionId = `TXN_${requestedStudentId}_${Date.now()}`;
-
-    const payload = {
-      merchantId: phonepeConfig.merchantId,
-      merchantTransactionId: transactionId,
-      merchantUserId: `STU_${requestedStudentId}`,
-      amount: numericAmount * 100,
-      redirectUrl: `${frontendBaseUrl}/payment-success?txnid=${transactionId}`,
-      redirectMode: "REDIRECT",
-      callbackUrl: `${backendBaseUrl}/api/payments/phonepe/callback`,
-      paymentInstrument: {
-        type: "PAY_PAGE",
-      },
-    };
-
-    const { base64Payload, checksum } = generateChecksum(payload);
-    const phonePeResponse = await fetch(`${phonepeConfig.baseUrl}/pg/v1/pay`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-VERIFY": checksum,
-        accept: "application/json",
-      },
-      body: JSON.stringify({ request: base64Payload }),
-    });
-
-    const phonePeData = await phonePeResponse.json();
-    const redirectUrl =
-      phonePeData?.data?.instrumentResponse?.redirectInfo?.url || null;
-
-    if (!phonePeResponse.ok || !phonePeData?.success || !redirectUrl) {
-      console.error("PhonePe initiation failed:", phonePeData);
+    if (result?.initiationFailed) {
       return res.status(502).json({ message: "PhonePe initiation failed" });
     }
 
-    if (existing) {
-      await prisma.payment.update({
-        where: { id: existing.id },
-        data: {
-          amount: numericAmount,
-          status: "created",
-          phonepeTransactionId: transactionId,
-          phonepePaymentId: null,
-        },
-      });
-    } else {
-      await prisma.payment.create({
-        data: {
-          studentId: requestedStudentId,
-          month,
-          amount: numericAmount,
-          academicYear,
-          status: "created",
-          phonepeTransactionId: transactionId,
-        },
-      });
-    }
-
-    res.json({
-      redirectUrl,
-      merchantTransactionId: transactionId,
-    });
+    res.json(result);
   } catch (err) {
     console.error("PhonePe error:", err);
     res.status(500).json({ message: "PhonePe initiation failed" });
@@ -138,44 +167,75 @@ export const phonePeCallback = async (req, res) => {
       return res.status(400).json({ message: "Invalid callback payload" });
     }
 
-    const payment = await prisma.payment.findFirst({
-      where: { phonepeTransactionId: merchantTransactionId },
-    });
-
-    if (!payment) return res.status(400).send("Payment not found");
-
-    if (code === "PAYMENT_SUCCESS" || code === "SUCCESS") {
-      const updatedPayment = await prisma.payment.update({
-        where: { id: payment.id },
-        data: {
-          status: "paid",
-          phonepePaymentId: transactionId,
-        }
-      });
-
-      if (payment.status !== "paid") {
-        await autoPromoteIfEligible(Number(payment.studentId), payment.academicYear);
-
-        const student = await prisma.student.findUnique({
-          where: { id: Number(payment.studentId) },
-          select: { id: true, name: true, phone: true },
+    const result = await withPgAdvisoryLock(
+      prisma,
+      `phonepe:callback:${merchantTransactionId}`,
+      async () => {
+        const payment = await prisma.payment.findFirst({
+          where: { phonepeTransactionId: merchantTransactionId },
         });
 
-        if (student) {
-          sendFeePaidWhatsAppNotification({
-            student,
+        if (!payment) return { missing: true };
+
+        if (code === "PAYMENT_SUCCESS" || code === "SUCCESS") {
+          const transition = await prisma.payment.updateMany({
+            where: {
+              id: payment.id,
+              status: {
+                not: "paid",
+              },
+            },
+            data: {
+              status: "paid",
+              phonepePaymentId: transactionId,
+            },
+          });
+
+          const updatedPayment = await prisma.payment.findUnique({
+            where: { id: payment.id },
+          });
+
+          return {
             payment: updatedPayment,
-            mode: "phonepe",
-          }).catch((err) => {
-            console.error("WhatsApp fee-paid send failed (phonepe):", err.message);
+            firstSuccess: transition.count > 0,
+          };
+        }
+
+        if (payment.status !== "paid") {
+          await prisma.payment.update({
+            where: { id: payment.id },
+            data: { status: "failed", phonepePaymentId: transactionId || null },
           });
         }
+
+        return {
+          payment,
+          firstSuccess: false,
+        };
       }
-    } else {
-      await prisma.payment.update({
-        where: { id: payment.id },
-        data: { status: "failed", phonepePaymentId: transactionId || null },
+    );
+
+    if (result?.missing) {
+      return res.status(400).json({ message: "Payment not found" });
+    }
+
+    if (result?.firstSuccess && result.payment) {
+      await autoPromoteIfEligible(Number(result.payment.studentId), result.payment.academicYear);
+
+      const student = await prisma.student.findUnique({
+        where: { id: Number(result.payment.studentId) },
+        select: { id: true, name: true, phone: true },
       });
+
+      if (student) {
+        sendFeePaidWhatsAppNotification({
+          student,
+          payment: result.payment,
+          mode: "phonepe",
+        }).catch((err) => {
+          console.error("WhatsApp fee-paid send failed (phonepe):", err.message);
+        });
+      }
     }
 
     return res.json({ message: "Callback processed" });

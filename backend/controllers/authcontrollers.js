@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import prisma from "../prisma/client.js";
 import {
@@ -102,8 +103,8 @@ const getStudentRegistrationValidationError = ({
   return null;
 };
 
-const issueToken = ({ role, id }) => {
-  const currentActive = getActiveSessionCount(role, id);
+const issueToken = async ({ role, id }) => {
+  const currentActive = await getActiveSessionCount(role, id);
   if (currentActive >= MAX_DEVICES_PER_ACCOUNT) {
     const err = new Error(
       "Login limit reached (2 devices). Logout from another device first."
@@ -112,13 +113,15 @@ const issueToken = ({ role, id }) => {
     throw err;
   }
 
+  const tokenId = crypto.randomUUID();
   const token = jwt.sign({ id, role }, process.env.JWT_SECRET, {
     algorithm: "HS256",
     expiresIn: "7d",
+    jwtid: tokenId,
   });
   const decoded = jwt.decode(token);
   const expMs = decoded?.exp ? decoded.exp * 1000 : Date.now() + 7 * 86400000;
-  addSession(role, id, token, expMs);
+  await addSession(role, id, tokenId, expMs);
   return token;
 };
 
@@ -166,7 +169,7 @@ export const registerUser = async (req, res) => {
     // =========================
     // STUDENT REGISTRATION
     // =========================
-    const exists = await prisma.student.findFirst({ where: { email: normalizedEmail } });
+    const exists = await prisma.student.findUnique({ where: { email: normalizedEmail } });
     if (exists) {
       return authError(res, 400, "Email is already registered.");
     }
@@ -242,14 +245,14 @@ export const loginUser = async (req, res) => {
         return authError(res, 400, "Please enter the 6-digit OTP.");
       }
       await verifyEmailOtp({ email: normalizedEmail, purpose: "login", code: normalizeOtp(otp) });
-      const student = await prisma.student.findFirst({
+      const student = await prisma.student.findUnique({
         where: { email: normalizedEmail },
         select: selectStudentAuthFields,
       });
       if (!student) {
         return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
       }
-      const token = issueToken({ role: "student", id: student.id });
+      const token = await issueToken({ role: "student", id: student.id });
       return authSuccess(res, {
         token,
         role: "student",
@@ -264,7 +267,7 @@ export const loginUser = async (req, res) => {
         if (!isMatch) {
           return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
         }
-        const token = issueToken({ role: "admin", id: admin.id });
+        const token = await issueToken({ role: "admin", id: admin.id });
         return authSuccess(res, {
           token,
           role: "admin",
@@ -274,7 +277,7 @@ export const loginUser = async (req, res) => {
 
       let student = null;
       try {
-        student = await prisma.student.findFirst({
+        student = await prisma.student.findUnique({
           where: { email: normalizedEmail },
           select: selectStudentAuthFields,
         });
@@ -284,7 +287,7 @@ export const loginUser = async (req, res) => {
           isMissingColumnError(err, "isTwoFactorEnabled")
         ) {
           console.warn("DB schema mismatch: student auth flags missing");
-          student = await prisma.student.findFirst({
+          student = await prisma.student.findUnique({
             where: { email: normalizedEmail },
             select: selectStudentAuthFieldsFallback,
           });
@@ -311,7 +314,7 @@ export const loginUser = async (req, res) => {
         });
       }
 
-      const token = issueToken({ role: "student", id: student.id });
+      const token = await issueToken({ role: "student", id: student.id });
       return authSuccess(res, {
         token,
         role: "student",
@@ -344,14 +347,14 @@ export const verifyTwoFactor = async (req, res) => {
       return authError(res, 400, "Please enter the 6-digit OTP.");
     }
     await verifyEmailOtp({ email: normalizedEmail, purpose: "2fa", code: normalizeOtp(otp) });
-    const student = await prisma.student.findFirst({
+    const student = await prisma.student.findUnique({
       where: { email: normalizedEmail },
       select: selectStudentAuthFields,
     });
     if (!student) {
       return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
     }
-    const token = issueToken({ role: "student", id: student.id });
+    const token = await issueToken({ role: "student", id: student.id });
     return authSuccess(res, {
       token,
       role: "student",
@@ -400,7 +403,7 @@ export const resetPassword = async (req, res) => {
     }
 
     await verifyEmailOtp({ email: normalizedEmail, purpose: "reset", code: normalizeOtp(otp) });
-    const student = await prisma.student.findFirst({
+    const student = await prisma.student.findUnique({
       where: { email: normalizedEmail },
       select: selectStudentAuthFieldsFallback,
     });
@@ -420,7 +423,7 @@ export const resetPassword = async (req, res) => {
         data: { password: hashedPassword },
       });
     }
-    clearUserSessions("student", student.id);
+    await clearUserSessions("student", student.id);
     return authSuccess(res, { message: "Student password reset successful" });
   } catch (err) {
     if (isDbUnavailableError(err)) {
@@ -444,7 +447,9 @@ export const logoutUser = async (req, res) => {
       return authError(res, 400, "Invalid logout request");
     }
 
-    removeSession(req.userRole, req.user.id, req.token);
+    if (req.tokenId) {
+      await removeSession(req.userRole, req.user.id, req.tokenId);
+    }
     return authSuccess(res, { message: "Logged out successfully" });
   } catch (err) {
     console.error("LOGOUT ERROR:", err?.message || err);

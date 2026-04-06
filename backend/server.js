@@ -3,7 +3,6 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import prisma from "./prisma/client.js";
-import cron from "node-cron";
 import { validateEnv } from "./config/env.js";
 
 // Import routes
@@ -12,8 +11,7 @@ import studentRoutes from "./routes/studentroute.js";
 import paymentRoutes from "./routes/paymentroute.js";
 import settingsRoutes from "./routes/settingsroute.js";
 import adminAssistantRoutes from "./routes/adminassistantroute.js";
-import { autoPromoteIfEligible } from "./controllers/studentcontrollers.js";
-import { runDailyFeeReminderJob } from "./services/reminderservice.js";
+import { registerScheduledJobs } from "./services/scheduler.js";
 
 validateEnv();
 
@@ -152,37 +150,7 @@ const initDatabase = async () => {
 };
 
 initDatabase();
-
-// ================================
-// CRON JOB: Promote all eligible students on 1st March every year
-// ================================
-cron.schedule("0 0 1 3 *", async () => {
-  console.log("🔔 Running annual promotion check...");
-  try {
-    const targetAcademicYear = new Date().getFullYear() - 1;
-    const students = await prisma.student.findMany();
-    for (const s of students) {
-      await autoPromoteIfEligible(s.id, targetAcademicYear);
-    }
-    console.log("✅ Promotion check completed.");
-  } catch (err) {
-    console.error("❌ Error during promotion cron:", err);
-  }
-});
-
-// ================================
-// CRON JOB: Daily WhatsApp fee reminders
-// ================================
-cron.schedule(
-  process.env.REMINDER_CRON || "0 9 * * *",
-  async () => {
-    console.log("🔔 Running daily fee reminder job...");
-    await runDailyFeeReminderJob();
-  },
-  {
-    timezone: process.env.REMINDER_TIMEZONE || "Asia/Kolkata",
-  }
-);
+registerScheduledJobs();
 
 
 // ================================

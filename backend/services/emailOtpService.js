@@ -180,3 +180,23 @@ export const verifyEmailOtp = async ({ email, purpose = "login", code }) => {
   }
   return { success: true };
 };
+
+export const purgeExpiredEmailOtps = async () => {
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  await prisma.emailOtp.deleteMany({
+    where: {
+      OR: [
+        {
+          expiresAt: {
+            lt: new Date(),
+          },
+        },
+        {
+          updatedAt: {
+            lt: cutoff,
+          },
+        },
+      ],
+    },
+  });
+};

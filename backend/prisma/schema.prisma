@@ -19,7 +19,7 @@ model Student {
   id         Int       @id @default(autoincrement())
   name       String
   phone      String    @unique
-  email      String?
+  email      String?   @unique
   password   String
   school     String
   class      String
@@ -47,6 +47,30 @@ model EmailOtp {
   @@unique([email, purpose], name: "EmailOtp_email_purpose_key")
 }
 
+model AuthRateLimitEvent {
+  id        String   @id @default(cuid())
+  namespace String
+  key       String
+  createdAt DateTime @default(now())
+
+  @@index([namespace, key, createdAt])
+  @@index([createdAt])
+}
+
+model UserSession {
+  id        String   @id
+  role      String
+  userId    Int
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([role, userId])
+  @@index([expiresAt])
+  @@index([revokedAt])
+}
+
 model Payment {
   id                   Int      @id @default(autoincrement())
   month                String
@@ -61,6 +85,8 @@ model Payment {
   student              Student  @relation(fields: [studentId], references: [id])
 
   @@unique([studentId, month, academicYear])
+  @@index([phonepeTransactionId])
+  @@index([phonepePaymentId])
 }
 
 

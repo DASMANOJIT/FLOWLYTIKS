@@ -42,16 +42,20 @@ export const protect = async (req, res, next) => {
       return res.status(401).json({ message: "Not authorized, invalid user" });
     }
 
-    if (!isSessionActive(decoded.role, decoded.id, token)) {
-      return res
-        .status(401)
-        .json({ message: "Session expired or logged out. Please login again." });
+    if (decoded.jti) {
+      const active = await isSessionActive(decoded.role, decoded.id, decoded.jti);
+      if (!active) {
+        return res
+          .status(401)
+          .json({ message: "Session expired or logged out. Please login again." });
+      }
     }
 
     // Attach user to request
     req.user = user;
     req.userRole = decoded.role;
     req.token = token;
+    req.tokenId = decoded.jti || null;
 
     next();
   } catch (error) {
