@@ -13,7 +13,8 @@ const assertOptionalHttpUrls = (name, { allowLocal = true } = {}) => {
   const raw = String(process.env[name] || "").trim();
   if (!raw) return;
 
-  const values = name === "CORS_ORIGIN" ? raw.split(",") : [raw];
+  const values =
+    name === "CORS_ORIGIN" || name === "ALLOWED_ORIGINS" ? raw.split(",") : [raw];
   for (const value of values.map((item) => item.trim()).filter(Boolean)) {
     let parsed;
     try {
@@ -52,6 +53,7 @@ export const validateEnv = () => {
   }
   assertOptionalHttpUrls("FRONTEND_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("BACKEND_URL", { allowLocal: !isProduction });
+  assertOptionalHttpUrls("ALLOWED_ORIGINS", { allowLocal: !isProduction });
   assertOptionalHttpUrls("CORS_ORIGIN", { allowLocal: !isProduction });
   assertOptionalHttpUrls("PHONEPE_BASE_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("WHATSAPP_GRAPH_URL", { allowLocal: !isProduction });

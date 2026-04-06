@@ -26,6 +26,9 @@ const defaultDevOrigins = [
   "http://localhost:3001",
   "http://127.0.0.1:3001",
 ];
+const defaultProductionOrigins = [
+  "https://flowlytiks-frontend.onrender.com",
+];
 
 const sanitizeOrigin = (origin) => {
   const trimmed = String(origin || "").trim();
@@ -41,12 +44,23 @@ const sanitizeOrigin = (origin) => {
   }
 };
 
-const configuredOrigins = (process.env.CORS_ORIGIN || process.env.FRONTEND_URL || "")
+const configuredOrigins = (
+  process.env.ALLOWED_ORIGINS ||
+  process.env.CORS_ORIGIN ||
+  process.env.FRONTEND_URL ||
+  ""
+)
   .split(",")
   .map(sanitizeOrigin)
   .filter(Boolean);
 
-const corsOrigins = [...new Set(isProduction ? configuredOrigins : [...configuredOrigins, ...defaultDevOrigins])];
+const corsOrigins = [
+  ...new Set(
+    isProduction
+      ? [...defaultProductionOrigins, ...configuredOrigins]
+      : [...configuredOrigins, ...defaultDevOrigins]
+  ),
+];
 
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
