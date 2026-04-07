@@ -8,29 +8,33 @@ datasource db {
 }
 
 model Admin {
-  id        Int      @id @default(autoincrement())
-  name      String?
-  email     String   @unique
-  password  String
-  createdAt DateTime @default(now())
+  id                       Int                     @id @default(autoincrement())
+  name                     String?
+  email                    String                  @unique
+  password                 String
+  cashfreeVendorId         String?                 @unique
+  cashfreeSettlementStatus TeacherSettlementStatus @default(NOT_CONFIGURED)
+  createdAt                DateTime                @default(now())
+  payments                 Payment[]               @relation("AdminPayments")
+  gatewayOrders            PaymentGatewayOrder[]   @relation("AdminGatewayOrders")
 }
 
 model Student {
-  id         Int       @id @default(autoincrement())
-  name       String
-  phone      String    @unique
-  email      String?   @unique
-  password   String
-  school     String
-  class      String
-  joinDate   DateTime  @default(now())
-  monthlyFee Int       @default(600)
-  isVerified Boolean   @default(false)
-  isTwoFactorEnabled Boolean @default(false)
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  payments   Payment[]
-  
+  id                 Int                   @id @default(autoincrement())
+  name               String
+  phone              String                @unique
+  email              String?               @unique
+  password           String
+  school             String
+  class              String
+  joinDate           DateTime              @default(now())
+  monthlyFee         Int                   @default(600)
+  isVerified         Boolean               @default(false)
+  isTwoFactorEnabled Boolean               @default(false)
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  payments           Payment[]
+  gatewayOrders      PaymentGatewayOrder[]
 }
 
 model EmailOtp {
@@ -72,26 +76,134 @@ model UserSession {
 }
 
 model Payment {
-  id                   Int      @id @default(autoincrement())
+  id                   Int                   @id @default(autoincrement())
   month                String
   academicYear         Int
   amount               Int
-  status               String   @default("created")
+  currency             String                @default("INR")
+  status               String                @default("created")
+  paymentProvider      PaymentProvider?
+  paidAt               DateTime?
   phonepeTransactionId String?
   phonepePaymentId     String?
   studentId            Int
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-  student              Student  @relation(fields: [studentId], references: [id])
+  teacherAdminId       Int?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  student              Student               @relation(fields: [studentId], references: [id])
+  teacherAdmin         Admin?                @relation("AdminPayments", fields: [teacherAdminId], references: [id])
+  gatewayOrders        PaymentGatewayOrder[]
 
   @@unique([studentId, month, academicYear])
   @@index([phonepeTransactionId])
   @@index([phonepePaymentId])
+  @@index([teacherAdminId])
 }
 
+model PaymentGatewayOrder {
+  id                  String               @id @default(cuid())
+  provider            PaymentProvider      @default(CASHFREE)
+  status              GatewayPaymentStatus @default(PENDING)
+  paymentId           Int
+  studentId           Int
+  teacherAdminId      Int?
+  amount              Int
+  currency            String               @default("INR")
+  month               String
+  academicYear        Int
+  cashfreeOrderId     String?              @unique
+  cashfreeCfOrderId   String?              @unique
+  paymentSessionId    String?
+  paymentMethodHint   String?
+  paymentMethod       String?
+  returnUrl           String?
+  notifyUrl           String?
+  orderStatus         String?
+  orderExpiryTime     DateTime?
+  gatewayReference    String?
+  metadata            Json?
+  rawCreateResponse   Json?
+  paidAt              DateTime?
+  verifiedAt          DateTime?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  payment             Payment              @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  student             Student              @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  teacherAdmin        Admin?               @relation("AdminGatewayOrders", fields: [teacherAdminId], references: [id], onDelete: SetNull)
+  attempts            PaymentAttempt[]
+  webhookEvents       PaymentWebhookEvent[]
+
+  @@index([paymentId, status])
+  @@index([studentId, month, academicYear])
+  @@index([teacherAdminId])
+}
+
+model PaymentAttempt {
+  id                     String               @id @default(cuid())
+  gatewayOrderId         String
+  provider               PaymentProvider      @default(CASHFREE)
+  status                 GatewayPaymentStatus @default(PENDING)
+  cashfreeOrderId        String?
+  cfPaymentId            String?              @unique
+  paymentGroup           String?
+  paymentMethod          String?
+  paymentMessage         String?
+  bankReference          String?
+  gatewayPaymentId       String?
+  gatewayOrderReference  String?
+  paymentAmount          Float?
+  paymentTime            DateTime?
+  rawPayload             Json?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  gatewayOrder           PaymentGatewayOrder  @relation(fields: [gatewayOrderId], references: [id], onDelete: Cascade)
+
+  @@index([gatewayOrderId, createdAt])
+  @@index([cashfreeOrderId])
+}
+
+model PaymentWebhookEvent {
+  id              String               @id @default(cuid())
+  provider        PaymentProvider      @default(CASHFREE)
+  gatewayOrderId  String?
+  dedupeKey       String               @unique
+  eventType       String
+  cashfreeOrderId String?
+  cfPaymentId     String?
+  signature       String?
+  payload         Json
+  processedAt     DateTime?
+  createdAt       DateTime             @default(now())
+  gatewayOrder    PaymentGatewayOrder? @relation(fields: [gatewayOrderId], references: [id], onDelete: SetNull)
+
+  @@index([cashfreeOrderId])
+  @@index([cfPaymentId])
+}
 
 
 model AppSettings {
   id         Int @id @default(1)
   monthlyFee Int
+}
+
+enum PaymentProvider {
+  CASH
+  PHONEPE
+  CASHFREE
+}
+
+enum GatewayPaymentStatus {
+  PENDING
+  INITIATED
+  PAID
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum TeacherSettlementStatus {
+  NOT_CONFIGURED
+  PENDING
+  ACTIVE
+  DISABLED
 }

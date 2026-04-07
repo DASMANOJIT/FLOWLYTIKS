@@ -44,8 +44,10 @@ export const createStudent = (data) => axios.post(`${API}/students`, data).then(
 export const deleteStudent = (id) => axios.delete(`${API}/students/${id}`).then((r) => r.data);
 
 
-export const createOrder = (data) => axios.post(`${API}/payments/create-order`, data).then((r) => r.data);
-export const verifyPayment = (data) => axios.post(`${API}/payments/verify`, data).then((r) => r.data);
+export const createOrder = (data) =>
+  axios.post(`${API}/payments/cashfree/create-order`, data).then((r) => r.data);
+export const verifyPayment = (data) =>
+  axios.post(`${API}/payments/cashfree/verify`, data).then((r) => r.data);
 const BASE_URL = API;
 
 export async function apiCall(endpoint, method = "GET", body = null, token = null) {

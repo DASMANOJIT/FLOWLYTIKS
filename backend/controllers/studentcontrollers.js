@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import prisma from "../prisma/client.js";
 import { getAcademicYear } from "../utils/academicYear.js";
+import { legacyPaymentSelect } from "../utils/paymentCompat.js";
 
 const stripStudentSecrets = (student) => {
   if (!student || typeof student !== "object") return student;
@@ -20,7 +21,9 @@ export const getStudents = async (req, res) => {
 
     const students = await prisma.student.findMany({
       include: {
-        payments: true,
+        payments: {
+          select: legacyPaymentSelect,
+        },
       },
       orderBy: { name: "asc" },
     });
@@ -78,7 +81,12 @@ export const getLoggedInStudent = async (req, res) => {
 
     const student = await prisma.student.findUnique({
       where: { id: studentId },
-      include: { payments: { orderBy: { createdAt: "desc" } } },
+      include: {
+        payments: {
+          select: legacyPaymentSelect,
+          orderBy: { createdAt: "desc" },
+        },
+      },
     });
 
     if (!student) {
@@ -108,7 +116,12 @@ export const getStudentById = async (req, res) => {
 
     const student = await prisma.student.findUnique({
       where: { id: studentId },
-      include: { payments: { orderBy: { createdAt: "desc" } } },
+      include: {
+        payments: {
+          select: legacyPaymentSelect,
+          orderBy: { createdAt: "desc" },
+        },
+      },
     });
 
     if (!student) {
@@ -154,7 +167,15 @@ export const autoPromoteIfEligible = async (
 
   const student = await prisma.student.findUnique({
     where: { id: studentId },
-    include: { payments: true },
+    include: {
+      payments: {
+        select: {
+          month: true,
+          status: true,
+          academicYear: true,
+        },
+      },
+    },
   });
 
   if (!student) return;

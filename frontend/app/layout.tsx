@@ -1,5 +1,6 @@
 import "./globals.css";
 import AppMotionShell from "./components/motion/AppMotionShell.jsx";
+import Footer from "./components/footer/Footer.jsx";
 
 export const metadata = {
   title: "FLOWLYTIKS Fee Management Dashboard",
@@ -13,8 +14,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>
-        <AppMotionShell>{children}</AppMotionShell>
+      <body className="app-root">
+        <main className="app-main">
+          <AppMotionShell>{children}</AppMotionShell>
+        </main>
+        <Footer />
       </body>
     </html>
   );

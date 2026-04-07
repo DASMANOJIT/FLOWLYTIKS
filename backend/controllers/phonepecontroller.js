@@ -4,6 +4,11 @@ import { getAcademicYear } from "../utils/academicYear.js";
 import { sendFeePaidWhatsAppNotification } from "../services/whatsappservice.js";
 import { autoPromoteIfEligible } from "./studentcontrollers.js";
 import { withPgAdvisoryLock } from "../utils/dbLocks.js";
+import {
+  isPaymentSchemaCompatibilityError,
+  logPaymentCompatibilityFallback,
+  stripExtendedPaymentWriteData,
+} from "../utils/paymentCompat.js";
 
 export const initiatePhonePePayment = async (req, res) => {
   try {
@@ -89,7 +94,7 @@ export const initiatePhonePePayment = async (req, res) => {
           return { initiationFailed: true };
         }
 
-        await prisma.payment.upsert({
+        const paymentUpsertArgs = {
           where: {
             studentId_month_academicYear: {
               studentId: requestedStudentId,
@@ -99,7 +104,9 @@ export const initiatePhonePePayment = async (req, res) => {
           },
           update: {
             amount: numericAmount,
+            currency: "INR",
             status: "created",
+            paymentProvider: "PHONEPE",
             phonepeTransactionId: transactionId,
             phonepePaymentId: null,
           },
@@ -108,10 +115,24 @@ export const initiatePhonePePayment = async (req, res) => {
             month,
             amount: numericAmount,
             academicYear,
+            currency: "INR",
             status: "created",
+            paymentProvider: "PHONEPE",
             phonepeTransactionId: transactionId,
           },
-        });
+        };
+
+        try {
+          await prisma.payment.upsert(paymentUpsertArgs);
+        } catch (err) {
+          if (!isPaymentSchemaCompatibilityError(err)) throw err;
+          logPaymentCompatibilityFallback("initiatePhonePePayment", err);
+          await prisma.payment.upsert({
+            ...paymentUpsertArgs,
+            update: stripExtendedPaymentWriteData(paymentUpsertArgs.update),
+            create: stripExtendedPaymentWriteData(paymentUpsertArgs.create),
+          });
+        }
 
         return {
           redirectUrl,
@@ -178,18 +199,37 @@ export const phonePeCallback = async (req, res) => {
         if (!payment) return { missing: true };
 
         if (code === "PAYMENT_SUCCESS" || code === "SUCCESS") {
-          const transition = await prisma.payment.updateMany({
-            where: {
-              id: payment.id,
-              status: {
-                not: "paid",
+          const paidData = {
+            status: "paid",
+            paymentProvider: "PHONEPE",
+            paidAt: new Date(),
+            phonepePaymentId: transactionId,
+          };
+
+          let transition;
+          try {
+            transition = await prisma.payment.updateMany({
+              where: {
+                id: payment.id,
+                status: {
+                  not: "paid",
+                },
               },
-            },
-            data: {
-              status: "paid",
-              phonepePaymentId: transactionId,
-            },
-          });
+              data: paidData,
+            });
+          } catch (err) {
+            if (!isPaymentSchemaCompatibilityError(err)) throw err;
+            logPaymentCompatibilityFallback("phonePeCallback:success", err);
+            transition = await prisma.payment.updateMany({
+              where: {
+                id: payment.id,
+                status: {
+                  not: "paid",
+                },
+              },
+              data: stripExtendedPaymentWriteData(paidData),
+            });
+          }
 
           const updatedPayment = await prisma.payment.findUnique({
             where: { id: payment.id },

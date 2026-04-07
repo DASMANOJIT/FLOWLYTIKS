@@ -2,6 +2,12 @@ import prisma from "../prisma/client.js";
 import { getAcademicYear } from "../utils/academicYear.js";
 import { autoPromoteIfEligible } from "./studentcontrollers.js";
 import { sendFeePaidWhatsAppNotification } from "../services/whatsappservice.js";
+import {
+  isPaymentSchemaCompatibilityError,
+  legacyPaymentSelect,
+  logPaymentCompatibilityFallback,
+  stripExtendedPaymentWriteData,
+} from "../utils/paymentCompat.js";
 /**
  * Academic Year Logic
  * Academic session = March → February
@@ -42,15 +48,28 @@ export const makePayment = async (req, res) => {
       return res.status(400).json({ message: "This month already paid" });
     }
 
-    const payment = await prisma.payment.create({
-      data: {
-        studentId: Number(studentId),
-        amount,
-        month,
-        status: status || "paid",
-        academicYear,
-      },
-    });
+    const paymentData = {
+      studentId: Number(studentId),
+      amount,
+      month,
+      status: status || "paid",
+      currency: "INR",
+      paymentProvider: status === "paid" ? "CASH" : null,
+      paidAt: status === "paid" ? new Date() : null,
+      teacherAdminId: req.userRole === "admin" ? Number(req.user?.id) : null,
+      academicYear,
+    };
+
+    let payment;
+    try {
+      payment = await prisma.payment.create({ data: paymentData });
+    } catch (err) {
+      if (!isPaymentSchemaCompatibilityError(err)) throw err;
+      logPaymentCompatibilityFallback("makePayment", err);
+      payment = await prisma.payment.create({
+        data: stripExtendedPaymentWriteData(paymentData),
+      });
+    }
 
     res.json(payment);
   } catch (err) {
@@ -75,6 +94,7 @@ export const getMyPayments = async (req, res) => {
         studentId: req.user.id,
         academicYear,
       },
+      select: legacyPaymentSelect,
       orderBy: {
         createdAt: "asc",
       },
@@ -97,7 +117,10 @@ export const getAllPayments = async (req, res) => {
     }
 
     const payments = await prisma.payment.findMany({
-      include: { student: true },
+      select: {
+        ...legacyPaymentSelect,
+        student: true,
+      },
       orderBy: { createdAt: "desc" },
     });
 
@@ -150,15 +173,28 @@ export const markPaid = async (req, res) => {
     }
 
     // ✅ CREATE PAYMENT
-    const payment = await prisma.payment.create({
-      data: {
-        studentId: Number(studentId),
-        month,
-        academicYear,
-        amount: appSettings.monthlyFee,
-        status: "paid",
-      },
-    });
+    const paymentData = {
+      studentId: Number(studentId),
+      month,
+      academicYear,
+      amount: appSettings.monthlyFee,
+      status: "paid",
+      currency: "INR",
+      paymentProvider: "CASH",
+      paidAt: new Date(),
+      teacherAdminId: Number(req.user?.id),
+    };
+
+    let payment;
+    try {
+      payment = await prisma.payment.create({ data: paymentData });
+    } catch (err) {
+      if (!isPaymentSchemaCompatibilityError(err)) throw err;
+      logPaymentCompatibilityFallback("markPaid", err);
+      payment = await prisma.payment.create({
+        data: stripExtendedPaymentWriteData(paymentData),
+      });
+    }
 
     const student = await prisma.student.findUnique({
       where: { id: Number(studentId) },

@@ -5,6 +5,11 @@ import {
   markPaid,
   getTotalRevenue,
 } from "../controllers/paymentcontrollers.js";
+import {
+  createCashfreeHostedOrder,
+  handleCashfreeWebhook,
+  verifyCashfreePayment,
+} from "../controllers/cashfreecontroller.js";
 import { protect, adminOnly } from "../middleware/authmiddleware.js";
 import {
   initiatePhonePePayment,
@@ -26,5 +31,11 @@ router.get("/revenue", protect, adminOnly, getTotalRevenue);
 router.post("/phonepe/initiate", protect, initiatePhonePePayment);
 router.post("/phonepe/callback", phonePeCallback);
 router.get("/phonepe/status/:transactionId", protect, getPhonePePaymentStatus);
+
+// CASHFREE
+router.post("/cashfree/create-order", protect, createCashfreeHostedOrder);
+router.get("/cashfree/verify", protect, verifyCashfreePayment);
+router.post("/cashfree/verify", protect, verifyCashfreePayment);
+router.post("/cashfree/webhook", handleCashfreeWebhook);
 
 export default router;

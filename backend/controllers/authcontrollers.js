@@ -82,6 +82,13 @@ const selectStudentAuthFieldsFallback = {
   phone: true,
 };
 
+const selectAdminAuthFields = {
+  id: true,
+  name: true,
+  email: true,
+  password: true,
+};
+
 const getStudentRegistrationValidationError = ({
   name,
   school,
@@ -261,7 +268,10 @@ export const loginUser = async (req, res) => {
     }
 
     if (email && password) {
-      const admin = await prisma.admin.findUnique({ where: { email: normalizedEmail } });
+      const admin = await prisma.admin.findUnique({
+        where: { email: normalizedEmail },
+        select: selectAdminAuthFields,
+      });
       if (admin) {
         const isMatch = await bcrypt.compare(password, admin.password);
         if (!isMatch) {

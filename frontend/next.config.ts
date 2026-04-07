@@ -37,9 +37,10 @@ const buildCsp = () => {
     "img-src 'self' data: blob:",
     "font-src 'self' https://fonts.gstatic.com data:",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    `script-src 'self' 'unsafe-inline'${isProduction ? "" : " 'unsafe-eval'"}`,
-    `connect-src ${[...connectSources].join(" ")}`,
-    "form-action 'self'",
+    `script-src 'self' 'unsafe-inline' https://sdk.cashfree.com${isProduction ? "" : " 'unsafe-eval'"}`,
+    `connect-src ${[...connectSources, "https://api.cashfree.com", "https://sandbox.cashfree.com", "https://sdk.cashfree.com"].join(" ")}`,
+    "frame-src 'self' https://sdk.cashfree.com https://api.cashfree.com https://sandbox.cashfree.com",
+    "form-action 'self' https://sandbox.cashfree.com https://api.cashfree.com",
     "worker-src 'self' blob:",
   ];
 

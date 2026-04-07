@@ -7,6 +7,8 @@ import { motion } from "framer-motion";
 import "./pay.css";
 import PremiumLoader from "../../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard } from "../../components/motion/primitives.jsx";
+import { readApiResponse } from "../../../lib/api.js";
+import { openCashfreeCheckout } from "../../../lib/cashfree.js";
 
 export default function PayPage() {
   const { id: studentId } = useParams();
@@ -65,7 +67,7 @@ export default function PayPage() {
 
 
 
-  const handlePhonePePay = async () => {
+  const handleCashfreePay = async () => {
     try {
       if (!month || !amount) {
         alert("Invalid payment details.");
@@ -81,7 +83,7 @@ export default function PayPage() {
       setIsPaying(true);
 
       const res = await fetch(
-        `/api/payments/phonepe/initiate`,
+        `/api/payments/cashfree/create-order`,
         {
           method: "POST",
           headers: {
@@ -99,16 +101,23 @@ export default function PayPage() {
         }
       );
 
-      const data = await res.json();
+      const { ok, data, error } = await readApiResponse(
+        res,
+        "Unable to initialize checkout right now."
+      );
 
-      if (!res.ok || !data.redirectUrl) {
-        alert(data.message || "Payment initiation failed");
+      if (!ok || !data.paymentSessionId) {
+        alert(error || data.message || "Payment initiation failed");
         return;
       }
-      window.location.href = data.redirectUrl;
+
+      await openCashfreeCheckout({
+        paymentSessionId: data.paymentSessionId,
+        environment: data.environment,
+      });
     } catch (err) {
       console.error(err);
-      alert("Something went wrong");
+      alert(err?.message || "Something went wrong");
     } finally {
       setIsPaying(false);
     }
@@ -155,107 +164,16 @@ export default function PayPage() {
 
         <p className="pay-row"><strong>Month:</strong> {month}</p>
         <p className="pay-row"><strong>Amount:</strong> ₹{amount}</p>
-
-        <h3 className="pay-method-title">Choose Payment Method</h3>
-
-        <div className="method-list">
-          <MotionButton
-            className={`method-btn ${method === "upi" ? "active" : ""}`}
-            onClick={() => setMethod("upi")}
-          >
-            UPI
-          </MotionButton>
-
-          <MotionButton
-            className={`method-btn ${method === "card" ? "active" : ""}`}
-            onClick={() => setMethod("card")}
-          >
-            Card
-          </MotionButton>
-
-          <MotionButton
-            className={`method-btn ${method === "netbank" ? "active" : ""}`}
-            onClick={() => setMethod("netbank")}
-          >
-            Net Banking
-          </MotionButton>
-        </div>
-
-        {/* ------------------- UPI SECTION ------------------- */}
-        {/* ------------------- UPI SECTION ------------------- */}
-        {method === "upi" && (
-          <div className="method-box">
-            <p className="method-label">Pay using UPI Apps</p>
-
-            <div className="upi-app-buttons">
-              <MotionButton
-                type="button"
-                className={`upi-icon-btn ${selectedUpiApp === "gpay" ? "active" : ""}`}
-                onClick={() => setSelectedUpiApp("gpay")}
-              >
-                <img src="/gpay.png" alt="Google Pay" />
-              </MotionButton>
-
-              <MotionButton
-                type="button"
-                className={`upi-icon-btn ${selectedUpiApp === "phonepe" ? "active" : ""}`}
-                onClick={() => setSelectedUpiApp("phonepe")}
-              >
-                <img src="/phonpe.png" alt="PhonePe" />
-              </MotionButton>
-            </div>
-
-            <p className="method-note">OR</p>
-
-            <input
-              className="input-box"
-              type="text"
-              placeholder="Enter any UPI ID (e.g. name@upi)"
-              value={customUpiId}
-              onChange={(e) => setCustomUpiId(e.target.value)}
-            />
-
-            <p className="method-note">
-              You will be redirected to complete payment securely.
-            </p>
-          </div>
-        )}
-
-
-
-        {/* ------------------- CARD SECTION ------------------- */}
-        {method === "card" && (
-          <div className="method-box">
-            <p className="method-label">Card Number</p>
-            <input className="input-box" type="text" />
-
-            <div className="card-row">
-              <input className="input-box" type="text" placeholder="MM/YY" />
-              <input className="input-box" type="password" placeholder="CVV" />
-            </div>
-          </div>
-        )}
-
-        {/* ------------------- NET BANKING SECTION ------------------- */}
-        {method === "netbank" && (
-          <div className="method-box">
-            <p className="method-label">Select Bank</p>
-            <select className="input-box">
-              <option>SBI</option>
-              <option>HDFC</option>
-              <option>ICICI</option>
-              <option>Axis Bank</option>
-              <option>Punjab National Bank</option>
-            </select>
-          </div>
-        )}
+        <p className="method-note" style={{ marginTop: "18px", textAlign: "center" }}>
+          You will be redirected to complete payment securely.
+        </p>
 
         {/* PAYMENT BUTTON */}
-        <MotionButton className="final-pay-btn" onClick={handlePhonePePay} disabled={isPaying}>
+        <MotionButton className="final-pay-btn" onClick={handleCashfreePay} disabled={isPaying}>
           {isPaying ? (
             <span className="button-loading-content">
               <PremiumLoader inline compact />
-              <span>Redirecting Securely</span>
+              <span>Opening Secure Checkout</span>
             </span>
           ) : (
             `Pay ₹${amount}`
