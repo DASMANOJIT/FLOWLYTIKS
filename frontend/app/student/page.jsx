@@ -7,6 +7,7 @@ import Nav from "../components/navbar/navbar.jsx";
 import jsPDF from "jspdf";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection } from "../components/motion/primitives.jsx";
+import GreetingPanel from "../components/dashboard/GreetingPanel.jsx";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
@@ -262,17 +263,19 @@ export default function StudentDashboard() {
         <h1 className="student-name">____________</h1>
         <p className="student-subtitle">Student Dashboard</p>
       </MotionSection>
-<MotionSection className="dashboard-top" delay={0.08}>
-      <MotionCard className="total-fees-container">
-        <h2 className="total-title">Total Monthly Fees</h2>
-        <p className="total-amount">₹{totalMonthlyFees}</p>
-       
+      <MotionSection className="dashboard-top" delay={0.08}>
+        <MotionCard className="total-fees-container" hover={false}>
+          <h2 className="total-title">Total Monthly Fees</h2>
+          <p className="total-amount">₹{totalMonthlyFees}</p>
+          <p className="total-caption">
+            Your standard monthly tuition amount is shown here for quick reference.
+          </p>
+        </MotionCard>
 
-      </MotionCard>
- 
- 
-
-</MotionSection>
+        <GreetingPanel
+          subtitle="Keep track of today’s date, time, and your fee overview from one polished dashboard glance."
+        />
+      </MotionSection>
 
       <MotionSection className="progress-section" delay={0.12}>
         <p className="progress-label">

@@ -45,6 +45,54 @@ const jsonSuccess = (res, payload = {}, status = 200) =>
 
 const isUniqueConstraintError = (error) => error?.code === "P2002";
 
+const createPendingWebhookEvent = async ({
+  dedupeKey,
+  eventType,
+  cashfreeOrderId,
+  cfPaymentId,
+  signature,
+  payload,
+}) => {
+  try {
+    const event = await prisma.paymentWebhookEvent.create({
+      data: {
+        provider: "CASHFREE",
+        dedupeKey,
+        eventType,
+        cashfreeOrderId: cashfreeOrderId ? String(cashfreeOrderId) : null,
+        cfPaymentId: cfPaymentId ? String(cfPaymentId) : null,
+        signature,
+        payload,
+      },
+    });
+
+    return { event, duplicate: false };
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) {
+      throw error;
+    }
+
+    const existingEvent = await prisma.paymentWebhookEvent.findUnique({
+      where: { dedupeKey },
+    });
+
+    if (existingEvent?.processedAt) {
+      return { event: existingEvent, duplicate: true };
+    }
+
+    return { event: existingEvent, duplicate: false };
+  }
+};
+
+const markWebhookEventProcessed = async ({ eventId, gatewayOrderId = null }) =>
+  prisma.paymentWebhookEvent.update({
+    where: { id: eventId },
+    data: {
+      gatewayOrderId,
+      processedAt: new Date(),
+    },
+  });
+
 const normalizeMonth = (value) => {
   const month = String(value || "").trim();
   if (!month) return "";
@@ -702,10 +750,16 @@ export const handleCashfreeWebhook = async (req, res) => {
       String(req.headers["x-idempotency-key"] || "").trim() ||
       `${eventType}:${cashfreeOrderId || "no-order"}:${cfPaymentId || "no-payment"}:${timestamp}`;
 
-    const existingEvent = await prisma.paymentWebhookEvent.findUnique({
-      where: { dedupeKey },
+    const { event: webhookEvent, duplicate } = await createPendingWebhookEvent({
+      dedupeKey,
+      eventType,
+      cashfreeOrderId,
+      cfPaymentId,
+      signature,
+      payload,
     });
-    if (existingEvent) {
+
+    if (duplicate) {
       return res.status(200).json({ success: true, duplicate: true });
     }
 
@@ -716,32 +770,17 @@ export const handleCashfreeWebhook = async (req, res) => {
         })
       : null;
 
-    try {
-      await prisma.paymentWebhookEvent.create({
-        data: {
-          provider: "CASHFREE",
-          gatewayOrderId: gatewayOrder?.id || null,
-          dedupeKey,
-          eventType,
-          cashfreeOrderId: cashfreeOrderId ? String(cashfreeOrderId) : null,
-          cfPaymentId: cfPaymentId ? String(cfPaymentId) : null,
-          signature,
-          payload,
-          processedAt: new Date(),
-        },
-      });
-    } catch (error) {
-      if (isUniqueConstraintError(error)) {
-        return res.status(200).json({ success: true, duplicate: true });
-      }
-      throw error;
-    }
-
     if (!gatewayOrder || !gatewayOrder.cashfreeOrderId) {
       console.warn("CASHFREE WEBHOOK ORDER NOT FOUND", {
         cashfreeOrderId,
         eventType,
       });
+      if (webhookEvent?.id) {
+        await markWebhookEventProcessed({
+          eventId: webhookEvent.id,
+          gatewayOrderId: gatewayOrder?.id || null,
+        });
+      }
       return res.status(200).json({ success: true, ignored: true });
     }
 
@@ -756,6 +795,13 @@ export const handleCashfreeWebhook = async (req, res) => {
       payments,
       source: "webhook",
     });
+
+    if (webhookEvent?.id) {
+      await markWebhookEventProcessed({
+        eventId: webhookEvent.id,
+        gatewayOrderId: gatewayOrder.id,
+      });
+    }
 
     console.info("CASHFREE WEBHOOK PROCESSED", {
       gatewayOrderId: gatewayOrder.id,

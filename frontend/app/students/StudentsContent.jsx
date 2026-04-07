@@ -208,9 +208,18 @@ export default function StudentsPage() {
               href={`/students/${student.id}`}
               className="student-card"
             >
-              <h3>{student.name}</h3>
-              <p>Class: {student.class}</p>
-              <p>School: {student.school}</p>
+              <div className="student-card__name">
+                <span className="student-card__label">Student Name</span>
+                <h3>{student.name}</h3>
+              </div>
+              <div className="student-card__class">
+                <span className="student-card__label">Class</span>
+                <p>{student.class}</p>
+              </div>
+              <div className="student-card__school">
+                <span className="student-card__label">School</span>
+                <p>{student.school}</p>
+              </div>
             </Link>
           </motion.div>
         ))}

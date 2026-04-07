@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import "./admin.css";
 import Cal from "../components/calender/calender.jsx";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
+import GreetingPanel from "../components/dashboard/GreetingPanel.jsx";
 import {
   MotionButton,
   MotionCard,
@@ -28,8 +29,6 @@ const API_BASE = "";
 export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
 
   const [students, setStudents] = useState([]);
   const [monthlyFee, setMonthlyFee] = useState(0);
@@ -136,9 +135,7 @@ export default function AdminDashboard() {
     setFilteredPaid(0);
   };
 
-  const filteredStudents = students.filter(s =>
-    s.name.toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredStudents = students;
 
   const stats = {
     totalStudents: students.length,
@@ -162,16 +159,6 @@ export default function AdminDashboard() {
     responsive: true,
     plugins: { legend: { position: "bottom" } }
   };
-
-  useEffect(() => {
-    function onResize() {
-      if (window.innerWidth > 820 && mobileSearchOpen) {
-        setMobileSearchOpen(false);
-      }
-    }
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [mobileSearchOpen]);
 
   // =========================
   // SAVE MONTHLY FEE (NEW FUNCTIONALITY)
@@ -272,12 +259,6 @@ export default function AdminDashboard() {
 
         <div className="nav-actions">
           <MotionButton
-            className="search-toggle-btn"
-            onClick={() => setMobileSearchOpen(!mobileSearchOpen)}
-          >
-            🔍
-          </MotionButton>
-          <MotionButton
             className="hamburger"
             onClick={() => setMenuOpen(!menuOpen)}
           >
@@ -293,18 +274,11 @@ export default function AdminDashboard() {
         </div>
       </MotionSection>
 
-      {/* SEARCH */}
-      <MotionSection className={`sliding-search-wrapper ${mobileSearchOpen ? "open" : ""}`} delay={0.04}>
-        <div className="modern-search-wrapper">
-          <input
-            type="text"
-            className="modern-search-bar"
-            placeholder="Search students..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <MotionButton className="modern-search-btn">Search</MotionButton>
-        </div>
+      <MotionSection delay={0.04}>
+        <GreetingPanel
+          accent="violet"
+          subtitle="Stay on top of collections, student activity, and daily institute operations with one clean live view."
+        />
       </MotionSection>
 
       {/* SUMMARY */}
