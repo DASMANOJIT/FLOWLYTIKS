@@ -34,6 +34,7 @@ export default function Login() {
   const [forgotOtpSent, setForgotOtpSent] = useState(false);
   const [forgotOtpInput, setForgotOtpInput] = useState("");
   const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotNewPassword, setForgotNewPassword] = useState("");
   const [forgotLoading, setForgotLoading] = useState(false);
   const [forgotCooldown, setForgotCooldown] = useState(0);
 
@@ -43,6 +44,8 @@ export default function Login() {
   const [signupOtpVerified, setSignupOtpVerified] = useState(false);
   const [signupLoading, setSignupLoading] = useState(false);
   const [signupCooldown, setSignupCooldown] = useState(0);
+  const [signupName, setSignupName] = useState("");
+  const [signupPhone, setSignupPhone] = useState("");
   const [signupPassword, setSignupPassword] = useState("");
   const [signupSchool, setSignupSchool] = useState("");
   const [signupCustomSchool, setSignupCustomSchool] = useState("");
@@ -80,16 +83,23 @@ export default function Login() {
   const isValidEmail = (email) =>
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
 
+  const resetSignupVerificationState = () => {
+    setSignupOtpSent(false);
+    setSignupOtpInput("");
+    setSignupOtpVerified(false);
+    setSignupCooldown(0);
+  };
+
   const getSignupFormValues = () => {
     const form = document.querySelector("form.card-form.signup-side");
 
     return {
-      name: form?.querySelector('input[name="name"]')?.value?.trim() || "",
+      name: (signupName || form?.querySelector('input[name="name"]')?.value || "").trim(),
       school: signupSchool || form?.querySelector('select[name="school"]')?.value || "",
       customSchool:
         signupCustomSchool || form?.querySelector('input[name="customSchool"]')?.value || "",
       studentClass: signupClass || form?.querySelector('select[name="class"]')?.value || "",
-      phone: form?.querySelector('input[name="phone"]')?.value?.trim() || "",
+      phone: (signupPhone || form?.querySelector('input[name="phone"]')?.value || "").trim(),
       email: (signupEmail || form?.querySelector('input[name="email"]')?.value || "").trim(),
       password: signupPassword || form?.querySelector('input[name="password"]')?.value || "",
     };
@@ -153,6 +163,46 @@ export default function Login() {
       <span>{label}</span>
     </span>
   );
+
+  const buildSignupPayload = (signupValues) => {
+    return {
+      name: signupValues.name,
+      email: signupValues.email,
+      phone: signupValues.phone,
+      password: signupValues.password,
+      school: signupValues.school,
+      customSchool: signupValues.customSchool,
+      class: signupValues.studentClass,
+      otp: signupOtpInput.trim(),
+    };
+  };
+
+  const handleSignupSuccess = (data) => {
+    localStorage.setItem("token", data.token);
+    localStorage.setItem("studentName", data.name);
+    alert("Registered successfully!");
+    resetSignupVerificationState();
+    window.location.href = "/student";
+  };
+
+  const submitSignup = async (signupValues) => {
+    const res = await fetch(`${API}/api/auth/signup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildSignupPayload(signupValues)),
+    });
+    const { ok, data, error } = await readApiResponse(
+      res,
+      "Signup failed. Please try again."
+    );
+
+    if (!ok) {
+      return alert(error);
+    }
+
+    setSignupOtpVerified(true);
+    handleSignupSuccess(data);
+  };
 
   // =====================
   // LOGIN
@@ -266,37 +316,7 @@ export default function Login() {
 
     setSignupLoading(true);
     try {
-      const res = await fetch(`${API}/api/auth/signup`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: signupValues.name,
-          email: signupValues.email,
-          phone: signupValues.phone,
-          password: signupValues.password,
-          school: signupValues.school,
-          customSchool: signupValues.customSchool,
-          class: signupValues.studentClass,
-          otp: signupOtpInput.trim(),
-        }),
-      });
-      const { ok, data, error } = await readApiResponse(
-        res,
-        "Signup failed. Please try again."
-      );
-
-      if (!ok) {
-        setSignupOtpVerified(false);
-        return alert(error);
-      }
-
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("studentName", data.name);
-      alert("Registered successfully!");
-      setSignupOtpSent(false);
-      setSignupOtpInput("");
-      setSignupOtpVerified(true);
-      window.location.href = "/student";
+      await submitSignup(signupValues);
     } catch (err) {
       alert("Cannot connect to backend!");
       console.error(err);
@@ -306,28 +326,13 @@ export default function Login() {
   };
 
   // =====================
-  // REGISTER (STUDENT ONLY, OTP VERIFIED)
+  // REGISTER (ROLE-AWARE, OTP VERIFIED)
   // =====================
   const handleRegister = async (e) => {
     e.preventDefault();
 
-    const name = e.target.name.value;
-    const email = e.target.email.value;
-    const phone = e.target.phone.value;
-    const password = e.target.password.value;
-    const school = e.target.school.value;
-    const customSchool = e.target.customSchool?.value;
-    const studentClass = e.target.class.value;
-
-    const validationMessage = getSignupValidationMessage({
-      name,
-      school,
-      customSchool,
-      studentClass,
-      phone,
-      email,
-      password,
-    });
+    const signupValues = getSignupFormValues();
+    const validationMessage = getSignupValidationMessage(signupValues);
     if (validationMessage) return alert(validationMessage);
 
     if (!signupOtpVerified) {
@@ -337,39 +342,13 @@ export default function Login() {
     if (!/^\d{6}$/.test(String(signupOtpInput || "").trim())) {
       return alert("Please enter the 6-digit OTP.");
     }
-    if (!isValidPhone(phone)) {
+    if (!isValidPhone(signupValues.phone)) {
       return alert("Please enter a valid phone number.");
     }
 
     setSignupLoading(true);
     try {
-      const res = await fetch(`${API}/api/auth/signup`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          email,
-          phone,
-          password,
-          school,
-          customSchool,
-          class: studentClass,
-          otp: signupOtpInput.trim(),
-        }),
-      });
-      const { ok, data, error } = await readApiResponse(
-        res,
-        "Signup failed. Please try again."
-      );
-      if (!ok) return alert(error);
-
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("studentName", data.name);
-      alert("Registered successfully!");
-      setSignupOtpSent(false);
-      setSignupOtpInput("");
-      setSignupOtpVerified(false);
-      window.location.href = "/student";
+      await submitSignup(signupValues);
     } catch (err) {
       alert("Cannot connect to backend!");
       console.error(err);
@@ -426,7 +405,7 @@ export default function Login() {
     e.preventDefault();
 
     const email = forgotEmail || e.target.email?.value;
-    const newPassword = e.target.newPassword.value;
+    const newPassword = forgotNewPassword;
 
     if (!isValidEmail(email)) {
       return alert("Please enter a valid email address before resetting password.");
@@ -466,6 +445,7 @@ export default function Login() {
       setForgotOtpSent(false);
       setForgotOtpInput("");
       setForgotEmail("");
+      setForgotNewPassword("");
       setForgotCooldown(0);
       setActiveForm("login");
     } catch (err) {
@@ -788,8 +768,14 @@ export default function Login() {
           {/* SIGNUP */}
           <form className="card-form signup-side" onSubmit={handleRegister}>
             <h2>Sign Up</h2>
-
-            <input name="name" placeholder="Full Name" className="form-input" required />
+            <input
+              name="name"
+              placeholder="Full Name"
+              className="form-input"
+              required
+              value={signupName}
+              onChange={(e) => setSignupName(e.target.value)}
+            />
             <select
               name="school"
               className="form-input"
@@ -841,6 +827,8 @@ export default function Login() {
               placeholder="Phone Number"
               className="form-input"
               required
+              value={signupPhone}
+              onChange={(e) => setSignupPhone(e.target.value)}
             />
             <input
               name="email"
@@ -954,6 +942,7 @@ export default function Login() {
                 setForgotEmail(e.target.value);
                 setForgotOtpSent(false);
                 setForgotOtpInput("");
+                setForgotNewPassword("");
                 setForgotCooldown(0);
               }}
             />
@@ -994,6 +983,8 @@ export default function Login() {
                       type={showResetPassword ? "text" : "password"}
                       placeholder="New Password"
                       className="form-input"
+                      value={forgotNewPassword}
+                      onChange={(e) => setForgotNewPassword(e.target.value)}
                     />
                     <button
                       type="button"

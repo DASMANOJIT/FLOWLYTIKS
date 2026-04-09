@@ -1,16 +1,26 @@
 import cron from "node-cron";
 import prisma from "../prisma/client.js";
-import { autoPromoteIfEligible } from "../controllers/studentcontrollers.js";
 import { purgeAuthRateLimitEvents } from "../middleware/security.js";
-import { runDailyFeeReminderJob } from "./reminderservice.js";
 import { purgeExpiredEmailOtps } from "./emailOtpService.js";
 import { purgeExpiredSessions } from "../utils/sessionStore.js";
 import { withPgAdvisoryLock } from "../utils/dbLocks.js";
+import { getAcademicYear } from "../utils/academicYear.js";
+import {
+  BACKGROUND_JOB_TYPES,
+  createBackgroundJob,
+} from "./backgroundJobService.js";
 
 const shouldRunSchedulers = () => {
-  if (process.env.NODE_ENV !== "production") return true;
   return process.env.RUN_SCHEDULED_JOBS !== "0";
 };
+
+const schedulerDateKey = (timeZone = "Asia/Kolkata") =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 
 export const registerScheduledJobs = () => {
   if (!shouldRunSchedulers()) {
@@ -20,15 +30,28 @@ export const registerScheduledJobs = () => {
 
   cron.schedule("0 0 1 3 *", async () => {
     await withPgAdvisoryLock(prisma, "annual-student-promotion", async () => {
-      console.log("🔔 Running annual promotion check...");
       const targetAcademicYear = new Date().getFullYear() - 1;
-      const students = await prisma.student.findMany({
-        select: { id: true },
+      const dedupeKey = `annual-promotion:${targetAcademicYear}`;
+      const { job, created, requeued } = await createBackgroundJob({
+        type: BACKGROUND_JOB_TYPES.ANNUAL_STUDENT_PROMOTION,
+        source: "scheduler",
+        dedupeKey,
+        payload: {
+          targetAcademicYear,
+        },
       });
-      for (const student of students) {
-        await autoPromoteIfEligible(student.id, targetAcademicYear);
-      }
-      console.log("✅ Promotion check completed.");
+
+      console.log(
+        created
+          ? "📥 Annual promotion job queued."
+          : requeued
+            ? "🔄 Annual promotion job requeued after failure."
+            : "ℹ️ Annual promotion job already queued.",
+        {
+          jobId: job.id,
+          targetAcademicYear,
+        }
+      );
     }).catch((err) => {
       console.error("❌ Error during promotion cron:", err?.message || err);
     });
@@ -38,8 +61,31 @@ export const registerScheduledJobs = () => {
     process.env.REMINDER_CRON || "0 9 * * *",
     async () => {
       await withPgAdvisoryLock(prisma, "daily-fee-reminders", async () => {
-        console.log("🔔 Running daily fee reminder job...");
-        await runDailyFeeReminderJob();
+        const academicYear = getAcademicYear();
+        const reminderDate = schedulerDateKey(
+          process.env.REMINDER_TIMEZONE || "Asia/Kolkata"
+        );
+        const { job, created, requeued } = await createBackgroundJob({
+          type: BACKGROUND_JOB_TYPES.DAILY_FEE_REMINDER,
+          source: "scheduler",
+          dedupeKey: `daily-reminder:${reminderDate}`,
+          payload: {
+            academicYear,
+          },
+        });
+
+        console.log(
+          created
+            ? "📥 Daily reminder job queued."
+            : requeued
+              ? "🔄 Daily reminder job requeued after failure."
+              : "ℹ️ Daily reminder job already queued.",
+          {
+            jobId: job.id,
+            academicYear,
+            reminderDate,
+          }
+        );
       }).catch((err) => {
         console.error("❌ Error during reminder cron:", err?.message || err);
       });

@@ -8,6 +8,33 @@ import {
   logPaymentCompatibilityFallback,
   stripExtendedPaymentWriteData,
 } from "../utils/paymentCompat.js";
+
+const paymentStudentListSelect = {
+  id: true,
+  name: true,
+  class: true,
+  school: true,
+  phone: true,
+  email: true,
+};
+
+const parsePositiveInt = (value, fallback, max = 100) => {
+  const numeric = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
+  return Math.min(numeric, max);
+};
+
+const normalizeDateBoundary = (value, endOfDay = false) => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  if (endOfDay) {
+    date.setHours(23, 59, 59, 999);
+  } else {
+    date.setHours(0, 0, 0, 0);
+  }
+  return date;
+};
 /**
  * Academic Year Logic
  * Academic session = March → February
@@ -116,15 +143,42 @@ export const getAllPayments = async (req, res) => {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    const payments = await prisma.payment.findMany({
-      select: {
-        ...legacyPaymentSelect,
-        student: true,
+    const shouldPaginate = "page" in req.query || "limit" in req.query;
+    const page = parsePositiveInt(req.query.page, 1, 10_000);
+    const limit = parsePositiveInt(req.query.limit, 25, 100);
+    const paymentSelect = {
+      ...legacyPaymentSelect,
+      student: {
+        select: paymentStudentListSelect,
       },
-      orderBy: { createdAt: "desc" },
-    });
+    };
 
-    res.json(payments);
+    if (!shouldPaginate) {
+      const payments = await prisma.payment.findMany({
+        select: paymentSelect,
+        orderBy: { createdAt: "desc" },
+      });
+
+      return res.json(payments);
+    }
+
+    const [totalPayments, payments] = await Promise.all([
+      prisma.payment.count(),
+      prisma.payment.findMany({
+        select: paymentSelect,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    return res.json({
+      payments,
+      totalPayments,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(totalPayments / limit)),
+    });
   } catch (err) {
     console.error("getAllPayments error:", err);
     res.status(500).json({ message: "Failed to fetch payments" });
@@ -235,17 +289,49 @@ export const getTotalRevenue = async (req, res) => {
       return res.json({ totalRevenue: 0 });
     }
 
-    const result = await prisma.payment.aggregate({
-      _sum: {
-        amount: true,
-      },
-      where: {
-        status: "paid",
-      },
-    });
+    const fromDate =
+      req.query.from && !normalizeDateBoundary(req.query.from)
+        ? null
+        : normalizeDateBoundary(req.query.from);
+    const toDate =
+      req.query.to && !normalizeDateBoundary(req.query.to, true)
+        ? null
+        : normalizeDateBoundary(req.query.to, true);
+
+    if ((req.query.from && !fromDate) || (req.query.to && !toDate)) {
+      return res.status(400).json({ message: "Invalid date filter" });
+    }
+
+    const dateWhere = {};
+    if (fromDate) dateWhere.gte = fromDate;
+    if (toDate) dateWhere.lte = toDate;
+
+    const baseWhere = Object.keys(dateWhere).length
+      ? { createdAt: dateWhere }
+      : {};
+
+    const [grossResult, paidResult] = await Promise.all([
+      prisma.payment.aggregate({
+        _sum: {
+          amount: true,
+        },
+        where: baseWhere,
+      }),
+      prisma.payment.aggregate({
+        _sum: {
+          amount: true,
+        },
+        where: {
+          ...baseWhere,
+          status: "paid",
+        },
+      }),
+    ]);
 
     res.json({
-      totalRevenue: result._sum.amount ?? 0,
+      totalRevenue: paidResult._sum.amount ?? 0,
+      paidRevenue: paidResult._sum.amount ?? 0,
+      grossRevenue: grossResult._sum.amount ?? 0,
     });
   } catch (err) {
     console.error("Revenue error:", err);

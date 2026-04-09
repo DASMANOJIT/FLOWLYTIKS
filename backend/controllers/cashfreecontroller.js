@@ -120,14 +120,23 @@ const buildCashfreeOrderId = ({ paymentId, month }) => {
     .toString("hex")}`;
 };
 
+const getRequiredUrlFromEnv = (name) => {
+  const rawValue = String(process.env[name] || "").trim();
+  if (!rawValue) {
+    throw new Error(`${name} is not set`);
+  }
+
+  return new URL(rawValue);
+};
+
 const getNotifyUrl = () => {
   const backendBaseUrl = String(process.env.BACKEND_URL || "http://localhost:5000").trim();
   return `${backendBaseUrl.replace(/\/$/, "")}/api/payments/cashfree/webhook`;
 };
 
 const getReturnUrl = ({ paymentId, gatewayOrderId, cashfreeOrderId }) => {
-  const returnBase = String(process.env.CASHFREE_RETURN_URL || "").trim().replace(/\/$/, "");
-  const url = new URL(returnBase);
+  const url = getRequiredUrlFromEnv("CASHFREE_RETURN_URL");
+  url.pathname = url.pathname.replace(/\/$/, "");
   url.searchParams.set("gateway", "cashfree");
   url.searchParams.set("paymentId", String(paymentId));
   url.searchParams.set("gatewayOrderId", gatewayOrderId);

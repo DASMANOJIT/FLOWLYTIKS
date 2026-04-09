@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import "./page.css";
 import Link from "next/link";
@@ -12,11 +12,12 @@ const API_BASE = "";
 
 export default function PaymentsPage() {
   const [students, setStudents] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [searchLoading, setSearchLoading] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const searchRequestKeyRef = useRef("");
 
   // Session months: March → next February
   const months = [
@@ -27,15 +28,66 @@ export default function PaymentsPage() {
 
   useEffect(() => {
     const token = localStorage.getItem("token");
+    if (!token) {
+      window.location.href = "/login";
+      return;
+    }
 
-    fetch(`${API_BASE}/api/students`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => res.json())
-      .then((data) => setStudents(Array.isArray(data) ? data : []))
-      .catch((err) => console.error(err))
-      .finally(() => setLoading(false));
-  }, []);
+    const trimmedSearch = search.trim();
+    if (!trimmedSearch) {
+      searchRequestKeyRef.current = "";
+      setStudents([]);
+      return;
+    }
+
+    const params = new URLSearchParams({
+      search: trimmedSearch,
+      limit: "7",
+      compact: "1",
+      sort: "az",
+    });
+
+    const requestKey = params.toString();
+    if (searchRequestKeyRef.current === requestKey) {
+      return;
+    }
+    searchRequestKeyRef.current = requestKey;
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      setSearchLoading(true);
+      fetch(`${API_BASE}/api/students?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      })
+        .then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data?.message || "Failed to search students");
+          }
+
+          if (Array.isArray(data)) {
+            setStudents(data);
+            return;
+          }
+
+          setStudents(Array.isArray(data.students) ? data.students : []);
+        })
+        .catch((err) => {
+          if (err.name !== "AbortError") {
+            searchRequestKeyRef.current = "";
+            console.error("Student search error:", err);
+            setStudents([]);
+          }
+        })
+        .finally(() => setSearchLoading(false));
+    }, 220);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeoutId);
+    };
+  }, [search]);
 
   const handlePayment = async () => {
     if (!selectedStudent || !selectedMonth) {
@@ -69,14 +121,11 @@ export default function PaymentsPage() {
       alert("Payment marked successfully!");
       setSelectedStudent(null);
       setSelectedMonth("");
+      setStudents([]);
     } finally {
       setSubmitting(false);
     }
   };
-
-  if (loading) {
-    return <PremiumLoader fullScreen label="Loading payment entry" />;
-  }
 
   return (
     <motion.div
@@ -105,28 +154,30 @@ export default function PaymentsPage() {
 
         {search && (
           <div className="student-search-results">
-            {students
-  .filter((s) => {
-    const query = search.toLowerCase();
-    return (
-      s.name.toLowerCase().includes(query) ||
-      s.phone?.toLowerCase().includes(query)
-    );
-  })
-  .slice(0, 7)
-  .map((s) => (
-
+            {searchLoading ? (
+              <div className="student-result-item student-result-item--loading">
+                <PremiumLoader inline compact />
+                <span>Searching students…</span>
+              </div>
+            ) : students.length ? (
+              students.map((s) => (
                 <div
                   key={s.id}
                   className="student-result-item"
                   onClick={() => {
                     setSelectedStudent(s);
+                    searchRequestKeyRef.current = "";
                     setSearch("");
                   }}
                 >
                   {s.name} — Class {s.class}
                 </div>
-              ))}
+              ))
+            ) : (
+              <div className="student-result-item student-result-item--empty">
+                No matching students found
+              </div>
+            )}
           </div>
         )}
 

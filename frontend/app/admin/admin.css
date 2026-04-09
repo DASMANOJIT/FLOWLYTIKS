@@ -386,6 +386,13 @@
   color: #0f172a;
 }
 
+.chart-loading {
+  min-height: 260px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* Calendar wrapper (keeps your existing calendar styles) */
 .calendar-wrapper-custom {
   width: 100%;
@@ -775,6 +782,26 @@ html.dark-mode,
   margin-top: 18px;
 }
 
+.student-list-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  color: #475569;
+  font-size: 0.95rem;
+}
+
+.student-list-pagination {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.student-list-page-btn {
+  min-width: 108px;
+}
+
 /* Card */
 .student-item {
   display: flex;
@@ -860,11 +887,25 @@ html.dark-mode,
   color: #fff5f5;
 }
 
+.student-empty-state {
+  padding: 18px;
+  text-align: center;
+  color: #475569;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.94), rgba(239,246,255,0.84)),
+    rgba(255,255,255,0.94);
+}
+
 /* ============================= */
 /* Mobile Optimization           */
 /* ============================= */
 
 @media (max-width: 640px) {
+  .student-list-meta {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .student-item {
     flex-direction: column;
     align-items: flex-start;

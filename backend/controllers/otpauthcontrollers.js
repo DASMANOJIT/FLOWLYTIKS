@@ -71,6 +71,14 @@ const getSignupValidationError = ({
   return null;
 };
 
+const findExistingSignupAccountByEmail = async (email) => {
+  const [student, admin] = await Promise.all([
+    prisma.student.findUnique({ where: { email }, select: { id: true } }),
+    prisma.admin.findUnique({ where: { email }, select: { id: true } }),
+  ]);
+
+  return student || admin;
+};
 const maskEmail = (email) => {
   if (!email) return "";
   const [local, domain] = email.split("@");
@@ -147,7 +155,7 @@ export const sendOtp = async (req, res) => {
         return authError(res, 400, validationError);
       }
 
-      const existing = await prisma.student.findUnique({ where: { email: normalizedEmail } });
+      const existing = await findExistingSignupAccountByEmail(normalizedEmail);
       if (existing) {
         return authError(res, 400, "Email is already registered.");
       }
@@ -160,6 +168,14 @@ export const sendOtp = async (req, res) => {
       });
       if (existingPhone) {
         return authError(res, 400, "Phone number is already registered.");
+      }
+    } else if (normalizedPurpose === "reset") {
+      const [student, admin] = await Promise.all([
+        prisma.student.findUnique({ where: { email: normalizedEmail }, select: { id: true } }),
+        prisma.admin.findUnique({ where: { email: normalizedEmail }, select: { id: true } }),
+      ]);
+      if (!student && !admin) {
+        return authError(res, 404, "User not found.");
       }
     } else {
       const student = await prisma.student.findUnique({ where: { email: normalizedEmail } });
@@ -225,11 +241,15 @@ export const signupWithOtp = async (req, res) => {
       otp,
     } = req.body;
     const normalizedEmail = normalizeEmail(email);
-    const normalizedName = normalizeName(name);
     const normalizedPhone = normalizePhone(phone);
     const code = normalizeOtp(otp);
     const debug = process.env.NODE_ENV !== "production" || process.env.DEBUG_SIGNUP === "1";
 
+    if (!isValidOtp(code)) {
+      return authError(res, 400, "Please enter the 6-digit OTP.");
+    }
+
+    const normalizedName = normalizeName(name);
     const validationError = getSignupValidationError({
       name: normalizedName,
       school,
@@ -244,9 +264,8 @@ export const signupWithOtp = async (req, res) => {
     }
 
     const finalSchool = resolveSchoolValue({ school, customSchool });
-
     const classNum = parseStudentClass(studentClass);
-    const existsEmail = await prisma.student.findUnique({ where: { email: normalizedEmail } });
+    const existsEmail = await findExistingSignupAccountByEmail(normalizedEmail);
     if (existsEmail) {
       return authError(res, 400, "Email is already registered.");
     }
@@ -259,10 +278,6 @@ export const signupWithOtp = async (req, res) => {
     });
     if (existsPhone) {
       return authError(res, 400, "Phone number is already registered.");
-    }
-
-    if (!isValidOtp(code)) {
-      return authError(res, 400, "Please enter the 6-digit OTP.");
     }
 
     await verifyEmailOtp({ email: normalizedEmail, purpose: "signup", code });

@@ -11,7 +11,6 @@ import studentRoutes from "./routes/studentroute.js";
 import paymentRoutes from "./routes/paymentroute.js";
 import settingsRoutes from "./routes/settingsroute.js";
 import adminAssistantRoutes from "./routes/adminassistantroute.js";
-import { registerScheduledJobs } from "./services/scheduler.js";
 
 validateEnv();
 
@@ -159,8 +158,7 @@ const initDatabase = async () => {
 };
 
 initDatabase();
-registerScheduledJobs();
-
+console.log("⏭ Background schedulers are not started in the web API process");
 
 // ================================
 // Routes

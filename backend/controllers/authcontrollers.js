@@ -89,6 +89,12 @@ const selectAdminAuthFields = {
   password: true,
 };
 
+const selectAdminEmailFields = {
+  id: true,
+  email: true,
+  password: true,
+};
+
 const getStudentRegistrationValidationError = ({
   name,
   school,
@@ -413,6 +419,21 @@ export const resetPassword = async (req, res) => {
     }
 
     await verifyEmailOtp({ email: normalizedEmail, purpose: "reset", code: normalizeOtp(otp) });
+    const admin = await prisma.admin.findUnique({
+      where: { email: normalizedEmail },
+      select: selectAdminEmailFields,
+    });
+
+    if (admin) {
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      await prisma.admin.update({
+        where: { id: admin.id },
+        data: { password: hashedPassword },
+      });
+      await clearUserSessions("admin", admin.id);
+      return authSuccess(res, { message: "Admin password reset successful" });
+    }
+
     const student = await prisma.student.findUnique({
       where: { email: normalizedEmail },
       select: selectStudentAuthFieldsFallback,
@@ -420,6 +441,7 @@ export const resetPassword = async (req, res) => {
     if (!student) {
       return authError(res, 400, "Reset password failed");
     }
+
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     try {
       await prisma.student.update({

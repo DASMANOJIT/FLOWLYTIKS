@@ -47,6 +47,16 @@ const assertOptionalHttpUrls = (name, { allowLocal = true } = {}) => {
   }
 };
 
+const assertOptionalPositiveInt = (name) => {
+  const raw = String(process.env[name] || "").trim();
+  if (!raw) return;
+
+  const numeric = Number.parseInt(raw, 10);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+};
+
 export const validateEnv = () => {
   required("DATABASE_URL");
   const jwtSecret = required("JWT_SECRET");
@@ -94,4 +104,8 @@ export const validateEnv = () => {
   if (runScheduledJobs && !["0", "1"].includes(runScheduledJobs)) {
     throw new Error("RUN_SCHEDULED_JOBS must be either 0 or 1.");
   }
+
+  assertOptionalPositiveInt("BACKGROUND_JOB_POLL_INTERVAL_MS");
+  assertOptionalPositiveInt("BACKGROUND_JOB_BATCH_SIZE");
+  assertOptionalPositiveInt("BACKGROUND_JOB_STALE_MINUTES");
 };

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import "./admin.css";
@@ -14,23 +15,37 @@ import {
   fadeUpItem,
   staggerContainer,
 } from "../components/motion/primitives.jsx";
-import {
-  Chart as ChartJS,
-  ArcElement,
-  Tooltip,
-  Legend
-} from "chart.js";
-import { Pie } from "react-chartjs-2";
-
-ChartJS.register(ArcElement, Tooltip, Legend);
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
+const STUDENT_PAGE_SIZE = 8;
+
+const AdminFeeStatusChart = dynamic(
+  () => import("../components/dashboard/AdminFeeStatusChart.jsx"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="chart-loading">
+        <PremiumLoader label="Loading analytics" />
+      </div>
+    ),
+  }
+);
 
 export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
 
   const [students, setStudents] = useState([]);
+  const [studentPage, setStudentPage] = useState(1);
+  const [studentTotalPages, setStudentTotalPages] = useState(1);
+  const [studentsLoading, setStudentsLoading] = useState(false);
+  const [dashboardSummary, setDashboardSummary] = useState({
+    totalStudents: 0,
+    paid: 0,
+    unpaid: 0,
+    revenue: 0,
+    monthlyFee: 0,
+  });
   const [monthlyFee, setMonthlyFee] = useState(0);
   const [totalRevenue, setTotalRevenue] = useState(0);
   const [chatOpen, setChatOpen] = useState(false);
@@ -50,9 +65,12 @@ export default function AdminDashboard() {
   const [filterTo, setFilterTo] = useState("");
   const [filteredRevenue, setFilteredRevenue] = useState(0);
   const [filteredPaid, setFilteredPaid] = useState(0);
+  const [filterLoading, setFilterLoading] = useState(false);
+  const dashboardRequestKeyRef = useRef("");
+  const initialLoadRef = useRef(true);
 
   // =========================
-  // Fetch Students & Revenue
+  // Fetch dashboard summary + paginated students
   // =========================
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -61,31 +79,65 @@ export default function AdminDashboard() {
       return;
     }
 
-    const studentsRequest = fetch(`${API_BASE}/api/students`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          setStudents(data);
-          // Optional: set initial monthly fee from first student
-          if (data.length > 0) setMonthlyFee(data[0].monthlyFee);
-        }
-      })
-      .catch(err => console.error(err));
-
-    const revenueRequest = fetch(`${API_BASE}/api/payments/revenue`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(res => res.json())
-      .then(data => setTotalRevenue(data.totalRevenue || 0))
-      .catch(err => console.error(err));
-
-    Promise.allSettled([studentsRequest, revenueRequest]).finally(() => {
-      setLoading(false);
+    const params = new URLSearchParams({
+      page: String(studentPage),
+      limit: String(STUDENT_PAGE_SIZE),
+      sort: "az",
     });
 
-  }, []);
+    if (studentPage === 1) {
+      params.set("includeSummary", "1");
+    }
+
+    const requestKey = params.toString();
+    if (dashboardRequestKeyRef.current === requestKey) {
+      return;
+    }
+    dashboardRequestKeyRef.current = requestKey;
+
+    const isInitialLoad = initialLoadRef.current;
+    if (isInitialLoad) {
+      setLoading(true);
+    } else {
+      setStudentsLoading(true);
+    }
+
+    fetch(`${API_BASE}/api/students?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.message || "Failed to fetch dashboard data");
+        }
+        if (dashboardRequestKeyRef.current !== requestKey) {
+          return;
+        }
+
+        const nextStudents = Array.isArray(data) ? data : data.students || [];
+        setStudents(nextStudents);
+
+        if (!Array.isArray(data)) {
+          setStudentTotalPages(data.totalPages || 1);
+          if (data.summary) {
+            setDashboardSummary(data.summary);
+            setTotalRevenue(data.summary.revenue || 0);
+            setMonthlyFee((current) => current || data.summary.monthlyFee || 0);
+          }
+        }
+      })
+      .catch((err) => {
+        dashboardRequestKeyRef.current = "";
+        console.error("Admin dashboard fetch error:", err);
+      })
+      .finally(() => {
+        if (isInitialLoad) {
+          setLoading(false);
+          initialLoadRef.current = false;
+        }
+        setStudentsLoading(false);
+      });
+  }, [studentPage]);
   // Logout function
   const handleLogout = () => {
     const token = localStorage.getItem("token");
@@ -104,28 +156,40 @@ export default function AdminDashboard() {
   // =========================
   // Filter Functions
   // =========================
-  const applyFilter = () => {
+  const applyFilter = async () => {
     if (!filterFrom || !filterTo) return;
 
-    const from = new Date(filterFrom);
-    const to = new Date(filterTo);
-    let revenue = 0;
-    let paid = 0;
+    const token = localStorage.getItem("token");
+    if (!token) {
+      window.location.href = "/login";
+      return;
+    }
 
-    students.forEach(s => {
-      if (s.payments && s.payments.length) {
-        s.payments.forEach(p => {
-          const pDate = new Date(p.date);
-          if (pDate >= from && pDate <= to) {
-            revenue += p.amount;
-            if (p.status === "paid") paid += p.amount;
-          }
-        });
+    setFilterLoading(true);
+
+    try {
+      const params = new URLSearchParams({
+        from: filterFrom,
+        to: filterTo,
+      });
+
+      const res = await fetch(`${API_BASE}/api/payments/revenue?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data?.message || "Failed to apply date filter");
       }
-    });
 
-    setFilteredRevenue(revenue);
-    setFilteredPaid(paid);
+      setFilteredRevenue(data.grossRevenue ?? data.totalRevenue ?? 0);
+      setFilteredPaid(data.paidRevenue ?? data.totalRevenue ?? 0);
+    } catch (err) {
+      console.error("Admin revenue filter error:", err);
+      alert("Failed to apply the date filter.");
+    } finally {
+      setFilterLoading(false);
+    }
   };
 
   const clearFilter = () => {
@@ -135,29 +199,11 @@ export default function AdminDashboard() {
     setFilteredPaid(0);
   };
 
-  const filteredStudents = students;
-
   const stats = {
-    totalStudents: students.length,
-    paid: students.filter(s => s.feesStatus === "paid").length,
-    unpaid: students.filter(s => s.feesStatus !== "paid").length,
+    totalStudents: dashboardSummary.totalStudents,
+    paid: dashboardSummary.paid,
+    unpaid: dashboardSummary.unpaid,
     revenue: totalRevenue,
-  };
-
-  const pieData = {
-    labels: ["Paid", "Unpaid"],
-    datasets: [
-      {
-        data: [stats.paid, stats.unpaid],
-        backgroundColor: ["#16a34a", "#dc2626"],
-        borderWidth: 0
-      }
-    ]
-  };
-
-  const pieOptions = {
-    responsive: true,
-    plugins: { legend: { position: "bottom" } }
   };
 
   // =========================
@@ -327,7 +373,16 @@ export default function AdminDashboard() {
           </div>
         </div>
         <div className="filter-actions">
-          <MotionButton className="apply-btn" onClick={applyFilter}>Apply</MotionButton>
+          <MotionButton className="apply-btn" onClick={applyFilter} disabled={filterLoading}>
+            {filterLoading ? (
+              <span className="button-loading-content">
+                <PremiumLoader inline compact />
+                <span>Applying</span>
+              </span>
+            ) : (
+              "Apply"
+            )}
+          </MotionButton>
           <MotionButton className="clear-btn" onClick={clearFilter}>Clear</MotionButton>
         </div>
         <div className="filter-result">
@@ -342,7 +397,7 @@ export default function AdminDashboard() {
       <MotionSection className="chart-calendar-row" delay={0.12}>
         <MotionCard className="chart-container" hover={false}>
           <h2 className="chart-title">Monthly Fee Status</h2>
-          <Pie data={pieData} options={pieOptions} />
+          <AdminFeeStatusChart paid={stats.paid} unpaid={stats.unpaid} />
         </MotionCard>
         <Cal />
       </MotionSection>
@@ -365,13 +420,38 @@ export default function AdminDashboard() {
       {/* STUDENTS LIST */}
       <MotionSection delay={0.2}>
       <h2>Students List</h2>
+      <div className="student-list-meta">
+        <span>
+          Showing page {studentPage} of {studentTotalPages}
+        </span>
+        <div className="student-list-pagination">
+          <MotionButton
+            className="student-list-page-btn"
+            disabled={studentsLoading || studentPage === 1}
+            onClick={() => setStudentPage((current) => Math.max(1, current - 1))}
+          >
+            Previous
+          </MotionButton>
+          <MotionButton
+            className="student-list-page-btn"
+            disabled={studentsLoading || studentPage >= studentTotalPages}
+            onClick={() =>
+              setStudentPage((current) =>
+                Math.min(studentTotalPages, current + 1)
+              )
+            }
+          >
+            Next
+          </MotionButton>
+        </div>
+      </div>
       <motion.div
         className="student-list"
         variants={staggerContainer}
         initial="hidden"
         animate="visible"
       >
-        {filteredStudents.map((s, i) => (
+        {students.map((s, i) => (
           <motion.div key={s.id} variants={fadeUpItem} whileHover={{ y: -4 }}>
             <Link
               href={`/students/${s.id}`}
@@ -392,6 +472,11 @@ export default function AdminDashboard() {
             </Link>
           </motion.div>
         ))}
+        {!students.length && !studentsLoading ? (
+          <MotionCard className="student-empty-state" hover={false}>
+            No students found for this page.
+          </MotionCard>
+        ) : null}
       </motion.div>
       </MotionSection>
 

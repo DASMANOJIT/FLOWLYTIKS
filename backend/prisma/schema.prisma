@@ -35,6 +35,10 @@ model Student {
   updatedAt          DateTime              @updatedAt
   payments           Payment[]
   gatewayOrders      PaymentGatewayOrder[]
+
+  @@index([class])
+  @@index([school])
+  @@index([joinDate])
 }
 
 model EmailOtp {
@@ -95,6 +99,9 @@ model Payment {
   gatewayOrders        PaymentGatewayOrder[]
 
   @@unique([studentId, month, academicYear])
+  @@index([studentId, academicYear, createdAt])
+  @@index([academicYear, month, status])
+  @@index([status, createdAt])
   @@index([phonepeTransactionId])
   @@index([phonepePaymentId])
   @@index([teacherAdminId])
@@ -180,6 +187,32 @@ model PaymentWebhookEvent {
   @@index([cfPaymentId])
 }
 
+model BackgroundJob {
+  id                String              @id @default(cuid())
+  type              BackgroundJobType
+  status            BackgroundJobStatus @default(PENDING)
+  source            String
+  requestedByRole   String?
+  requestedByUserId Int?
+  dedupeKey         String?             @unique
+  payload           Json?
+  totalItems        Int                 @default(0)
+  processedItems    Int                 @default(0)
+  succeededItems    Int                 @default(0)
+  failedItems       Int                 @default(0)
+  errorMessage      String?
+  result            Json?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  lastHeartbeatAt   DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  @@index([status, createdAt])
+  @@index([type, status])
+  @@index([requestedByRole, requestedByUserId])
+}
+
 
 model AppSettings {
   id         Int @id @default(1)
@@ -206,4 +239,20 @@ enum TeacherSettlementStatus {
   PENDING
   ACTIVE
   DISABLED
+}
+
+enum BackgroundJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum BackgroundJobType {
+  DAILY_FEE_REMINDER
+  ANNUAL_STUDENT_PROMOTION
+  ASSISTANT_BULK_REMINDER
+  ASSISTANT_BULK_MARK_PAID
+  PAYMENT_RECONCILIATION
+  REPORT_GENERATION
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -9,14 +9,22 @@ import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection, fadeUpItem, staggerContainer } from "../components/motion/primitives.jsx";
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
+const PAGE_SIZE = 12;
+
 export default function StudentsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const [students, setStudents] = useState([]);
   const [totalStudents, setTotalStudents] = useState(null);
+  const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [listLoading, setListLoading] = useState(false);
+  const [page, setPage] = useState(
+    () => Math.max(1, Number(searchParams.get("page") || 1) || 1)
+  );
   const [search, setSearch] = useState(() => searchParams.get("search") || "");
+  const [debouncedSearch, setDebouncedSearch] = useState(() => searchParams.get("search") || "");
   const [statusFilter, setStatusFilter] = useState(
     () => searchParams.get("status") || "all"
   );
@@ -31,45 +39,25 @@ export default function StudentsPage() {
   );
   const [fromDate, setFromDate] = useState(() => searchParams.get("from") || "");
   const [toDate, setToDate] = useState(() => searchParams.get("to") || "");
+  const [classes, setClasses] = useState([]);
+  const [schools, setSchools] = useState([]);
+  const requestKeyRef = useRef("");
+  const initialLoadRef = useRef(true);
 
-  // 🔹 Fetch students
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (!token) {
-      window.location.href = "/login";
-      return;
-    }
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+    }, 250);
 
-    const studentsRequest = fetch(`${API_BASE}/api/students`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data)) setStudents(data);
-        else if (Array.isArray(data.students)) setStudents(data.students);
-        else setStudents([]);
-      })
-      .catch((err) => console.error(err));
-
-    const countRequest = fetch(`${API_BASE}/api/students/count`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (typeof data?.totalStudents === "number") setTotalStudents(data.totalStudents);
-      })
-      .catch((err) => console.error(err));
-
-    Promise.allSettled([studentsRequest, countRequest]).finally(() => {
-      setLoading(false);
-    });
-  }, []);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   // 🔹 Sync filters TO URL
   useEffect(() => {
     const params = new URLSearchParams();
 
     if (search) params.set("search", search);
+    if (page > 1) params.set("page", String(page));
     if (statusFilter !== "all") params.set("status", statusFilter);
     if (classFilter !== "all") params.set("class", classFilter);
     if (schoolFilter !== "all") params.set("school", schoolFilter);
@@ -77,8 +65,92 @@ export default function StudentsPage() {
     if (fromDate) params.set("from", fromDate);
     if (toDate) params.set("to", toDate);
 
-    router.replace(`/students?${params.toString()}`, { scroll: false });
-  }, [search, statusFilter, classFilter, schoolFilter, sortOrder, fromDate, toDate, router]);
+    const queryString = params.toString();
+    router.replace(queryString ? `/students?${queryString}` : "/students", {
+      scroll: false,
+    });
+  }, [search, page, statusFilter, classFilter, schoolFilter, sortOrder, fromDate, toDate, router]);
+
+  // 🔹 Fetch students from paginated backend response
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      window.location.href = "/login";
+      return;
+    }
+
+    const params = new URLSearchParams({
+      page: String(page),
+      limit: String(PAGE_SIZE),
+      includeFilters: "1",
+    });
+
+    if (debouncedSearch) params.set("search", debouncedSearch);
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    if (classFilter !== "all") params.set("class", classFilter);
+    if (schoolFilter !== "all") params.set("school", schoolFilter);
+    if (sortOrder !== "none") params.set("sort", sortOrder);
+    if (fromDate) params.set("from", fromDate);
+    if (toDate) params.set("to", toDate);
+
+    const requestKey = params.toString();
+    if (requestKeyRef.current === requestKey) {
+      return;
+    }
+    requestKeyRef.current = requestKey;
+
+    if (initialLoadRef.current) {
+      setLoading(true);
+    } else {
+      setListLoading(true);
+    }
+
+    fetch(`${API_BASE}/api/students?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.message || "Failed to fetch students");
+        }
+        if (requestKeyRef.current !== requestKey) {
+          return;
+        }
+
+        if (Array.isArray(data)) {
+          setStudents(data);
+          setTotalStudents(data.length);
+          setTotalPages(1);
+          setClasses([...new Set(data.map((student) => student.class).filter(Boolean))]);
+          setSchools([...new Set(data.map((student) => student.school).filter(Boolean))]);
+          return;
+        }
+
+        setStudents(Array.isArray(data.students) ? data.students : []);
+        setTotalStudents(typeof data.totalStudents === "number" ? data.totalStudents : 0);
+        const nextTotalPages = data.totalPages || 1;
+        setTotalPages(nextTotalPages);
+        if (page > nextTotalPages) {
+          setPage(nextTotalPages);
+        }
+        setClasses(data.filters?.classes || []);
+        setSchools(data.filters?.schools || []);
+      })
+      .catch((err) => {
+        requestKeyRef.current = "";
+        console.error("Students page fetch error:", err);
+        setStudents([]);
+        setTotalStudents(0);
+        setTotalPages(1);
+      })
+      .finally(() => {
+        if (initialLoadRef.current) {
+          setLoading(false);
+          initialLoadRef.current = false;
+        }
+        setListLoading(false);
+      });
+  }, [page, debouncedSearch, statusFilter, classFilter, schoolFilter, sortOrder, fromDate, toDate]);
 
   // 🔹 CLEAR ALL FILTERS
   const clearAllFilters = () => {
@@ -89,37 +161,10 @@ export default function StudentsPage() {
     setSortOrder("none");
     setFromDate("");
     setToDate("");
+    setPage(1);
 
     router.replace("/students", { scroll: false });
   };
-
-  // 🔹 FILTER + SORT PIPELINE
-  const filtered = students
-  .filter((s) => {
-    const query = search.toLowerCase();
-    return (
-      s?.name?.toLowerCase().includes(query) ||
-      s?.phone?.toLowerCase().includes(query)
-    );
-  })
-  .filter((s) => (statusFilter === "all" ? true : s.feesStatus === statusFilter))
-  .filter((s) => (classFilter === "all" ? true : s.class === classFilter))
-  .filter((s) => (schoolFilter === "all" ? true : s.school === schoolFilter))
-  .filter((s) => {
-    if (!fromDate && !toDate) return true;
-    const joinDate = new Date(s.joinDate);
-    if (fromDate && joinDate < new Date(fromDate)) return false;
-    if (toDate && joinDate > new Date(toDate)) return false;
-    return true;
-  })
-  .sort((a, b) => {
-    if (sortOrder === "az") return a.name.localeCompare(b.name);
-    return 0;
-  });
-
-
-  const classes = [...new Set(students.map((s) => s.class).filter(Boolean))];
-  const schools = [...new Set(students.map((s) => s.school).filter(Boolean))];
 
   if (loading) {
     return <PremiumLoader fullScreen label="Loading students" />;
@@ -151,39 +196,80 @@ export default function StudentsPage() {
           type="text"
           placeholder="Search students..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setPage(1);
+          }}
         />
       </div>
 
       {/* FILTERS */}
       <div className="students-filters">
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+        <select
+          value={statusFilter}
+          onChange={(e) => {
+            setStatusFilter(e.target.value);
+            setPage(1);
+          }}
+        >
           <option value="all">All Fees</option>
           <option value="paid">Paid</option>
           <option value="unpaid">Unpaid</option>
         </select>
 
-        <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value)}>
+        <select
+          value={sortOrder}
+          onChange={(e) => {
+            setSortOrder(e.target.value);
+            setPage(1);
+          }}
+        >
           <option value="none">Sort</option>
           <option value="az">Name A–Z</option>
         </select>
 
-        <select value={classFilter} onChange={(e) => setClassFilter(e.target.value)}>
+        <select
+          value={classFilter}
+          onChange={(e) => {
+            setClassFilter(e.target.value);
+            setPage(1);
+          }}
+        >
           <option value="all">All Classes</option>
           {classes.map((cls) => (
             <option key={cls} value={cls}>{cls}</option>
           ))}
         </select>
 
-        <select value={schoolFilter} onChange={(e) => setSchoolFilter(e.target.value)}>
+        <select
+          value={schoolFilter}
+          onChange={(e) => {
+            setSchoolFilter(e.target.value);
+            setPage(1);
+          }}
+        >
           <option value="all">All Schools</option>
           {schools.map((s) => (
             <option key={s} value={s}>{s}</option>
           ))}
         </select>
 
-        <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-        <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+        <input
+          type="date"
+          value={fromDate}
+          onChange={(e) => {
+            setFromDate(e.target.value);
+            setPage(1);
+          }}
+        />
+        <input
+          type="date"
+          value={toDate}
+          onChange={(e) => {
+            setToDate(e.target.value);
+            setPage(1);
+          }}
+        />
 
         {/* ✅ CLEAR ALL BUTTON */}
         <MotionButton
@@ -202,7 +288,7 @@ export default function StudentsPage() {
         initial="hidden"
         animate="visible"
       >
-        {filtered.map((student) => (
+        {students.map((student) => (
           <motion.div key={student.id} variants={fadeUpItem} whileHover={{ y: -4 }}>
             <Link
               href={`/students/${student.id}`}
@@ -223,7 +309,36 @@ export default function StudentsPage() {
             </Link>
           </motion.div>
         ))}
+        {!students.length ? (
+          <MotionCard className="students-empty-state" hover={false}>
+            No students match the current filters.
+          </MotionCard>
+        ) : null}
       </motion.div>
+
+      {totalPages > 1 ? (
+        <div className="students-pagination">
+          <MotionButton
+            type="button"
+            className="students-page-btn"
+            disabled={listLoading || page === 1}
+            onClick={() => setPage((current) => Math.max(1, current - 1))}
+          >
+            Previous
+          </MotionButton>
+          <span className="students-page-indicator">
+            {listLoading ? "Updating results…" : `Page ${page} of ${totalPages}`}
+          </span>
+          <MotionButton
+            type="button"
+            className="students-page-btn"
+            disabled={listLoading || page >= totalPages}
+            onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+          >
+            Next
+          </MotionButton>
+        </div>
+      ) : null}
     </motion.div>
   );
 }

@@ -1,10 +1,14 @@
 import prisma from "../prisma/client.js";
 import { getAcademicYear } from "../utils/academicYear.js";
 import {
-  getDueMonthsForReminder,
-  sendFeeReminderWhatsApp,
-  sendFeePaidWhatsAppNotification,
-} from "../services/whatsappservice.js";
+  markPaidForStudent,
+  sendReminderToStudent,
+} from "../services/feeOpsService.js";
+import {
+  BACKGROUND_JOB_TYPES,
+  createBackgroundJob,
+  getBackgroundJobStatus,
+} from "../services/backgroundJobService.js";
 
 const MONTH_ALIASES = {
   march: "March",
@@ -103,87 +107,7 @@ const matchStudentsFromPrompt = (promptText, students) => {
   return matched;
 };
 
-const getPaidMonthsSet = (payments) => {
-  const set = new Set();
-  for (const payment of payments || []) {
-    if (payment?.status === "paid" && payment?.month) {
-      set.add(payment.month);
-    }
-  }
-  return set;
-};
-
-const markPaidForStudent = async ({
-  student,
-  month,
-  academicYear,
-  monthlyFee,
-}) => {
-  const existing = await prisma.payment.findFirst({
-    where: {
-      studentId: Number(student.id),
-      month,
-      academicYear,
-      status: "paid",
-    },
-  });
-
-  if (existing) {
-    return { status: "already_paid", payment: existing };
-  }
-
-  const payment = await prisma.payment.create({
-    data: {
-      studentId: Number(student.id),
-      month,
-      academicYear,
-      amount: Number(monthlyFee),
-      status: "paid",
-    },
-  });
-
-  sendFeePaidWhatsAppNotification({
-    student,
-    payment,
-    mode: "cash",
-  }).catch((err) => {
-    console.error("Assistant WhatsApp fee-paid send failed:", err.message);
-  });
-
-  return { status: "created", payment };
-};
-
-const sendReminderToStudent = async ({
-  student,
-  month,
-  academicYear,
-  monthlyFee,
-}) => {
-  const paidMonths = student.payments.map((p) => p.month);
-  const paidSet = getPaidMonthsSet(student.payments);
-
-  let dueMonths = [];
-  if (month) {
-    if (!paidSet.has(month)) dueMonths = [month];
-  } else {
-    dueMonths = getDueMonthsForReminder({ paidMonths });
-  }
-
-  if (!dueMonths.length) {
-    return { sent: false, reason: "No due months" };
-  }
-
-  await sendFeeReminderWhatsApp({
-    student,
-    dueMonths,
-    monthlyFee,
-    academicYear,
-  });
-
-  return { sent: true, dueMonths };
-};
-
-const runMarkPaidCommand = async (promptText) => {
+const runMarkPaidCommand = async (promptText, requestedByUserId = null) => {
   const month = extractMonth(promptText);
   if (!month) {
     return { ok: false, message: "Please mention month. Example: mark paid for Rahul for March" };
@@ -195,12 +119,35 @@ const runMarkPaidCommand = async (promptText) => {
     return { ok: false, message: "Monthly fee not configured." };
   }
 
+  const applyAll = /\ball\s+students\b/i.test(promptText) || /\ball\b/i.test(promptText);
+  if (applyAll) {
+    const { job, created } = await createBackgroundJob({
+      type: BACKGROUND_JOB_TYPES.ASSISTANT_BULK_MARK_PAID,
+      source: "admin-assistant",
+      requestedByRole: "admin",
+      requestedByUserId,
+      payload: {
+        month,
+        academicYear,
+        monthlyFee: settings.monthlyFee,
+      },
+    });
+
+    return {
+      ok: true,
+      queued: true,
+      jobId: job.id,
+      message: created
+        ? `Bulk mark-paid job queued for ${month}. Job ID: ${job.id}.`
+        : `Bulk mark-paid job is already queued. Job ID: ${job.id}.`,
+    };
+  }
+
   const allStudents = await prisma.student.findMany({
     select: { id: true, name: true, phone: true },
     orderBy: { id: "asc" },
   });
 
-  const applyAll = /\ball\s+students\b/i.test(promptText) || /\ball\b/i.test(promptText);
   const targets = applyAll ? allStudents : matchStudentsFromPrompt(promptText, allStudents);
 
   if (!targets.length) {
@@ -215,6 +162,7 @@ const runMarkPaidCommand = async (promptText) => {
       month,
       academicYear,
       monthlyFee: settings.monthlyFee,
+      teacherAdminId: requestedByUserId,
     });
     if (result.status === "created") created += 1;
     if (result.status === "already_paid") alreadyPaid += 1;
@@ -226,11 +174,35 @@ const runMarkPaidCommand = async (promptText) => {
   };
 };
 
-const runReminderCommand = async (promptText) => {
+const runReminderCommand = async (promptText, requestedByUserId = null) => {
   const month = extractMonth(promptText);
   const academicYear = getAcademicYear();
   const settings = await prisma.appSettings.findUnique({ where: { id: 1 } });
   const monthlyFee = settings?.monthlyFee || 0;
+
+  const applyAll = /\ball\s+students\b/i.test(promptText) || /\ball\b/i.test(promptText);
+  if (applyAll) {
+    const { job, created } = await createBackgroundJob({
+      type: BACKGROUND_JOB_TYPES.ASSISTANT_BULK_REMINDER,
+      source: "admin-assistant",
+      requestedByRole: "admin",
+      requestedByUserId,
+      payload: {
+        month,
+        academicYear,
+        monthlyFee,
+      },
+    });
+
+    return {
+      ok: true,
+      queued: true,
+      jobId: job.id,
+      message: created
+        ? `Reminder job queued${month ? ` for ${month}` : ""}. Job ID: ${job.id}.`
+        : `Reminder job is already queued. Job ID: ${job.id}.`,
+    };
+  }
 
   const allStudents = await prisma.student.findMany({
     include: {
@@ -242,7 +214,6 @@ const runReminderCommand = async (promptText) => {
     orderBy: { id: "asc" },
   });
 
-  const applyAll = /\ball\s+students\b/i.test(promptText) || /\ball\b/i.test(promptText);
   const targets = applyAll ? allStudents : matchStudentsFromPrompt(promptText, allStudents);
 
   if (!targets.length) {
@@ -281,28 +252,40 @@ const runListUnpaidCommand = async (promptText) => {
   }
 
   const academicYear = getAcademicYear();
-  const students = await prisma.student.findMany({
-    include: {
-      payments: {
-        where: { academicYear, month, status: "paid" },
-        select: { id: true },
+  const unpaidWhere = {
+    payments: {
+      none: {
+        academicYear,
+        month,
+        status: "paid",
       },
     },
-    orderBy: { name: "asc" },
-  });
+  };
 
-  const unpaid = students.filter((s) => s.payments.length === 0);
-  if (!unpaid.length) {
+  const [unpaidCount, unpaidPreview] = await Promise.all([
+    prisma.student.count({ where: unpaidWhere }),
+    prisma.student.findMany({
+      where: unpaidWhere,
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+      },
+      orderBy: { name: "asc" },
+      take: 80,
+    }),
+  ]);
+
+  if (!unpaidCount) {
     return { ok: true, message: `No unpaid students found for ${month}.` };
   }
 
-  const lines = unpaid
-    .slice(0, 80)
+  const lines = unpaidPreview
     .map((s, index) => `${index + 1}. ${s.name} - ${s.phone || "No phone"}`);
 
   return {
     ok: true,
-    message: `Unpaid for ${month}: ${unpaid.length} student(s)\n${lines.join("\n")}${unpaid.length > 80 ? "\n..." : ""}`,
+    message: `Unpaid for ${month}: ${unpaidCount} student(s)\n${lines.join("\n")}${unpaidCount > 80 ? "\n..." : ""}`,
   };
 };
 
@@ -473,12 +456,13 @@ export const adminAssistantChat = async (req, res) => {
     }
 
     const intent = detectIntent(prompt);
+    const adminUserId = Number(req.user?.id || 0) || null;
 
     let result;
     if (intent === "markPaid") {
-      result = await runMarkPaidCommand(prompt);
+      result = await runMarkPaidCommand(prompt, adminUserId);
     } else if (intent === "reminder") {
-      result = await runReminderCommand(prompt);
+      result = await runReminderCommand(prompt, adminUserId);
     } else if (intent === "listUnpaid") {
       result = await runListUnpaidCommand(prompt);
     } else if (intent === "updateStudent") {
@@ -501,5 +485,23 @@ export const adminAssistantChat = async (req, res) => {
   } catch (err) {
     console.error("adminAssistantChat error:", err);
     return res.status(500).json({ ok: false, message: "Assistant failed to process request" });
+  }
+};
+
+export const getAdminAssistantJobStatus = async (req, res) => {
+  try {
+    if (req.userRole !== "admin") {
+      return res.status(403).json({ ok: false, message: "Forbidden: Admin only" });
+    }
+
+    const job = await getBackgroundJobStatus(String(req.params.jobId || ""));
+    if (!job) {
+      return res.status(404).json({ ok: false, message: "Job not found" });
+    }
+
+    return res.json({ ok: true, job });
+  } catch (err) {
+    console.error("getAdminAssistantJobStatus error:", err);
+    return res.status(500).json({ ok: false, message: "Failed to fetch job status" });
   }
 };

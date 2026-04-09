@@ -120,6 +120,12 @@
   gap: 16px;
 }
 
+.students-empty-state {
+  padding: 18px;
+  text-align: center;
+  color: #475569;
+}
+
 .student-card {
   background: #ffffff;
   padding: 18px 22px;
@@ -177,6 +183,25 @@
   margin: 0;
   font-size: 15px;
   font-weight: 500;
+  color: #334155;
+}
+
+.students-pagination {
+  margin-top: 22px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.students-page-btn {
+  min-width: 108px;
+}
+
+.students-page-indicator {
+  font-size: 14px;
+  font-weight: 600;
   color: #334155;
 }
 
@@ -284,6 +309,10 @@
   .student-card p {
     font-size: 14px;
   }
+
+  .students-pagination {
+    gap: 10px;
+  }
 }
 
 /* === Small Mobile (500px) === */
@@ -303,6 +332,11 @@
 
   .student-card {
     padding: 15px 18px;
+  }
+
+  .students-page-indicator {
+    width: 100%;
+    text-align: center;
   }
 }
 
