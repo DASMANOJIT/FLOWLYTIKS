@@ -106,13 +106,21 @@ export default function PayPage() {
         "Unable to initialize checkout right now."
       );
 
-      if (!ok || !data.paymentSessionId) {
+      console.log("Payment initiate response:", data);
+      console.log("payment_session_id from backend:", data?.payment_session_id);
+      console.log("paymentSessionId from backend:", data?.paymentSessionId);
+
+      const paymentSessionId =
+        String(data?.payment_session_id || data?.paymentSessionId || "").trim() || null;
+
+      if (!ok || !paymentSessionId) {
+        console.error("Cashfree payment initiate response is malformed:", data);
         alert(error || data.message || "Payment initiation failed");
         return;
       }
 
       await openCashfreeCheckout({
-        paymentSessionId: data.paymentSessionId,
+        paymentSessionId,
         environment: data.environment,
       });
     } catch (err) {

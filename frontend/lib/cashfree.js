@@ -40,6 +40,16 @@ export const loadCashfreeSdk = () => {
 };
 
 export const openCashfreeCheckout = async ({ paymentSessionId, environment }) => {
+  const normalizedPaymentSessionId =
+    String(paymentSessionId || "").trim() || null;
+  if (!normalizedPaymentSessionId) {
+    console.error("Cashfree checkout aborted: missing payment_session_id", {
+      paymentSessionId,
+      environment,
+    });
+    throw new Error("Missing payment_session_id from backend");
+  }
+
   const factory = await loadCashfreeSdk();
   if (typeof factory !== "function") {
     throw new Error("Cashfree checkout is unavailable right now.");
@@ -50,7 +60,7 @@ export const openCashfreeCheckout = async ({ paymentSessionId, environment }) =>
   });
 
   return cashfree.checkout({
-    paymentSessionId,
+    paymentSessionId: normalizedPaymentSessionId,
     redirectTarget: "_self",
   });
 };

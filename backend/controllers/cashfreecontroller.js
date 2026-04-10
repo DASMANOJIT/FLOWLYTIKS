@@ -130,8 +130,8 @@ const getRequiredUrlFromEnv = (name) => {
 };
 
 const getNotifyUrl = () => {
-  const backendBaseUrl = String(process.env.BACKEND_URL || "http://localhost:5000").trim();
-  return `${backendBaseUrl.replace(/\/$/, "")}/api/payments/cashfree/webhook`;
+  const backendBaseUrl = getRequiredUrlFromEnv("BACKEND_URL");
+  return `${backendBaseUrl.toString().replace(/\/$/, "")}/api/payments/cashfree/webhook`;
 };
 
 const getReturnUrl = ({ paymentId, gatewayOrderId, cashfreeOrderId }) => {
@@ -157,6 +157,36 @@ const parseGatewayDate = (value) => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
+const unwrapCashfreeResponse = (response) => {
+  if (
+    response &&
+    typeof response === "object" &&
+    response.data &&
+    typeof response.data === "object" &&
+    !Array.isArray(response.data)
+  ) {
+    return response.data;
+  }
+
+  return response;
+};
+
+const extractCashfreeOrderResponse = (response) => {
+  const payload = unwrapCashfreeResponse(response) || {};
+
+  return {
+    raw: payload,
+    paymentSessionId:
+      String(payload?.payment_session_id || payload?.paymentSessionId || "").trim() || null,
+    cfOrderId:
+      String(payload?.cf_order_id || payload?.cfOrderId || "").trim() || null,
+    orderStatus: String(payload?.order_status || payload?.orderStatus || "").trim() || null,
+    orderExpiryTime: parseGatewayDate(
+      payload?.order_expiry_time || payload?.orderExpiryTime || null
+    ),
+  };
+};
+
 const resolveTeacherAdminId = async () => {
   const admins = await prisma.admin.findMany({
     orderBy: { id: "asc" },
@@ -180,6 +210,9 @@ const getReusableGatewayOrder = async (paymentId) =>
       createdAt: "desc",
     },
   });
+
+const getGatewayOrderEnvironment = (gatewayOrder) =>
+  String(gatewayOrder?.metadata?.cashfreeEnvironment || "").trim().toLowerCase();
 
 const syncPaymentAttempts = async (db, gatewayOrderId, cashfreeOrderId, payments = []) => {
   for (const payment of payments) {
@@ -369,6 +402,9 @@ const formatCreateOrderResponse = (gatewayOrder) => ({
   paymentId: gatewayOrder.paymentId,
   gatewayOrderId: gatewayOrder.id,
   cashfreeOrderId: gatewayOrder.cashfreeOrderId,
+  cf_order_id: gatewayOrder.cashfreeCfOrderId || null,
+  cfOrderId: gatewayOrder.cashfreeCfOrderId || null,
+  payment_session_id: gatewayOrder.paymentSessionId,
   paymentSessionId: gatewayOrder.paymentSessionId,
   amount: gatewayOrder.amount,
   currency: gatewayOrder.currency,
@@ -460,8 +496,14 @@ export const createCashfreeHostedOrder = async (req, res) => {
           });
         }
 
+        const currentCashfreeEnvironment = getCashfreeEnvironment();
         const reusableOrder = await getReusableGatewayOrder(payment.id);
-        if (reusableOrder?.paymentSessionId) {
+        const reusableOrderEnvironment = getGatewayOrderEnvironment(reusableOrder);
+        if (
+          reusableOrder?.paymentSessionId &&
+          reusableOrderEnvironment &&
+          reusableOrderEnvironment === currentCashfreeEnvironment
+        ) {
           const expiry = reusableOrder.orderExpiryTime?.getTime?.() || 0;
           if (!expiry || expiry > Date.now()) {
             return { reusableOrder };
@@ -471,29 +513,38 @@ export const createCashfreeHostedOrder = async (req, res) => {
         if (reusableOrder?.cashfreeOrderId) {
           try {
             const existingCashfreeOrder = await fetchCashfreeOrder(reusableOrder.cashfreeOrderId);
-            if (existingCashfreeOrder?.payment_session_id) {
+            const normalizedExistingCashfreeOrder =
+              extractCashfreeOrderResponse(existingCashfreeOrder);
+
+            if (normalizedExistingCashfreeOrder.paymentSessionId) {
               const updatedReusableOrder = await prisma.paymentGatewayOrder.update({
                 where: { id: reusableOrder.id },
                 data: {
                   status:
-                    existingCashfreeOrder.order_status === "PAID" ? "PAID" : "INITIATED",
-                  paymentSessionId: existingCashfreeOrder.payment_session_id,
-                  cashfreeCfOrderId: existingCashfreeOrder.cf_order_id
-                    ? String(existingCashfreeOrder.cf_order_id)
-                    : reusableOrder.cashfreeCfOrderId,
-                  orderStatus: existingCashfreeOrder.order_status || reusableOrder.orderStatus,
+                    normalizedExistingCashfreeOrder.orderStatus === "PAID"
+                      ? "PAID"
+                      : "INITIATED",
+                  paymentSessionId: normalizedExistingCashfreeOrder.paymentSessionId,
+                  cashfreeCfOrderId:
+                    normalizedExistingCashfreeOrder.cfOrderId || reusableOrder.cashfreeCfOrderId,
+                  orderStatus:
+                    normalizedExistingCashfreeOrder.orderStatus || reusableOrder.orderStatus,
                   orderExpiryTime:
-                    parseGatewayDate(existingCashfreeOrder.order_expiry_time) ||
+                    normalizedExistingCashfreeOrder.orderExpiryTime ||
                     reusableOrder.orderExpiryTime,
-                  rawCreateResponse: existingCashfreeOrder,
+                  metadata: {
+                    ...(reusableOrder.metadata || {}),
+                    cashfreeEnvironment: currentCashfreeEnvironment,
+                  },
+                  rawCreateResponse: normalizedExistingCashfreeOrder.raw,
                 },
               });
 
-              if (existingCashfreeOrder.order_status === "PAID") {
+              if (normalizedExistingCashfreeOrder.orderStatus === "PAID") {
                 const payments = await fetchCashfreePaymentsForOrder(reusableOrder.cashfreeOrderId);
                 await finalizeCashfreeState({
                   gatewayOrder: updatedReusableOrder,
-                  order: existingCashfreeOrder,
+                  order: normalizedExistingCashfreeOrder.raw,
                   payments,
                   source: "create-order-recovery",
                 });
@@ -527,6 +578,7 @@ export const createCashfreeHostedOrder = async (req, res) => {
             notifyUrl: getNotifyUrl(),
             metadata: {
               preferredMethod,
+              cashfreeEnvironment: currentCashfreeEnvironment,
             },
           },
         });
@@ -544,9 +596,11 @@ export const createCashfreeHostedOrder = async (req, res) => {
           month,
           academicYear,
         });
+        console.log("CASHFREE_ENVIRONMENT =", process.env.CASHFREE_ENVIRONMENT);
+        console.log("RETURN_URL =", process.env.CASHFREE_RETURN_URL);
 
         try {
-          const orderResponse = await createCashfreeOrder({
+          const cashfreeResponse = await createCashfreeOrder({
             orderId: cashfreeOrderId,
             amount: student.monthlyFee,
             customer: {
@@ -568,19 +622,38 @@ export const createCashfreeHostedOrder = async (req, res) => {
             idempotencyKey: gatewayOrder.id,
           });
 
+          console.log(
+            "Cashfree create order raw response =",
+            JSON.stringify(cashfreeResponse?.data || cashfreeResponse, null, 2)
+          );
+
+          const normalizedOrderResponse = extractCashfreeOrderResponse(cashfreeResponse);
+          const payment_session_id = normalizedOrderResponse.paymentSessionId;
+          const cf_order_id = normalizedOrderResponse.cfOrderId;
+
+          if (!payment_session_id) {
+            console.error(
+              "Cashfree order response missing payment_session_id",
+              cashfreeResponse?.data || cashfreeResponse
+            );
+            const missingSessionError = new Error(
+              "Cashfree did not return payment_session_id"
+            );
+            missingSessionError.status = 500;
+            throw missingSessionError;
+          }
+
           const updatedGatewayOrder = await prisma.paymentGatewayOrder.update({
             where: { id: gatewayOrder.id },
             data: {
               status: "INITIATED",
-              cashfreeCfOrderId: orderResponse?.cf_order_id
-                ? String(orderResponse.cf_order_id)
-                : null,
-              paymentSessionId: orderResponse?.payment_session_id || null,
-              orderStatus: orderResponse?.order_status || "ACTIVE",
-              orderExpiryTime: parseGatewayDate(orderResponse?.order_expiry_time),
+              cashfreeCfOrderId: cf_order_id,
+              paymentSessionId: payment_session_id,
+              orderStatus: normalizedOrderResponse.orderStatus || "ACTIVE",
+              orderExpiryTime: normalizedOrderResponse.orderExpiryTime,
               returnUrl,
               notifyUrl: getNotifyUrl(),
-              rawCreateResponse: orderResponse,
+              rawCreateResponse: normalizedOrderResponse.raw,
             },
           });
 
@@ -597,6 +670,7 @@ export const createCashfreeHostedOrder = async (req, res) => {
             gatewayOrderId: updatedGatewayOrder.id,
             cashfreeOrderId,
           });
+          console.log("Sending payment_session_id to frontend =", payment_session_id);
 
           return { gatewayOrder: updatedGatewayOrder };
         } catch (error) {
@@ -643,7 +717,12 @@ export const createCashfreeHostedOrder = async (req, res) => {
       return jsonError(res, 502, "Unable to initialize Cashfree checkout right now.");
     }
 
-    return jsonSuccess(res, formatCreateOrderResponse(gatewayOrder));
+    const responsePayload = formatCreateOrderResponse(gatewayOrder);
+    console.log(
+      "Sending payment_session_id to frontend =",
+      responsePayload.payment_session_id
+    );
+    return jsonSuccess(res, responsePayload);
   } catch (error) {
     console.error("CASHFREE CREATE ORDER ERROR:", error?.message || error);
     const status = Number(error?.status || error?.statusCode || 500);
