@@ -1,5 +1,16 @@
+import fs from "fs/promises";
+import path from "path";
+import prisma from "../prisma/client.js";
+
 const WHATSAPP_API_VERSION = process.env.WHATSAPP_API_VERSION || "v20.0";
 const WHATSAPP_GRAPH_URL = process.env.WHATSAPP_GRAPH_URL || "https://graph.facebook.com";
+const RECEIPT_PRIMARY_COLOR = "#ff3131";
+const RECEIPT_SECONDARY_COLOR = "#ff914d";
+const RECEIPT_BORDER_COLOR = "#e8ecf1";
+const RECEIPT_TEXT_COLOR = "#282828";
+const RECEIPT_MUTED_TEXT_COLOR = "#6e7681";
+const RECEIPT_SUCCESS_COLOR = "#22c55e";
+const DEFAULT_INSTITUTE_NAME = "Subho's Computer Institute";
 
 const MONTHS = [
   "March",
@@ -38,6 +49,177 @@ const whatsappEndpoint = (suffix) =>
 const whatsappHeaders = () => ({
   Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
 });
+
+const resolveInstituteName = () => {
+  const raw = String(process.env.EMAIL_FROM || "").trim();
+  const match = raw.match(/^"?([^"<]+?)"?\s*</);
+  return match?.[1]?.trim() || DEFAULT_INSTITUTE_NAME;
+};
+
+const formatReceiptDate = (value) =>
+  value
+    ? new Intl.DateTimeFormat("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        timeZone: "Asia/Kolkata",
+      }).format(new Date(value))
+    : "-";
+
+const formatReceiptCurrency = (amount, currency = "INR") =>
+  new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 0,
+  }).format(Number(amount || 0));
+
+const formatPaymentMethodLabel = ({ payment, gatewayOrder, latestAttempt, mode }) => {
+  const rawMethod =
+    latestAttempt?.paymentMethod ||
+    gatewayOrder?.paymentMethod ||
+    gatewayOrder?.paymentMethodHint ||
+    payment?.paymentProvider ||
+    mode ||
+    "";
+
+  switch (String(rawMethod || "").trim().toUpperCase()) {
+    case "UPI":
+      return "UPI";
+    case "CC":
+    case "DC":
+    case "CARD":
+      return "Card";
+    case "NB":
+    case "NETBANK":
+    case "NETBANKING":
+      return "Net Banking";
+    case "PHONEPE":
+      return "UPI";
+    case "CASHFREE":
+      return "Online Payment";
+    case "CASH":
+      return "Cash";
+    default:
+      return rawMethod ? String(rawMethod) : "Online Payment";
+  }
+};
+
+const buildReceiptNumber = (payment) =>
+  `FL-${payment?.academicYear || new Date().getFullYear()}-${String(
+    payment?.id || 0
+  ).padStart(6, "0")}`;
+
+const getReceiptLogoCandidates = () => [
+  path.resolve(process.cwd(), "../frontend/public/logo.png"),
+  path.resolve(process.cwd(), "frontend/public/logo.png"),
+  path.resolve(process.cwd(), "public/logo.png"),
+];
+
+const loadReceiptLogoBuffer = async () => {
+  for (const candidate of getReceiptLogoCandidates()) {
+    try {
+      return await fs.readFile(candidate);
+    } catch {
+      // Try next candidate path.
+    }
+  }
+
+  return null;
+};
+
+const enrichReceiptStudent = async (student) => {
+  if (!student?.id) return student || null;
+
+  const fullStudent = await prisma.student.findUnique({
+    where: { id: Number(student.id) },
+    select: {
+      id: true,
+      name: true,
+      class: true,
+      school: true,
+      phone: true,
+      email: true,
+    },
+  });
+
+  return {
+    ...fullStudent,
+    ...student,
+  };
+};
+
+const enrichReceiptGatewayMeta = async (paymentId) => {
+  if (!paymentId) return null;
+
+  return prisma.paymentGatewayOrder.findFirst({
+    where: { paymentId: Number(paymentId) },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      provider: true,
+      cashfreeOrderId: true,
+      cashfreeCfOrderId: true,
+      paymentMethod: true,
+      paymentMethodHint: true,
+      gatewayReference: true,
+      paidAt: true,
+      attempts: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: {
+          cfPaymentId: true,
+          paymentMethod: true,
+          gatewayPaymentId: true,
+          gatewayOrderReference: true,
+          bankReference: true,
+        },
+      },
+    },
+  });
+};
+
+const drawReceiptSection = ({ doc, title, rows, startY, width }) => {
+  const rowHeight = 14;
+  const sectionHeight = 26 + rows.length * rowHeight + 10;
+
+  doc
+    .lineWidth(1)
+    .fillColor("#ffffff")
+    .strokeColor(RECEIPT_BORDER_COLOR)
+    .roundedRect(40, startY, width, sectionHeight, 8)
+    .fillAndStroke();
+
+  doc.fillColor(RECEIPT_TEXT_COLOR).font("Helvetica-Bold").fontSize(11.5).text(title, 54, startY + 9);
+  doc
+    .strokeColor(RECEIPT_PRIMARY_COLOR)
+    .lineWidth(1.8)
+    .moveTo(54, startY + 21)
+    .lineTo(132, startY + 21)
+    .stroke();
+
+  let rowY = startY + 32;
+  rows.forEach(([label, value], index) => {
+    if (index > 0) {
+      doc
+        .moveTo(52, rowY - 4)
+        .lineTo(40 + width - 12, rowY - 4)
+        .strokeColor(RECEIPT_BORDER_COLOR)
+        .lineWidth(0.6)
+        .stroke();
+    }
+
+    doc.fillColor(RECEIPT_MUTED_TEXT_COLOR).font("Helvetica-Bold").fontSize(10).text(label, 54, rowY, {
+      width: 140,
+    });
+    doc.fillColor(RECEIPT_TEXT_COLOR).font("Helvetica").fontSize(10).text(String(value || "-"), 200, rowY, {
+      width: width - 170,
+      align: "left",
+    });
+    rowY += rowHeight;
+  });
+
+  return startY + sectionHeight + 16;
+};
 
 export const sendWhatsAppTemplateMessage = async ({
   to,
@@ -130,24 +312,145 @@ export const createPaymentReceiptPdf = async ({ student, payment, mode }) => {
     doc.on("error", reject);
     doc.on("end", () => resolve(Buffer.concat(chunks)));
 
-    doc.fontSize(22).text("Fee Payment Receipt", { align: "center" });
-    doc.moveDown(1.5);
+    (async () => {
+      const receiptStudent = await enrichReceiptStudent(student);
+      const gatewayOrder = await enrichReceiptGatewayMeta(payment?.id);
+      const latestAttempt = gatewayOrder?.attempts?.[0] || null;
+      const logoBuffer = await loadReceiptLogoBuffer();
+      const instituteName = resolveInstituteName();
+      const generatedAt = new Date();
+      const academicYearLabel = payment?.academicYear
+        ? `${payment.academicYear}-${payment.academicYear + 1}`
+        : "-";
+      const receiptNumber = buildReceiptNumber(payment);
+      const pageWidth = doc.page.width;
+      const contentWidth = pageWidth - 80;
+      const paymentStatus = String(payment?.status || "paid").toUpperCase();
+      const amountPaid = formatReceiptCurrency(payment?.amount, payment?.currency || "INR");
+      const receiptDate = formatReceiptDate(generatedAt);
+      const transactionId =
+        latestAttempt?.cfPaymentId ||
+        latestAttempt?.gatewayPaymentId ||
+        payment?.phonepePaymentId ||
+        payment?.phonepeTransactionId ||
+        String(payment?.id || "-");
 
-    doc.fontSize(12);
-    doc.text(`Student Name: ${student?.name || "-"}`);
-    doc.text(`Student ID: ${student?.id || "-"}`);
-    doc.text(`Phone: ${student?.phone || "-"}`);
-    doc.moveDown(0.8);
-    doc.text(`Month: ${payment?.month || "-"}`);
-    doc.text(`Academic Year: ${payment?.academicYear || "-"}`);
-    doc.text(`Amount Paid: INR ${payment?.amount || 0}`);
-    doc.text(`Status: ${payment?.status || "paid"}`);
-    doc.text(`Payment Mode: ${mode || "online"}`);
-    doc.text(`Receipt Date: ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`);
-    doc.moveDown(1.2);
-    doc.text("This is a system generated receipt.", { align: "left" });
+      doc.rect(0, 0, pageWidth, 14).fill(RECEIPT_PRIMARY_COLOR);
+      doc.rect(0, 14, pageWidth, 4).fill(RECEIPT_SECONDARY_COLOR);
 
-    doc.end();
+      doc.fillColor(RECEIPT_PRIMARY_COLOR).roundedRect(40, 24, 56, 56, 10).fill();
+      if (logoBuffer) {
+        doc.image(logoBuffer, 44, 28, {
+          fit: [48, 48],
+        });
+      }
+
+      doc
+        .moveTo(112, 52)
+        .lineTo(pageWidth - 44, 52)
+        .strokeColor(RECEIPT_BORDER_COLOR)
+        .lineWidth(0.9)
+        .stroke();
+      doc
+        .moveTo(112, 60)
+        .lineTo(190, 60)
+        .strokeColor(RECEIPT_SECONDARY_COLOR)
+        .lineWidth(2)
+        .stroke();
+
+      doc.fillColor(RECEIPT_TEXT_COLOR).font("Helvetica-Bold").fontSize(20).text("Payment Receipt", 40, 102, {
+        width: contentWidth,
+        align: "center",
+      });
+      doc.fillColor(RECEIPT_MUTED_TEXT_COLOR).font("Helvetica").fontSize(10.5).text(
+        "Tuition fee payment acknowledgement",
+        40,
+        122,
+        {
+          width: contentWidth,
+          align: "center",
+        }
+      );
+
+      doc
+        .lineWidth(1)
+        .fillColor("#ffffff")
+        .strokeColor(RECEIPT_BORDER_COLOR)
+        .roundedRect(40, 144, contentWidth, 60, 10)
+        .fillAndStroke();
+      doc
+        .moveTo(52, 158)
+        .lineTo(pageWidth - 52, 158)
+        .strokeColor(RECEIPT_PRIMARY_COLOR)
+        .lineWidth(1.2)
+        .stroke();
+
+      doc.fillColor(RECEIPT_MUTED_TEXT_COLOR).font("Helvetica").fontSize(10);
+      doc.text("Receipt Number", 56, 171);
+      doc.text("Receipt Date", 194, 171);
+      doc.text("Payment Status", 312, 171);
+      doc.text("Amount Paid", 442, 171);
+
+      doc.fillColor(RECEIPT_TEXT_COLOR).font("Helvetica-Bold").fontSize(11);
+      doc.text(receiptNumber, 56, 186, { width: 124 });
+      doc.fillColor(RECEIPT_TEXT_COLOR).text(receiptDate, 194, 186, { width: 90 });
+      doc.fillColor(RECEIPT_SUCCESS_COLOR).text(paymentStatus, 312, 186, {
+        width: 110,
+      });
+      doc.fillColor(RECEIPT_TEXT_COLOR).text(amountPaid, 442, 186, { width: 70, align: "right" });
+
+      let nextY = 222;
+      nextY = drawReceiptSection({
+        doc,
+        title: "Student Details",
+        rows: [
+          ["Student Name", receiptStudent?.name || "-"],
+          ["Student ID", receiptStudent?.id ? String(receiptStudent.id) : "-"],
+          ["Class / Batch", receiptStudent?.class || "-"],
+          ["Phone Number", receiptStudent?.phone || "-"],
+          ["Email", receiptStudent?.email || "-"],
+          ["School", receiptStudent?.school || "-"],
+        ],
+        startY: nextY,
+        width: contentWidth,
+      });
+
+      nextY = drawReceiptSection({
+        doc,
+        title: "Fee Details",
+        rows: [
+          ["Month / Fee Period", payment?.month || "-"],
+          ["Academic Year", academicYearLabel],
+          [
+            "Payment Method",
+            formatPaymentMethodLabel({ payment, gatewayOrder, latestAttempt, mode }),
+          ],
+          ["Transaction ID", transactionId],
+        ],
+        startY: nextY,
+        width: contentWidth,
+      });
+
+      doc
+        .moveTo(52, doc.page.height - 72)
+        .lineTo(pageWidth - 52, doc.page.height - 72)
+        .strokeColor(RECEIPT_BORDER_COLOR)
+        .lineWidth(0.8)
+        .stroke();
+
+      doc.fillColor(RECEIPT_MUTED_TEXT_COLOR).font("Helvetica").fontSize(10).text(
+        "This is a system generated receipt and does not require a signature.",
+        40,
+        doc.page.height - 56,
+        { width: contentWidth, align: "center" }
+      );
+      doc.text("Please retain this receipt for your institute records.", 40, doc.page.height - 40, {
+        width: contentWidth,
+        align: "center",
+      });
+
+      doc.end();
+    })().catch(reject);
   });
 };
 

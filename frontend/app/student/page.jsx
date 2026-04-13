@@ -5,12 +5,60 @@ import { motion } from "framer-motion";
 import "./student.css";
 import Nav from "../components/navbar/navbar.jsx";
 import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection } from "../components/motion/primitives.jsx";
 import GreetingPanel from "../components/dashboard/GreetingPanel.jsx";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
+const RECEIPT_INSTITUTE_NAME = "Subho's Computer Institute";
+const RECEIPT_PRIMARY = [255, 49, 49];
+const RECEIPT_SECONDARY = [255, 145, 77];
+const RECEIPT_TEXT_DARK = [40, 40, 40];
+const RECEIPT_TEXT_MUTED = [110, 118, 129];
+const RECEIPT_PANEL_BG = [246, 247, 249];
+const RECEIPT_BORDER = [232, 236, 241];
+const RECEIPT_SUCCESS = [34, 197, 94];
+
+const formatReceiptDate = (value) =>
+  value
+    ? new Intl.DateTimeFormat("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        timeZone: "Asia/Kolkata",
+      }).format(new Date(value))
+    : "-";
+
+const formatReceiptCurrency = (amount, currency = "INR") =>
+  new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 0,
+  }).format(Number(amount || 0));
+
+const getReceiptPaymentMethod = (payment) =>
+  payment?.receiptMeta?.paymentMethod ||
+  (payment?.phonepeTransactionId ? "UPI" : "Online Payment");
+
+const getReceiptGatewayName = (payment) =>
+  payment?.receiptMeta?.paymentGateway ||
+  (payment?.phonepeTransactionId ? "PhonePe" : "Online Payment");
+
+const getReceiptNumber = (payment) =>
+  payment?.receiptMeta?.receiptNumber ||
+  `FL-${payment?.academicYear || new Date().getFullYear()}-${String(
+    payment?.id || 0
+  ).padStart(6, "0")}`;
+
+const getReceiptFilename = ({ student, payment, month }) => {
+  const namePart = String(student?.name || "student")
+    .trim()
+    .replace(/[^a-z0-9]+/gi, "_")
+    .replace(/^_+|_+$/g, "");
+  return `${namePart || "student"}_${month || payment?.month || "receipt"}_receipt.pdf`;
+};
 
 export default function StudentDashboard() {
   const router = useRouter();
@@ -140,108 +188,205 @@ export default function StudentDashboard() {
   // MODERN & PROFESSIONAL PDF RECEIPT
   // ===============================
   const downloadReceiptPDF = (month) => {
-    const doc = new jsPDF("p", "mm", "a4");
-
-    // ---------- COLORS ----------
-    const textDark = [40, 40, 40];
-    const grayBg = [246, 247, 249];
-
-    // ---------- PAGE SIZE ----------
-    const pageWidth = 210;
-
-    // ---------- HEADER (LINEAR GRADIENT SIMULATION) ----------
-    const headerHeight = 45;
-    const startColor = { r: 255, g: 49, b: 49 };   // #ff3131
-    const endColor = { r: 255, g: 145, b: 77 };  // #ff914d
-
-    for (let i = 0; i < headerHeight; i++) {
-      const r = Math.round(startColor.r + ((endColor.r - startColor.r) * i) / headerHeight);
-      const g = Math.round(startColor.g + ((endColor.g - startColor.g) * i) / headerHeight);
-      const b = Math.round(startColor.b + ((endColor.b - startColor.b) * i) / headerHeight);
-
-      doc.setFillColor(r, g, b);
-      doc.rect(0, i, pageWidth, 1, "F");
+    const payment = payments.find((entry) => entry.month === month && entry.status === "paid");
+    if (!student || !payment) {
+      alert("Receipt details are not available right now.");
+      return;
     }
 
+    const generatedAt = new Date();
+    const receiptNumber = getReceiptNumber(payment);
+    const amountPaid = formatReceiptCurrency(payment?.amount || totalMonthlyFees);
+    const paymentStatus = String(payment?.status || "paid").toUpperCase();
+    const receiptDate = formatReceiptDate(generatedAt);
+    const academicYearLabel = payment?.academicYear
+      ? `${payment.academicYear}-${payment.academicYear + 1}`
+      : "-";
+    const transactionId =
+      payment?.receiptMeta?.cashfreePaymentId ||
+      payment?.receiptMeta?.transactionId ||
+      String(payment?.id || "-");
 
-    // ---------- LOGO (CENTERED) ----------
-    const img = new Image();
-    img.src = "/logo.png";
+    const studentRows = [
+      ["Student Name", student?.name || "-"],
+      ["Student ID", student?.id ? String(student.id) : "-"],
+      ["Class / Batch", student?.class || "-"],
+      ["School", student?.school || "-"],
+      ["Phone Number", student?.phone || "-"],
+      ["Email", student?.email || "-"],
+    ];
 
-    img.onload = () => {
-      const logoSize = 28;
-      const logoX = (pageWidth - logoSize) / 2;
-      const logoY = 8;
+    const feeRows = [
+      ["Month / Fee Period", payment?.month || month || "-"],
+      ["Academic Year", academicYearLabel],
+      ["Payment Method", getReceiptPaymentMethod(payment)],
+      ["Transaction ID", transactionId],
+    ];
 
-      doc.addImage(img, "PNG", logoX, logoY, logoSize, logoSize);
+    const renderReceipt = (logoImage = null) => {
+      const doc = new jsPDF("p", "mm", "a4");
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const accentHeight = 10;
 
-      // ---------- TITLE ----------
-      doc.setFontSize(12);
-      doc.setTextColor(255, 255, 255);
-      doc.text("Payment Receipt", pageWidth / 2, 42, { align: "center" });
+      for (let i = 0; i < accentHeight; i += 1) {
+        const progress = i / accentHeight;
+        const red = Math.round(
+          RECEIPT_PRIMARY[0] + (RECEIPT_SECONDARY[0] - RECEIPT_PRIMARY[0]) * progress
+        );
+        const green = Math.round(
+          RECEIPT_PRIMARY[1] + (RECEIPT_SECONDARY[1] - RECEIPT_PRIMARY[1]) * progress
+        );
+        const blue = Math.round(
+          RECEIPT_PRIMARY[2] + (RECEIPT_SECONDARY[2] - RECEIPT_PRIMARY[2]) * progress
+        );
+        doc.setFillColor(red, green, blue);
+        doc.rect(0, i, pageWidth, 1, "F");
+      }
 
-      // ---------- RECEIPT CARD ----------
-      doc.setFillColor(...grayBg);
-      doc.roundedRect(15, 55, 180, 120, 6, 6, "F");
+      doc.setFillColor(255, 255, 255);
+      doc.rect(0, accentHeight, pageWidth, pageHeight - accentHeight, "F");
 
-      // ---------- CARD TITLE ----------
-      doc.setTextColor(...textDark);
-      doc.setFontSize(15);
-      doc.text("Receipt Details", pageWidth / 2, 72, { align: "center" });
+      doc.setFillColor(...RECEIPT_PRIMARY);
+      doc.roundedRect(15, 16, 28, 28, 6, 6, "F");
+      if (logoImage) {
+        doc.addImage(logoImage, "PNG", 17, 18, 24, 24);
+      }
 
+      doc.setDrawColor(...RECEIPT_BORDER);
       doc.setLineWidth(0.5);
-      doc.line(60, 76, 150, 76);
+      doc.line(48, 30, pageWidth - 15, 30);
+      doc.setDrawColor(...RECEIPT_SECONDARY);
+      doc.setLineWidth(1.4);
+      doc.line(48, 34, 88, 34);
 
-      // ---------- DETAILS ----------
-      doc.setFontSize(11);
-      const leftX = 32;
-      const rightX = 120;
-      let y = 92;
+      doc.setTextColor(...RECEIPT_TEXT_DARK);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(18);
+      doc.text("Payment Receipt", 15, 55);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9.5);
+      doc.setTextColor(...RECEIPT_TEXT_MUTED);
+      doc.text("Tuition fee payment acknowledgement", 15, 61);
 
-      doc.text("Student Name", leftX, y);
-      doc.text(student?.name || "-", rightX, y);
+      doc.setFillColor(255, 255, 255);
+      doc.roundedRect(15, 68, 180, 19, 6, 6, "F");
+      doc.setDrawColor(...RECEIPT_BORDER);
+      doc.roundedRect(15, 68, 180, 19, 6, 6, "S");
+      doc.setDrawColor(...RECEIPT_PRIMARY);
+      doc.setLineWidth(1.2);
+      doc.line(21, 75, pageWidth - 21, 75);
 
-      y += 14;
-      doc.text("Payment Month", leftX, y);
-      doc.text(month, rightX, y);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(...RECEIPT_TEXT_MUTED);
+      doc.setFontSize(8.9);
+      doc.text("Receipt Number", 22, 80);
+      doc.text("Receipt Date", 76, 80);
+      doc.text("Payment Status", 124, 80);
+      doc.text("Amount Paid", 166, 80);
 
-      y += 14;
-      doc.text("Amount Paid", leftX, y);
-      doc.text(`₹ ${totalMonthlyFees}`, rightX, y);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(...RECEIPT_TEXT_DARK);
+      doc.setFontSize(10.2);
+      doc.text(receiptNumber, 22, 85);
+      doc.text(receiptDate, 76, 85);
+      doc.setTextColor(...RECEIPT_SUCCESS);
+      doc.text(paymentStatus, 124, 85);
+      doc.setTextColor(...RECEIPT_TEXT_DARK);
+      doc.text(amountPaid, 166, 85, { align: "left" });
 
-      y += 14;
-      doc.text("Payment Date", leftX, y);
-      doc.text(new Date().toLocaleDateString(), rightX, y);
+      autoTable(doc, {
+        startY: 96,
+        theme: "grid",
+        head: [["Student Details", "Information"]],
+        body: studentRows,
+        styles: {
+          fontSize: 9.5,
+          cellPadding: 3.1,
+          textColor: RECEIPT_TEXT_DARK,
+          lineColor: RECEIPT_BORDER,
+          lineWidth: 0.2,
+          overflow: "linebreak",
+        },
+        headStyles: {
+          fillColor: RECEIPT_PRIMARY,
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+        },
+        alternateRowStyles: {
+          fillColor: RECEIPT_PANEL_BG,
+        },
+        columnStyles: {
+          0: {
+            cellWidth: 54,
+            fontStyle: "bold",
+          },
+          1: {
+            cellWidth: 116,
+          },
+        },
+        margin: { left: 20, right: 20 },
+      });
 
-      y += 14;
-      doc.text("Payment Status", leftX, y);
-      doc.setTextColor(34, 197, 94); // modern green
-      doc.text("PAID", rightX, y);
+      autoTable(doc, {
+        startY: doc.lastAutoTable.finalY + 8,
+        theme: "grid",
+        head: [["Fee Details", "Information"]],
+        body: feeRows,
+        styles: {
+          fontSize: 9.5,
+          cellPadding: 3.1,
+          textColor: RECEIPT_TEXT_DARK,
+          lineColor: RECEIPT_BORDER,
+          lineWidth: 0.2,
+          overflow: "linebreak",
+        },
+        headStyles: {
+          fillColor: RECEIPT_SECONDARY,
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+        },
+        alternateRowStyles: {
+          fillColor: [252, 252, 253],
+        },
+        columnStyles: {
+          0: {
+            cellWidth: 54,
+            fontStyle: "bold",
+          },
+          1: {
+            cellWidth: 116,
+          },
+        },
+        margin: { left: 20, right: 20 },
+      });
 
-      // Reset text color
-      doc.setTextColor(...textDark);
-
-      // ---------- FOOTER ----------
-      doc.setFontSize(9);
-      doc.setTextColor(120);
-
+      const footerY = Math.min(pageHeight - 24, doc.lastAutoTable.finalY + 14);
+      doc.setDrawColor(...RECEIPT_BORDER);
+      doc.line(20, footerY - 6, pageWidth - 20, footerY - 6);
+      doc.setTextColor(...RECEIPT_TEXT_MUTED);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9.2);
       doc.text(
         "This is a system generated receipt and does not require a signature.",
         pageWidth / 2,
-        190,
+        footerY,
         { align: "center" }
       );
-
       doc.text(
-        "Thank you for choosing Subho's Computer Institute",
+        "Please retain this receipt for your records.",
         pageWidth / 2,
-        198,
+        footerY + 6,
         { align: "center" }
       );
 
-      // ---------- SAVE ----------
-      doc.save(`${student?.name || "student"}_${month}_receipt.pdf`);
+      doc.save(getReceiptFilename({ student, payment, month }));
     };
+
+    const img = new Image();
+    img.src = "/logo.png";
+    img.onload = () => renderReceipt(img);
+    img.onerror = () => renderReceipt(null);
   };
 
 

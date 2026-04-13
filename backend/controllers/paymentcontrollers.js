@@ -18,6 +18,86 @@ const paymentStudentListSelect = {
   email: true,
 };
 
+const formatGatewayProviderLabel = (provider) => {
+  switch (String(provider || "").toUpperCase()) {
+    case "CASHFREE":
+      return "Cashfree";
+    case "PHONEPE":
+      return "PhonePe";
+    case "CASH":
+      return "Cash";
+    default:
+      return "Online Payment";
+  }
+};
+
+const formatPaymentMethodLabel = ({ payment, gatewayOrder, latestAttempt }) => {
+  const rawMethod =
+    latestAttempt?.paymentMethod ||
+    gatewayOrder?.paymentMethod ||
+    gatewayOrder?.paymentMethodHint ||
+    payment?.paymentProvider ||
+    "";
+
+  switch (String(rawMethod || "").trim().toUpperCase()) {
+    case "UPI":
+      return "UPI";
+    case "CC":
+    case "DC":
+    case "CARD":
+      return "Card";
+    case "NB":
+    case "NETBANK":
+    case "NETBANKING":
+      return "Net Banking";
+    case "PHONEPE":
+      return "UPI";
+    case "CASHFREE":
+      return "Online Payment";
+    case "CASH":
+      return "Cash";
+    default:
+      return rawMethod ? String(rawMethod) : "Online Payment";
+  }
+};
+
+const buildReceiptMeta = ({ payment, gatewayOrder }) => {
+  const latestAttempt = gatewayOrder?.attempts?.[0] || null;
+  const paymentGateway = gatewayOrder?.provider
+    ? formatGatewayProviderLabel(gatewayOrder.provider)
+    : payment?.phonepeTransactionId
+      ? "PhonePe"
+      : "Online Payment";
+  const paymentDate =
+    gatewayOrder?.paidAt ||
+    latestAttempt?.paymentTime ||
+    payment?.paidAt ||
+    payment?.createdAt ||
+    null;
+
+  return {
+    receiptNumber: `FL-${payment.academicYear}-${String(payment.id).padStart(6, "0")}`,
+    paymentDate,
+    paymentMethod: formatPaymentMethodLabel({ payment, gatewayOrder, latestAttempt }),
+    paymentGateway,
+    cashfreeOrderId: gatewayOrder?.cashfreeOrderId || null,
+    cashfreeCfOrderId: gatewayOrder?.cashfreeCfOrderId || null,
+    cashfreePaymentId: latestAttempt?.cfPaymentId || null,
+    internalReferenceId: gatewayOrder?.id || String(payment.id),
+    transactionId:
+      payment?.phonepeTransactionId ||
+      payment?.phonepePaymentId ||
+      latestAttempt?.gatewayPaymentId ||
+      latestAttempt?.cfPaymentId ||
+      null,
+    gatewayReference:
+      gatewayOrder?.gatewayReference ||
+      latestAttempt?.gatewayOrderReference ||
+      latestAttempt?.bankReference ||
+      null,
+  };
+};
+
 const parsePositiveInt = (value, fallback, max = 100) => {
   const numeric = Number.parseInt(String(value ?? ""), 10);
   if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
@@ -127,7 +207,74 @@ export const getMyPayments = async (req, res) => {
       },
     });
 
-    res.json(payments);
+    if (!payments.length) {
+      return res.json(payments);
+    }
+
+    try {
+      const gatewayOrders = await prisma.paymentGatewayOrder.findMany({
+        where: {
+          paymentId: {
+            in: payments.map((payment) => payment.id),
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          paymentId: true,
+          provider: true,
+          paymentMethod: true,
+          paymentMethodHint: true,
+          cashfreeOrderId: true,
+          cashfreeCfOrderId: true,
+          gatewayReference: true,
+          paidAt: true,
+          attempts: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: {
+              cfPaymentId: true,
+              paymentMethod: true,
+              gatewayPaymentId: true,
+              gatewayOrderReference: true,
+              bankReference: true,
+              paymentTime: true,
+            },
+          },
+        },
+      });
+
+      const latestGatewayOrderByPaymentId = new Map();
+      for (const gatewayOrder of gatewayOrders) {
+        if (!latestGatewayOrderByPaymentId.has(gatewayOrder.paymentId)) {
+          latestGatewayOrderByPaymentId.set(gatewayOrder.paymentId, gatewayOrder);
+        }
+      }
+
+      return res.json(
+        payments.map((payment) => ({
+          ...payment,
+          receiptMeta: buildReceiptMeta({
+            payment,
+            gatewayOrder: latestGatewayOrderByPaymentId.get(payment.id) || null,
+          }),
+        }))
+      );
+    } catch (gatewayError) {
+      console.warn(
+        "getMyPayments receipt metadata fallback:",
+        gatewayError?.message || gatewayError
+      );
+      return res.json(
+        payments.map((payment) => ({
+          ...payment,
+          receiptMeta: buildReceiptMeta({
+            payment,
+            gatewayOrder: null,
+          }),
+        }))
+      );
+    }
   } catch (err) {
     console.error("getMyPayments error:", err);
     res.status(500).json({ message: "Failed to fetch payments" });
