@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import "./page.css";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection } from "../components/motion/primitives.jsx";
+import { clearAuthSession, getAuthToken } from "../../lib/authStorage.js";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
@@ -21,7 +22,7 @@ export default function StudentSelfProfile() {
   // FETCH PROFILE + PAYMENTS
   // =========================
   useEffect(() => {
-    const token = localStorage.getItem("token");
+    const token = getAuthToken();
     if (!token) {
       router.push("/login");
       return;
@@ -45,7 +46,7 @@ export default function StudentSelfProfile() {
         setPayments(paymentData || []);
       })
       .catch(() => {
-        localStorage.removeItem("token");
+        clearAuthSession();
         router.push("/login");
       })
       .finally(() => setLoading(false));

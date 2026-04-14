@@ -2,11 +2,17 @@ import prisma from "../prisma/client.js";
 
 const fallbackSessions = new Map();
 const canUseFallbackSessionStore = process.env.NODE_ENV !== "production";
+const ACTIVE_SESSION_WINDOW_MS = 15 * 60 * 1000;
+const STALE_CLOSING_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 const buildUserWhere = (role, userId) => ({
   role,
   userId: Number(userId),
   revokedAt: null,
+  closingRequestedAt: null,
+  updatedAt: {
+    gt: new Date(Date.now() - ACTIVE_SESSION_WINDOW_MS),
+  },
   expiresAt: {
     gt: new Date(),
   },
@@ -27,9 +33,16 @@ const pruneFallbackSessions = (key) => {
   const sessions = fallbackSessions.get(key);
   if (!sessions) return;
   const now = Date.now();
+  const inactiveCutoff = now - ACTIVE_SESSION_WINDOW_MS;
+  const staleClosingCutoff = now - STALE_CLOSING_SESSION_MAX_AGE_MS;
 
   for (const [tokenId, session] of sessions.entries()) {
-    if (session.revokedAt || session.expMs <= now) {
+    if (
+      session.revokedAt ||
+      session.expMs <= now ||
+      session.updatedAtMs <= inactiveCutoff ||
+      (session.closingRequestedAt && session.closingRequestedAt <= staleClosingCutoff)
+    ) {
       sessions.delete(tokenId);
     }
   }
@@ -62,6 +75,7 @@ export const addSession = async (role, userId, tokenId, expMs) => {
         role,
         userId: Number(userId),
         expiresAt: new Date(expMs),
+        closingRequestedAt: null,
         revokedAt: null,
       },
       create: {
@@ -69,6 +83,7 @@ export const addSession = async (role, userId, tokenId, expMs) => {
         role,
         userId: Number(userId),
         expiresAt: new Date(expMs),
+        closingRequestedAt: null,
       },
     });
   } catch (error) {
@@ -80,8 +95,146 @@ export const addSession = async (role, userId, tokenId, expMs) => {
     if (!fallbackSessions.has(key)) {
       fallbackSessions.set(key, new Map());
     }
-    fallbackSessions.get(key).set(tokenId, { expMs, revokedAt: null });
+    fallbackSessions.get(key).set(tokenId, {
+      expMs,
+      revokedAt: null,
+      closingRequestedAt: null,
+      updatedAtMs: Date.now(),
+    });
     return null;
+  }
+};
+
+export const touchSessionActivity = async (role, userId, tokenId) => {
+  try {
+    return await prisma.userSession.updateMany({
+      where: {
+        id: tokenId,
+        role,
+        userId: Number(userId),
+        revokedAt: null,
+        expiresAt: {
+          gt: new Date(),
+        },
+      },
+      data: {
+        closingRequestedAt: null,
+      },
+    });
+  } catch (error) {
+    if (!canUseFallbackSessionStore || !shouldUseFallbackSessionStore(error)) {
+      throw error;
+    }
+    const key = makeFallbackKey(role, userId);
+    const current = fallbackSessions.get(key)?.get(tokenId);
+    if (current) {
+      current.closingRequestedAt = null;
+      current.updatedAtMs = Date.now();
+    }
+    return null;
+  }
+};
+
+export const markSessionClosing = async (role, userId, tokenId) => {
+  try {
+    return await prisma.userSession.updateMany({
+      where: {
+        id: tokenId,
+        role,
+        userId: Number(userId),
+        revokedAt: null,
+        expiresAt: {
+          gt: new Date(),
+        },
+      },
+      data: {
+        closingRequestedAt: new Date(),
+      },
+    });
+  } catch (error) {
+    if (!canUseFallbackSessionStore || !shouldUseFallbackSessionStore(error)) {
+      throw error;
+    }
+    const key = makeFallbackKey(role, userId);
+    const sessions = fallbackSessions.get(key);
+    const current = sessions?.get(tokenId);
+    if (current) {
+      current.closingRequestedAt = Date.now();
+      current.updatedAtMs = Date.now();
+    }
+    return null;
+  }
+};
+
+export const clearSessionClosing = async (role, userId, tokenId) => {
+  try {
+    return await prisma.userSession.updateMany({
+      where: {
+        id: tokenId,
+        role,
+        userId: Number(userId),
+        revokedAt: null,
+      },
+      data: {
+        closingRequestedAt: null,
+      },
+    });
+  } catch (error) {
+    if (!canUseFallbackSessionStore || !shouldUseFallbackSessionStore(error)) {
+      throw error;
+    }
+    const key = makeFallbackKey(role, userId);
+    const current = fallbackSessions.get(key)?.get(tokenId);
+    if (current) {
+      current.closingRequestedAt = null;
+      current.updatedAtMs = Date.now();
+    }
+    return null;
+  }
+};
+
+export const getSessionState = async (role, userId, tokenId) => {
+  try {
+    const session = await prisma.userSession.findUnique({
+      where: { id: tokenId },
+      select: {
+        role: true,
+        userId: true,
+        revokedAt: true,
+        expiresAt: true,
+        closingRequestedAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!session) return null;
+
+    return {
+      ...session,
+      matchesUser:
+        session.role === role &&
+        session.userId === Number(userId),
+    };
+  } catch (error) {
+    if (!canUseFallbackSessionStore || !shouldUseFallbackSessionStore(error)) {
+      throw error;
+    }
+    const key = makeFallbackKey(role, userId);
+    pruneFallbackSessions(key);
+    const session = fallbackSessions.get(key)?.get(tokenId);
+    if (!session) return null;
+
+    return {
+      role,
+      userId: Number(userId),
+      revokedAt: session.revokedAt ? new Date(session.revokedAt) : null,
+      expiresAt: new Date(session.expMs),
+      closingRequestedAt: session.closingRequestedAt
+        ? new Date(session.closingRequestedAt)
+        : null,
+      updatedAt: new Date(session.updatedAtMs || Date.now()),
+      matchesUser: true,
+    };
   }
 };
 
@@ -136,37 +289,20 @@ export const clearUserSessions = async (role, userId) => {
 };
 
 export const isSessionActive = async (role, userId, tokenId) => {
-  try {
-    const session = await prisma.userSession.findUnique({
-      where: { id: tokenId },
-      select: {
-        role: true,
-        userId: true,
-        revokedAt: true,
-        expiresAt: true,
-      },
-    });
+  const session = await getSessionState(role, userId, tokenId);
 
-    return Boolean(
-      session &&
-        session.role === role &&
-        session.userId === Number(userId) &&
-        !session.revokedAt &&
-        session.expiresAt > new Date()
-    );
-  } catch (error) {
-    if (!canUseFallbackSessionStore || !shouldUseFallbackSessionStore(error)) {
-      throw error;
-    }
-    const key = makeFallbackKey(role, userId);
-    pruneFallbackSessions(key);
-    return Boolean(fallbackSessions.get(key)?.has(tokenId));
-  }
+  return Boolean(
+    session &&
+      session.matchesUser &&
+      !session.revokedAt &&
+      session.expiresAt > new Date()
+  );
 };
 
 export const purgeExpiredSessions = async () => {
   const now = new Date();
   const revokedCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const closingCutoff = new Date(Date.now() - STALE_CLOSING_SESSION_MAX_AGE_MS);
   try {
     await prisma.userSession.deleteMany({
       where: {
@@ -179,6 +315,11 @@ export const purgeExpiredSessions = async () => {
           {
             revokedAt: {
               lt: revokedCutoff,
+            },
+          },
+          {
+            closingRequestedAt: {
+              lt: closingCutoff,
             },
           },
         ],

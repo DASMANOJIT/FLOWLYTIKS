@@ -8,6 +8,7 @@ import "./pay.css";
 import PremiumLoader from "../../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard } from "../../components/motion/primitives.jsx";
 import { readApiResponse } from "../../../lib/api.js";
+import { getAuthToken } from "../../../lib/authStorage.js";
 import { openCashfreeCheckout } from "../../../lib/cashfree.js";
 
 export default function PayPage() {
@@ -31,7 +32,7 @@ export default function PayPage() {
 
     const fetchStudent = async () => {
       try {
-        const token = localStorage.getItem("token");
+        const token = getAuthToken();
         if (!token) {
           router.push("/login");
           return;
@@ -74,7 +75,7 @@ export default function PayPage() {
         return;
       }
 
-      const token = localStorage.getItem("token");
+      const token = getAuthToken();
       if (!token) {
         router.push("/login");
         return;

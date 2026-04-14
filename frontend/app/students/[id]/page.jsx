@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import "./stu.css";
 import PremiumLoader from "../../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection } from "../../components/motion/primitives.jsx";
+import { getAuthToken } from "../../../lib/authStorage.js";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
@@ -17,14 +18,18 @@ export default function StudentProfile() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
+    const token = getAuthToken();
+    if (!token) {
+      router.push("/login");
+      return;
+    }
 
     fetch(`${API_BASE}/api/students/${id}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => res.json())
       .then((data) => setStudent(data));
-  }, [id]);
+  }, [id, router]);
 
   // 🔥 DELETE STUDENT
   const deleteStudent = async () => {
@@ -36,7 +41,11 @@ export default function StudentProfile() {
 
     try {
       setLoading(true);
-      const token = localStorage.getItem("token");
+      const token = getAuthToken();
+      if (!token) {
+        router.push("/login");
+        return;
+      }
 
       const res = await fetch(
         `${API_BASE}/api/students/${id}`,

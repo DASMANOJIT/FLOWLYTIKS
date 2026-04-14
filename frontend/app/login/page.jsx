@@ -6,6 +6,7 @@ import Fall from "../animation/fallingword.jsx";
 import { MotionButton } from "../components/motion/primitives.jsx";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { readApiResponse } from "../../lib/api.js";
+import { clearLegacyAuthStorage, storeAuthSession } from "../../lib/authStorage.js";
 
 export default function Login() {
   const OTP_RESEND_COOLDOWN_SECONDS = 15;
@@ -149,6 +150,10 @@ export default function Login() {
     return () => clearTimeout(timer);
   }, [otpLoginCooldown]);
 
+  useEffect(() => {
+    clearLegacyAuthStorage();
+  }, []);
+
   const passwordChecks = {
     minLen: signupPassword.length >= 8,
     upper: /[A-Z]/.test(signupPassword),
@@ -178,8 +183,7 @@ export default function Login() {
   };
 
   const handleSignupSuccess = (data) => {
-    localStorage.setItem("token", data.token);
-    localStorage.setItem("studentName", data.name);
+    storeAuthSession({ token: data.token, name: data.name });
     alert("Registered successfully!");
     resetSignupVerificationState();
     window.location.href = "/student";
@@ -232,8 +236,7 @@ export default function Login() {
         return;
       }
 
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("studentName", data.name);
+      storeAuthSession({ token: data.token, name: data.name });
 
       if (data.role === "admin") {
         window.location.href = "/admin";
@@ -518,8 +521,7 @@ export default function Login() {
       );
       if (!ok) return alert(error);
 
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("studentName", data.name);
+      storeAuthSession({ token: data.token, name: data.name });
       window.location.href = "/student";
     } catch (err) {
       alert("Cannot connect to backend!");
@@ -551,8 +553,7 @@ export default function Login() {
       );
       if (!ok) return alert(error);
 
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("studentName", data.name);
+      storeAuthSession({ token: data.token, name: data.name });
       setTwoFaRequired(false);
       setTwoFaEmail("");
       setTwoFaOtp("");

@@ -6,6 +6,7 @@ import "./page.css";
 import Link from "next/link";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard } from "../components/motion/primitives.jsx";
+import { getAuthToken } from "../../lib/authStorage.js";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
@@ -27,7 +28,7 @@ export default function PaymentsPage() {
   ];
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
+    const token = getAuthToken();
     if (!token) {
       window.location.href = "/login";
       return;
@@ -95,7 +96,7 @@ export default function PaymentsPage() {
       return;
     }
 
-    const token = localStorage.getItem("token");
+    const token = getAuthToken();
     setSubmitting(true);
 
     try {

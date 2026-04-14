@@ -5,6 +5,7 @@ import { useState, useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import "./navbar.css";
 import { MotionButton } from "../motion/primitives.jsx";
+import { clearAuthSession, getAuthToken } from "../../../lib/authStorage.js";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API = "";
@@ -17,7 +18,7 @@ export default function StudentNavbar() {
   // FETCH STUDENT NAME
   // ========================
   useEffect(() => {
-    const token = localStorage.getItem("token");
+    const token = getAuthToken();
     if (!token) return;
 
     fetch(`${API}/api/students/me`, {
@@ -34,15 +35,14 @@ export default function StudentNavbar() {
   // Logout function
   // ========================
   const handleLogout = () => {
-    const token = localStorage.getItem("token");
+    const token = getAuthToken();
     if (token) {
       fetch(`${API}/api/auth/logout`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       }).catch(() => {});
     }
-    localStorage.removeItem("token");
-    localStorage.removeItem("studentName");
+    clearAuthSession();
     alert("You are logged out from this device. Please login again.");
     window.location.href = "/login";
   };

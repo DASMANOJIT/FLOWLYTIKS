@@ -9,6 +9,7 @@ import autoTable from "jspdf-autotable";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection } from "../components/motion/primitives.jsx";
 import GreetingPanel from "../components/dashboard/GreetingPanel.jsx";
+import { clearAuthSession, getAuthToken } from "../../lib/authStorage.js";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
@@ -92,7 +93,7 @@ export default function StudentDashboard() {
   // ===============================
   useEffect(() => {
   const fetchData = async () => {
-    const token = localStorage.getItem("token");
+    const token = getAuthToken();
     if (!token) {
       router.push("/login");
       return;
@@ -125,7 +126,7 @@ export default function StudentDashboard() {
       setPayments(paymentData);
     } catch (err) {
       console.error("Fetch error:", err);
-      localStorage.removeItem("token");
+      clearAuthSession();
       router.push("/login");
     } finally {
       setLoading(false);

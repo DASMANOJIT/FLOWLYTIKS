@@ -1,6 +1,8 @@
 import express from "express";
 import {
+  heartbeatSession,
   loginUser,
+  markTabClosing,
   registerUser,
   resetPassword,
   logoutUser,
@@ -29,6 +31,8 @@ router.post("/2fa/verify", otpVerifyRateLimit, verifyTwoFactor);
 router.post("/login", loginRateLimit, loginUser);
 router.post("/register", signupRateLimit, registerUser);
 router.post("/reset-password", passwordResetRateLimit, resetPassword);
+router.post("/heartbeat", protect, heartbeatSession);
+router.post("/tab-close", protect, markTabClosing);
 router.post("/logout", protect, logoutUser);
 
 export default router;

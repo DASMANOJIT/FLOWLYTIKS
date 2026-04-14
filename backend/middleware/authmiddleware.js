@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import {
-  isSessionActive,
+  clearSessionClosing,
+  getSessionState,
 } from "../utils/sessionStore.js";
 import prisma from "../prisma/client.js";
 
@@ -43,11 +44,19 @@ export const protect = async (req, res, next) => {
     }
 
     if (decoded.jti) {
-      const active = await isSessionActive(decoded.role, decoded.id, decoded.jti);
+      const session = await getSessionState(decoded.role, decoded.id, decoded.jti);
+      const active =
+        session &&
+        session.matchesUser &&
+        !session.revokedAt &&
+        session.expiresAt > new Date();
       if (!active) {
         return res
           .status(401)
           .json({ message: "Session expired or logged out. Please login again." });
+      }
+      if (session.closingRequestedAt) {
+        await clearSessionClosing(decoded.role, decoded.id, decoded.jti);
       }
     }
 

@@ -71,12 +71,14 @@ model UserSession {
   userId    Int
   expiresAt DateTime
   revokedAt DateTime?
+  closingRequestedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([role, userId])
   @@index([expiresAt])
   @@index([revokedAt])
+  @@index([closingRequestedAt])
 }
 
 model Payment {

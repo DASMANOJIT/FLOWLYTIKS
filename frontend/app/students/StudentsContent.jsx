@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import "./students.css";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection, fadeUpItem, staggerContainer } from "../components/motion/primitives.jsx";
+import { getAuthToken } from "../../lib/authStorage.js";
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
 const PAGE_SIZE = 12;
@@ -73,7 +74,7 @@ export default function StudentsPage() {
 
   // 🔹 Fetch students from paginated backend response
   useEffect(() => {
-    const token = localStorage.getItem("token");
+    const token = getAuthToken();
     if (!token) {
       window.location.href = "/login";
       return;

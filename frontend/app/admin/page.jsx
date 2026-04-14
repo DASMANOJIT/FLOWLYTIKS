@@ -15,6 +15,7 @@ import {
   fadeUpItem,
   staggerContainer,
 } from "../components/motion/primitives.jsx";
+import { clearAuthSession, getAuthToken } from "../../lib/authStorage.js";
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
 const STUDENT_PAGE_SIZE = 8;
@@ -73,7 +74,7 @@ export default function AdminDashboard() {
   // Fetch dashboard summary + paginated students
   // =========================
   useEffect(() => {
-    const token = localStorage.getItem("token");
+    const token = getAuthToken();
     if (!token) {
       window.location.href = "/login";
       return;
@@ -140,15 +141,14 @@ export default function AdminDashboard() {
   }, [studentPage]);
   // Logout function
   const handleLogout = () => {
-    const token = localStorage.getItem("token");
+    const token = getAuthToken();
     if (token) {
       fetch(`${API_BASE}/api/auth/logout`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       }).catch(() => {});
     }
-    localStorage.removeItem("token");
-    localStorage.removeItem("studentName");
+    clearAuthSession();
     alert("You are logged out from this device. Please login again.");
     window.location.href = "/login";
   };
@@ -159,7 +159,7 @@ export default function AdminDashboard() {
   const applyFilter = async () => {
     if (!filterFrom || !filterTo) return;
 
-    const token = localStorage.getItem("token");
+    const token = getAuthToken();
     if (!token) {
       window.location.href = "/login";
       return;
@@ -210,7 +210,7 @@ export default function AdminDashboard() {
   // SAVE MONTHLY FEE (NEW FUNCTIONALITY)
   // =========================
   const saveMonthlyFee = async () => {
-    const token = localStorage.getItem("token");
+    const token = getAuthToken();
     if (!token) return alert("No token found. Please login.");
 
     try {
@@ -241,7 +241,7 @@ export default function AdminDashboard() {
     const prompt = chatInput.trim();
     if (!prompt || chatLoading) return;
 
-    const token = localStorage.getItem("token");
+    const token = getAuthToken();
     if (!token) {
       window.location.href = "/login";
       return;

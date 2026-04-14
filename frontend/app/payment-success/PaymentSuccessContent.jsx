@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MotionButton, MotionCard, premiumEase } from "../components/motion/primitives.jsx";
 import { readApiResponse } from "../../lib/api.js";
+import { getAuthToken } from "../../lib/authStorage.js";
 
 const statusVisualConfig = {
   checking: {
@@ -285,7 +286,7 @@ export default function PaymentSuccessContent() {
       return;
     }
 
-    const token = localStorage.getItem("token");
+    const token = getAuthToken();
     if (!token) {
       router.push("/login");
       return;

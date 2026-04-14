@@ -6,7 +6,9 @@ import {
   addSession,
   clearUserSessions,
   getActiveSessionCount,
+  markSessionClosing,
   removeSession,
+  touchSessionActivity,
 } from "../utils/sessionStore.js";
 import { sendEmailOtp, verifyEmailOtp } from "../services/emailOtpService.js";
 import {
@@ -486,5 +488,33 @@ export const logoutUser = async (req, res) => {
   } catch (err) {
     console.error("LOGOUT ERROR:", err?.message || err);
     return authError(res, 500, "Logout failed");
+  }
+};
+
+export const markTabClosing = async (req, res) => {
+  try {
+    if (!req.user || !req.userRole || !req.tokenId) {
+      return res.status(204).end();
+    }
+
+    await markSessionClosing(req.userRole, req.user.id, req.tokenId);
+    return res.status(204).end();
+  } catch (err) {
+    console.error("TAB CLOSE ERROR:", err?.message || err);
+    return res.status(204).end();
+  }
+};
+
+export const heartbeatSession = async (req, res) => {
+  try {
+    if (!req.user || !req.userRole || !req.tokenId) {
+      return res.status(204).end();
+    }
+
+    await touchSessionActivity(req.userRole, req.user.id, req.tokenId);
+    return res.status(204).end();
+  } catch (err) {
+    console.error("SESSION HEARTBEAT ERROR:", err?.message || err);
+    return res.status(204).end();
   }
 };
