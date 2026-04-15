@@ -2,6 +2,7 @@ const PAYMENT_COMPAT_COLUMNS = [
   "currency",
   "paymentProvider",
   "paidAt",
+  "isLatePayment",
   "teacherAdminId",
 ];
 

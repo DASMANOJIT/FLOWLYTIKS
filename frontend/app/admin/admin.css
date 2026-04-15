@@ -202,7 +202,7 @@
     position: absolute;
     top: 58px;
     right: 10px;
-    width: 200px;
+    width: min(calc(100vw - 32px), 220px);
     background: #1a56db;
     flex-direction: column;
     padding: 12px;
@@ -608,6 +608,14 @@
     width: calc(100vw - 20px);
     height: calc(100vh - 96px);
     border-radius: 14px;
+  }
+
+  .assistant-input-row {
+    flex-direction: column;
+  }
+
+  .assistant-input-row button {
+    width: 100%;
   }
 }
 
@@ -1057,6 +1065,21 @@ html.dark-mode,
 
 /* Responsive adjustments */
 @media (max-width: 640px) {
+  .admin-dashboard {
+    padding: 12px;
+    margin: 12px auto;
+  }
+
+  .set-fee-box {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .fee-input,
+  .fee-save-btn {
+    width: 100%;
+  }
+
   .date-filter-wrapper .date-inputs {
     flex-direction: column;
   }

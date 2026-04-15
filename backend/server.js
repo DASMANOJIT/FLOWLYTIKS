@@ -4,6 +4,8 @@ import cors from "cors";
 import helmet from "helmet";
 import prisma from "./prisma/client.js";
 import { validateEnv } from "./config/env.js";
+import { logError, logInfo } from "./utils/appLogger.js";
+import { verifyRequiredSchemaColumns } from "./utils/schemaGuard.js";
 
 // Import routes
 import authRoutes from "./routes/authroute.js";
@@ -11,6 +13,7 @@ import studentRoutes from "./routes/studentroute.js";
 import paymentRoutes from "./routes/paymentroute.js";
 import settingsRoutes from "./routes/settingsroute.js";
 import adminAssistantRoutes from "./routes/adminassistantroute.js";
+import adminRoutes from "./routes/adminroute.js";
 
 validateEnv();
 
@@ -122,9 +125,12 @@ async function ensureAppSettings() {
       await prisma.appSettings.create({
         data: { id: 1, monthlyFee: 600 },
       });
-      console.log("✅ AppSettings initialized with ₹600");
+      logInfo("settings.bootstrap_initialized", { monthlyFee: 600 });
     }
   } catch (err) {
+    if (isProduction) {
+      throw err;
+    }
     console.error("Database unavailable, continuing without DB");
   }
 }
@@ -138,10 +144,30 @@ const initDatabase = async () => {
     attempt += 1;
     try {
       await prisma.$connect();
+      await verifyRequiredSchemaColumns();
       await ensureAppSettings();
+      logInfo("server.database_connected");
     } catch (err) {
+      if (err?.code === "SCHEMA_MISMATCH") {
+        logError("server.schema_mismatch", {
+          details: err?.details || [],
+        });
+        process.exit(1);
+      }
+      if (isProduction && attempt >= maxAttempts) {
+        logError("server.database_connect_failed", {
+          attempt,
+          maxAttempts,
+          message: err?.message || err,
+        });
+        process.exit(1);
+      }
       if (!warned) {
-        console.error("Database unavailable, continuing without DB");
+        console.error(
+          isProduction
+            ? "Database unavailable, retrying before shutdown"
+            : "Database unavailable, continuing without DB"
+        );
         warned = true;
       }
       if (process.env.DEBUG_DB === "1") {
@@ -158,7 +184,7 @@ const initDatabase = async () => {
 };
 
 initDatabase();
-console.log("⏭ Background schedulers are not started in the web API process");
+logInfo("server.background_jobs_disabled");
 
 // ================================
 // Routes
@@ -167,6 +193,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/students", studentRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/admin-assistant", adminAssistantRoutes);
+app.use("/api/admin", adminRoutes);
 
 
 // Health check
@@ -186,20 +213,41 @@ process.on("uncaughtException", (err) => {
 
 // Global express error handler (ensures JSON response instead of connection drop)
 app.use((err, req, res, next) => {
-  // eslint-disable-next-line no-console
-  console.error("EXPRESS ERROR:", err?.message || err);
+  const status =
+    err?.statusCode ||
+    err?.status ||
+    (err instanceof SyntaxError && "body" in err ? 400 : null) ||
+    (/cors origin not allowed/i.test(String(err?.message || "")) ? 403 : null) ||
+    500;
+  logError("server.request_failed", {
+    method: req.method,
+    path: req.originalUrl || req.url,
+    ip: req.ip,
+    status,
+    message: err?.message || err,
+  });
   if (res.headersSent) return next(err);
-  return res.status(500).json({
+  return res.status(status).json({
     success: false,
-    error: "Internal server error",
-    message: "Internal server error",
+    error:
+      status === 400
+        ? "Invalid request payload"
+        : status === 403
+        ? "Request origin is not allowed"
+        : "Internal server error",
+    message:
+      status === 400
+        ? "Invalid request payload"
+        : status === 403
+        ? "Request origin is not allowed"
+        : "Internal server error",
   });
 });
 
 // Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`🔥 Server running on port ${PORT}`);
+  logInfo("server.started", { port: PORT });
 });
 
 export default app;

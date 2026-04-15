@@ -1,4 +1,5 @@
 import prisma from "../prisma/client.js";
+import { buildRequestLogMeta, logInfo } from "../utils/appLogger.js";
 
 // ADMIN: Set Monthly Fee (GLOBAL)
 export const setMonthlyFee = async (req, res) => {
@@ -25,6 +26,10 @@ export const setMonthlyFee = async (req, res) => {
     await prisma.student.updateMany({
       data: { monthlyFee: numericFee },
     });
+
+    logInfo("settings.monthly_fee_updated", buildRequestLogMeta(req, {
+      monthlyFee: numericFee,
+    }));
 
     res.json({
       message: `Monthly fee successfully updated to ₹${numericFee}`,

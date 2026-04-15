@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import "./stu.css";
 import PremiumLoader from "../../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection } from "../../components/motion/primitives.jsx";
-import { getAuthToken } from "../../../lib/authStorage.js";
+import { clearAuthSession, getAuthRole, getAuthToken } from "../../../lib/authStorage.js";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
@@ -19,7 +19,13 @@ export default function StudentProfile() {
 
   useEffect(() => {
     const token = getAuthToken();
+    const role = getAuthRole();
     if (!token) {
+      router.push("/login");
+      return;
+    }
+    if (role && role !== "admin") {
+      clearAuthSession();
       router.push("/login");
       return;
     }
@@ -27,8 +33,24 @@ export default function StudentProfile() {
     fetch(`${API_BASE}/api/students/${id}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then((res) => res.json())
-      .then((data) => setStudent(data));
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) {
+          if (res.status === 401 || res.status === 403) {
+            clearAuthSession();
+            router.push("/login");
+            return null;
+          }
+          throw new Error(data?.message || "Failed to load student");
+        }
+        return data;
+      })
+      .then((data) => {
+        if (data) setStudent(data);
+      })
+      .catch((err) => {
+        console.error(err);
+      });
   }, [id, router]);
 
   // 🔥 DELETE STUDENT

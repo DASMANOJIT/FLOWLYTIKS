@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import "./fallingword.css";
 
 const wordList = [
@@ -18,10 +18,6 @@ const generateWords = () =>
   }));
 
 export default function FallingWords() {
-  const debugRenders = process.env.NEXT_PUBLIC_RENDER_DEBUG === "1";
-  const renderCount = useRef(0);
-  const warned = useRef(false);
-
   const [words, setWords] = useState([]);
 
   useEffect(() => {
@@ -31,22 +27,6 @@ export default function FallingWords() {
 
     return () => clearTimeout(id);
   }, []);
-
-  useEffect(() => {
-    if (!debugRenders) return;
-
-    renderCount.current += 1;
-    const c = renderCount.current;
-
-    if (c === 1 || c === 2 || c === 3 || c === 5 || c === 10 || c === 20 || c % 50 === 0) {
-      console.log("[render] falling-words", c);
-    }
-
-    if (!warned.current && c > 20) {
-      warned.current = true;
-      console.warn("⚠️ Excessive renders detected in FallingWords:", c);
-    }
-  });
 
   return (
     <div className="falling-layer">

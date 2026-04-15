@@ -3,7 +3,9 @@ import {
   getMyPayments,
   getAllPayments,
   markPaid,
+  bulkUpdatePayments,
   getTotalRevenue,
+  reversePayment,
 } from "../controllers/paymentcontrollers.js";
 import {
   createCashfreeHostedOrder,
@@ -11,6 +13,22 @@ import {
   verifyCashfreePayment,
 } from "../controllers/cashfreecontroller.js";
 import { protect, adminOnly } from "../middleware/authmiddleware.js";
+import {
+  adminWriteRateLimit,
+  paymentInitiationRateLimit,
+} from "../middleware/security.js";
+import {
+  validateBody,
+  validateQuery,
+} from "../middleware/validation.js";
+import {
+  bulkUpdatePaymentsBodySchema,
+  cashfreeCreateOrderBodySchema,
+  markPaidBodySchema,
+  paymentsQuerySchema,
+  reversePaymentBodySchema,
+  revenueQuerySchema,
+} from "../validation/paymentSchemas.js";
 import {
   initiatePhonePePayment,
   phonePeCallback,
@@ -23,9 +41,32 @@ const router = express.Router();
 router.get("/my", protect, getMyPayments);
 
 // ADMIN
-router.get("/all", protect, adminOnly, getAllPayments);
-router.post("/mark-paid", protect, adminOnly, markPaid);
-router.get("/revenue", protect, adminOnly, getTotalRevenue);
+router.get("/all", protect, adminOnly, validateQuery(paymentsQuerySchema), getAllPayments);
+router.post(
+  "/mark-paid",
+  protect,
+  adminOnly,
+  adminWriteRateLimit,
+  validateBody(markPaidBodySchema),
+  markPaid
+);
+router.post(
+  "/bulk-update",
+  protect,
+  adminOnly,
+  adminWriteRateLimit,
+  validateBody(bulkUpdatePaymentsBodySchema),
+  bulkUpdatePayments
+);
+router.post(
+  "/reverse",
+  protect,
+  adminOnly,
+  adminWriteRateLimit,
+  validateBody(reversePaymentBodySchema),
+  reversePayment
+);
+router.get("/revenue", protect, adminOnly, validateQuery(revenueQuerySchema), getTotalRevenue);
 
 // PHONEPE
 router.post("/phonepe/initiate", protect, initiatePhonePePayment);
@@ -33,7 +74,13 @@ router.post("/phonepe/callback", phonePeCallback);
 router.get("/phonepe/status/:transactionId", protect, getPhonePePaymentStatus);
 
 // CASHFREE
-router.post("/cashfree/create-order", protect, createCashfreeHostedOrder);
+router.post(
+  "/cashfree/create-order",
+  protect,
+  paymentInitiationRateLimit,
+  validateBody(cashfreeCreateOrderBodySchema),
+  createCashfreeHostedOrder
+);
 router.get("/cashfree/verify", protect, verifyCashfreePayment);
 router.post("/cashfree/verify", protect, verifyCashfreePayment);
 router.post("/cashfree/webhook", handleCashfreeWebhook);

@@ -12,21 +12,33 @@
 
 /* ---------- Student Header ---------- */
 .student-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     text-align: center;
     margin-bottom: 25px;
 }
 
-.student-name {
+.student-header-divider {
+    width: min(100%, 320px);
+    height: 1px;
+    background: rgba(148, 163, 184, 0.55);
+    margin: 0 auto 12px;
+}
+
+.student-dashboard-title {
     font-size: 28px;
     font-weight: 700;
     color: #0f172a;
     letter-spacing: -0.04em;
+    margin: 0;
 }
 
 .student-subtitle {
     font-size: 16px;
     color: #475569;
-    margin-top: 4px;
+    margin: 4px 0 0;
+    max-width: 420px;
 }
 
 .dashboard-top {
@@ -194,6 +206,20 @@
     color: #64748b;
 }
 
+.late-payment-badge {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    margin-top: 8px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(239, 68, 68, 0.12);
+    color: #b91c1c;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
 /* ---------- Pay Button ---------- */
 .pay-button {
     background: linear-gradient(135deg, #1d4ed8, #0ea5e9);
@@ -275,5 +301,29 @@
 @media (max-width: 900px) {
   .dashboard-top {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-wrapper {
+    padding: 16px 14px 24px;
+    border-radius: 20px;
+  }
+
+  .month-card,
+  .upcoming-content {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .paid-actions,
+  .month-info {
+    width: 100%;
+  }
+
+  .pay-button,
+  .receipt-button {
+    width: 100%;
   }
 }

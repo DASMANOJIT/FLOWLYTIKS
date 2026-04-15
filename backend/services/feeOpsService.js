@@ -1,4 +1,5 @@
 import prisma from "../prisma/client.js";
+import { isLatePaymentForPeriod } from "../utils/paymentPeriod.js";
 import {
   getDueMonthsForReminder,
   sendFeePaidWhatsAppNotification,
@@ -27,42 +28,72 @@ export const markPaidForStudent = async ({
   monthlyFee,
   teacherAdminId = null,
 }) => {
-  const existing = await prisma.payment.findFirst({
+  const existing = await prisma.payment.findUnique({
     where: {
-      studentId: Number(student.id),
-      month,
-      academicYear,
-      status: "paid",
+      studentId_month_academicYear: {
+        studentId: Number(student.id),
+        month,
+        academicYear,
+      },
     },
   });
 
-  if (existing) {
+  if (existing?.status === "paid") {
     return { status: "already_paid", payment: existing };
   }
 
+  const paidAt = new Date();
   const paymentData = {
-    studentId: Number(student.id),
-    month,
-    academicYear,
     amount: Number(monthlyFee),
     status: "paid",
     currency: "INR",
     paymentProvider: "CASH",
-    paidAt: new Date(),
+    paidAt,
+    isLatePayment: isLatePaymentForPeriod({
+      month,
+      academicYear,
+      paidAt,
+    }),
+    phonepeTransactionId: null,
+    phonepePaymentId: null,
     teacherAdminId: teacherAdminId ? Number(teacherAdminId) : null,
   };
 
   let payment;
   try {
-    payment = await prisma.payment.create({
-      data: paymentData,
-    });
+    if (existing) {
+      payment = await prisma.payment.update({
+        where: { id: existing.id },
+        data: paymentData,
+      });
+    } else {
+      payment = await prisma.payment.create({
+        data: {
+          studentId: Number(student.id),
+          month,
+          academicYear,
+          ...paymentData,
+        },
+      });
+    }
   } catch (err) {
     if (!isPaymentSchemaCompatibilityError(err)) throw err;
     logPaymentCompatibilityFallback("markPaidForStudent", err);
-    payment = await prisma.payment.create({
-      data: stripExtendedPaymentWriteData(paymentData),
-    });
+    if (existing) {
+      payment = await prisma.payment.update({
+        where: { id: existing.id },
+        data: stripExtendedPaymentWriteData(paymentData),
+      });
+    } else {
+      payment = await prisma.payment.create({
+        data: stripExtendedPaymentWriteData({
+          studentId: Number(student.id),
+          month,
+          academicYear,
+          ...paymentData,
+        }),
+      });
+    }
   }
 
   sendFeePaidWhatsAppNotification({

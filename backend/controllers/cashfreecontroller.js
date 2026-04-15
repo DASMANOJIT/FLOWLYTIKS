@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import prisma from "../prisma/client.js";
 import { getAcademicYear } from "../utils/academicYear.js";
+import { isLatePaymentForPeriod } from "../utils/paymentPeriod.js";
 import { autoPromoteIfEligible } from "./studentcontrollers.js";
 import { sendFeePaidWhatsAppNotification } from "../services/whatsappservice.js";
 import { withPgAdvisoryLock } from "../utils/dbLocks.js";
@@ -13,6 +14,11 @@ import {
   normalizeCashfreeOrderState,
   verifyCashfreeWebhookSignature,
 } from "../services/cashfreeService.js";
+import {
+  isPaymentSchemaCompatibilityError,
+  logPaymentCompatibilityFallback,
+  stripExtendedPaymentWriteData,
+} from "../utils/paymentCompat.js";
 
 const VALID_MONTHS = new Set([
   "March",
@@ -28,6 +34,14 @@ const VALID_MONTHS = new Set([
   "January",
   "February",
 ]);
+
+const shouldDebugCashfree = process.env.DEBUG_CASHFREE === "1";
+
+const logCashfreeDebug = (...args) => {
+  if (shouldDebugCashfree) {
+    console.log(...args);
+  }
+};
 
 const jsonError = (res, status, message, extra = {}) =>
   res.status(status).json({
@@ -309,22 +323,44 @@ const finalizeCashfreeState = async ({ gatewayOrder, order, payments, source }) 
       });
 
       if (normalized.status === "PAID") {
-        const paymentTransition = await tx.payment.updateMany({
-          where: {
-            id: gatewayOrder.paymentId,
-            status: {
-              not: "paid",
+        const paidAt = parseGatewayDate(normalized.paidAt) || new Date();
+        const paymentUpdateData = {
+          amount: gatewayOrder.amount,
+          currency: normalized.currency || gatewayOrder.currency,
+          status: "paid",
+          paymentProvider: "CASHFREE",
+          paidAt,
+          isLatePayment: isLatePaymentForPeriod({
+            month: gatewayOrder.month,
+            academicYear: gatewayOrder.academicYear,
+            paidAt,
+          }),
+          teacherAdminId: gatewayOrder.teacherAdminId,
+        };
+        let paymentTransition;
+        try {
+          paymentTransition = await tx.payment.updateMany({
+            where: {
+              id: gatewayOrder.paymentId,
+              status: {
+                not: "paid",
+              },
             },
-          },
-          data: {
-            amount: gatewayOrder.amount,
-            currency: normalized.currency || gatewayOrder.currency,
-            status: "paid",
-            paymentProvider: "CASHFREE",
-            paidAt: parseGatewayDate(normalized.paidAt) || new Date(),
-            teacherAdminId: gatewayOrder.teacherAdminId,
-          },
-        });
+            data: paymentUpdateData,
+          });
+        } catch (error) {
+          if (!isPaymentSchemaCompatibilityError(error)) throw error;
+          logPaymentCompatibilityFallback("finalizeCashfreeState:paid", error);
+          paymentTransition = await tx.payment.updateMany({
+            where: {
+              id: gatewayOrder.paymentId,
+              status: {
+                not: "paid",
+              },
+            },
+            data: stripExtendedPaymentWriteData(paymentUpdateData),
+          });
+        }
 
         if (paymentTransition.count > 0) {
           const payment = await tx.payment.findUnique({
@@ -596,8 +632,8 @@ export const createCashfreeHostedOrder = async (req, res) => {
           month,
           academicYear,
         });
-        console.log("CASHFREE_ENVIRONMENT =", process.env.CASHFREE_ENVIRONMENT);
-        console.log("RETURN_URL =", process.env.CASHFREE_RETURN_URL);
+        logCashfreeDebug("CASHFREE_ENVIRONMENT =", process.env.CASHFREE_ENVIRONMENT);
+        logCashfreeDebug("RETURN_URL =", process.env.CASHFREE_RETURN_URL);
 
         try {
           const cashfreeResponse = await createCashfreeOrder({
@@ -622,7 +658,7 @@ export const createCashfreeHostedOrder = async (req, res) => {
             idempotencyKey: gatewayOrder.id,
           });
 
-          console.log(
+          logCashfreeDebug(
             "Cashfree create order raw response =",
             JSON.stringify(cashfreeResponse?.data || cashfreeResponse, null, 2)
           );
@@ -670,7 +706,7 @@ export const createCashfreeHostedOrder = async (req, res) => {
             gatewayOrderId: updatedGatewayOrder.id,
             cashfreeOrderId,
           });
-          console.log("Sending payment_session_id to frontend =", payment_session_id);
+          logCashfreeDebug("Sending payment_session_id to frontend =", payment_session_id);
 
           return { gatewayOrder: updatedGatewayOrder };
         } catch (error) {
@@ -718,7 +754,7 @@ export const createCashfreeHostedOrder = async (req, res) => {
     }
 
     const responsePayload = formatCreateOrderResponse(gatewayOrder);
-    console.log(
+    logCashfreeDebug(
       "Sending payment_session_id to frontend =",
       responsePayload.payment_session_id
     );

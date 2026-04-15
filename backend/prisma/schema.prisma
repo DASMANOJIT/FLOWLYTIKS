@@ -90,6 +90,7 @@ model Payment {
   status               String                @default("created")
   paymentProvider      PaymentProvider?
   paidAt               DateTime?
+  isLatePayment        Boolean               @default(false)
   phonepeTransactionId String?
   phonepePaymentId     String?
   studentId            Int

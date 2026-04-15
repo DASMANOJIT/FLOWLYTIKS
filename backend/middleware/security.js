@@ -220,6 +220,25 @@ export const passwordResetRateLimit = createRateLimiter({
   keyGenerator: (req) => authKeyGenerator(req),
 });
 
+const getAuthenticatedRequester = (req) =>
+  req.user?.id ? `${req.userRole || "user"}:${req.user.id}` : getRequesterIp(req);
+
+export const adminWriteRateLimit = createRateLimiter({
+  namespace: "admin:write",
+  windowMs: 60 * 1000,
+  max: 40,
+  message: "Too many admin write requests. Please slow down and try again.",
+  keyGenerator: (req) => getAuthenticatedRequester(req),
+});
+
+export const paymentInitiationRateLimit = createRateLimiter({
+  namespace: "payments:initiate",
+  windowMs: 5 * 60 * 1000,
+  max: 20,
+  message: "Too many payment initiation attempts. Please wait a moment and try again.",
+  keyGenerator: (req) => getAuthenticatedRequester(req),
+});
+
 export const purgeAuthRateLimitEvents = async () => {
   const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
   try {

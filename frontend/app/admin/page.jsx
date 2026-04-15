@@ -15,7 +15,7 @@ import {
   fadeUpItem,
   staggerContainer,
 } from "../components/motion/primitives.jsx";
-import { clearAuthSession, getAuthToken } from "../../lib/authStorage.js";
+import { clearAuthSession, getAuthRole, getAuthToken } from "../../lib/authStorage.js";
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
 const STUDENT_PAGE_SIZE = 8;
@@ -75,7 +75,13 @@ export default function AdminDashboard() {
   // =========================
   useEffect(() => {
     const token = getAuthToken();
+    const role = getAuthRole();
     if (!token) {
+      window.location.href = "/login";
+      return;
+    }
+    if (role && role !== "admin") {
+      clearAuthSession();
       window.location.href = "/login";
       return;
     }
@@ -109,6 +115,11 @@ export default function AdminDashboard() {
       .then(async (res) => {
         const data = await res.json();
         if (!res.ok) {
+          if (res.status === 401 || res.status === 403) {
+            clearAuthSession();
+            window.location.href = "/login";
+            return;
+          }
           throw new Error(data?.message || "Failed to fetch dashboard data");
         }
         if (dashboardRequestKeyRef.current !== requestKey) {

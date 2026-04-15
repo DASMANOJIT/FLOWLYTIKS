@@ -2,7 +2,8 @@
 
 const AUTH_TOKEN_KEY = "token";
 const AUTH_NAME_KEY = "studentName";
-const LEGACY_KEYS = [AUTH_TOKEN_KEY, AUTH_NAME_KEY];
+const AUTH_ROLE_KEY = "authRole";
+const LEGACY_KEYS = [AUTH_TOKEN_KEY, AUTH_NAME_KEY, AUTH_ROLE_KEY];
 
 const getBrowserStorage = (kind) => {
   if (typeof window === "undefined") return null;
@@ -23,7 +24,7 @@ export const clearLegacyAuthStorage = () => {
   }
 };
 
-export const storeAuthSession = ({ token, name }) => {
+export const storeAuthSession = ({ token, name, role }) => {
   const sessionStorageRef = getBrowserStorage("session");
   if (!sessionStorageRef) return;
 
@@ -35,6 +36,12 @@ export const storeAuthSession = ({ token, name }) => {
     sessionStorageRef.setItem(AUTH_NAME_KEY, String(name));
   } else {
     sessionStorageRef.removeItem(AUTH_NAME_KEY);
+  }
+
+  if (role) {
+    sessionStorageRef.setItem(AUTH_ROLE_KEY, String(role));
+  } else {
+    sessionStorageRef.removeItem(AUTH_ROLE_KEY);
   }
 };
 
@@ -53,4 +60,10 @@ export const clearAuthSession = () => {
   }
 
   clearLegacyAuthStorage();
+};
+
+export const getAuthRole = () => {
+  clearLegacyAuthStorage();
+  const sessionStorageRef = getBrowserStorage("session");
+  return sessionStorageRef?.getItem(AUTH_ROLE_KEY)?.trim() || "";
 };

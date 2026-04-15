@@ -235,6 +235,12 @@
   font-weight: 700;
 }
 
+.status-late {
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .status-unpaid {
   color: #dc2626;
   font-size: 12px;
@@ -246,12 +252,15 @@
   .payment-item {
     flex-direction: column;
     align-items: flex-start;
-    gap: 6px;
+    gap: 10px;
   }
 
   .payment-right {
     width: 100%;
     display: flex;
     justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
   }
 }

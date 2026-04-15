@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import prisma from "../prisma/client.js";
+import { isLatePaymentForPeriod } from "../utils/paymentPeriod.js";
 
 const WHATSAPP_API_VERSION = process.env.WHATSAPP_API_VERSION || "v20.0";
 const WHATSAPP_GRAPH_URL = process.env.WHATSAPP_GRAPH_URL || "https://graph.facebook.com";
@@ -10,7 +11,9 @@ const RECEIPT_BORDER_COLOR = "#e8ecf1";
 const RECEIPT_TEXT_COLOR = "#282828";
 const RECEIPT_MUTED_TEXT_COLOR = "#6e7681";
 const RECEIPT_SUCCESS_COLOR = "#22c55e";
+const RECEIPT_WARNING_COLOR = "#ef4444";
 const DEFAULT_INSTITUTE_NAME = "Subho's Computer Institute";
+const RECEIPT_UNICODE_FONT_NAME = "ReceiptUnicode";
 
 const MONTHS = [
   "March",
@@ -66,14 +69,37 @@ const formatReceiptDate = (value) =>
       }).format(new Date(value))
     : "-";
 
-const formatReceiptCurrency = (amount, currency = "INR") =>
-  new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency,
+const formatReceiptCurrency = (amount, { fallback = false } = {}) => {
+  const formattedAmount = new Intl.NumberFormat("en-IN", {
     maximumFractionDigits: 0,
   }).format(Number(amount || 0));
 
+  return `${fallback ? "Rs." : "₹"} ${formattedAmount}`;
+};
+
+const getPaymentStatusLabel = (payment, paymentDate) => {
+  const isLatePayment =
+    payment?.isLatePayment ??
+    isLatePaymentForPeriod({
+      month: payment?.month,
+      academicYear: payment?.academicYear,
+      paidAt: paymentDate || payment?.paidAt || payment?.createdAt,
+    });
+
+  if (String(payment?.status || "").toLowerCase() === "paid" && isLatePayment) {
+    return "Late Payment";
+  }
+
+  return String(payment?.status || "created")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+};
+
 const formatPaymentMethodLabel = ({ payment, gatewayOrder, latestAttempt, mode }) => {
+  if (String(payment?.paymentProvider || "").trim().toUpperCase() === "CASH") {
+    return "Cash";
+  }
+
   const rawMethod =
     latestAttempt?.paymentMethod ||
     gatewayOrder?.paymentMethod ||
@@ -115,10 +141,29 @@ const getReceiptLogoCandidates = () => [
   path.resolve(process.cwd(), "public/logo.png"),
 ];
 
+const getReceiptFontCandidates = () => [
+  path.resolve(process.cwd(), "../frontend/public/fonts/NotoSans-Regular.ttf"),
+  path.resolve(process.cwd(), "frontend/public/fonts/NotoSans-Regular.ttf"),
+  path.resolve(process.cwd(), "public/fonts/NotoSans-Regular.ttf"),
+];
+
 const loadReceiptLogoBuffer = async () => {
   for (const candidate of getReceiptLogoCandidates()) {
     try {
       return await fs.readFile(candidate);
+    } catch {
+      // Try next candidate path.
+    }
+  }
+
+  return null;
+};
+
+const loadReceiptFontPath = async () => {
+  for (const candidate of getReceiptFontCandidates()) {
+    try {
+      await fs.access(candidate);
+      return candidate;
     } catch {
       // Try next candidate path.
     }
@@ -315,8 +360,13 @@ export const createPaymentReceiptPdf = async ({ student, payment, mode }) => {
     (async () => {
       const receiptStudent = await enrichReceiptStudent(student);
       const gatewayOrder = await enrichReceiptGatewayMeta(payment?.id);
-      const latestAttempt = gatewayOrder?.attempts?.[0] || null;
+      const effectiveGatewayOrder =
+        String(payment?.paymentProvider || "").trim().toUpperCase() === "CASH"
+          ? null
+          : gatewayOrder;
+      const latestAttempt = effectiveGatewayOrder?.attempts?.[0] || null;
       const logoBuffer = await loadReceiptLogoBuffer();
+      const receiptFontPath = await loadReceiptFontPath();
       const instituteName = resolveInstituteName();
       const generatedAt = new Date();
       const academicYearLabel = payment?.academicYear
@@ -325,8 +375,16 @@ export const createPaymentReceiptPdf = async ({ student, payment, mode }) => {
       const receiptNumber = buildReceiptNumber(payment);
       const pageWidth = doc.page.width;
       const contentWidth = pageWidth - 80;
-      const paymentStatus = String(payment?.status || "paid").toUpperCase();
-      const amountPaid = formatReceiptCurrency(payment?.amount, payment?.currency || "INR");
+      const paidOnDate =
+        effectiveGatewayOrder?.paidAt ||
+        latestAttempt?.paymentTime ||
+        payment?.paidAt ||
+        payment?.createdAt ||
+        null;
+      const paymentStatus = getPaymentStatusLabel(payment, paidOnDate);
+      const amountPaid = formatReceiptCurrency(payment?.amount, {
+        fallback: !receiptFontPath,
+      });
       const receiptDate = formatReceiptDate(generatedAt);
       const transactionId =
         latestAttempt?.cfPaymentId ||
@@ -334,6 +392,10 @@ export const createPaymentReceiptPdf = async ({ student, payment, mode }) => {
         payment?.phonepePaymentId ||
         payment?.phonepeTransactionId ||
         String(payment?.id || "-");
+
+      if (receiptFontPath) {
+        doc.registerFont(RECEIPT_UNICODE_FONT_NAME, receiptFontPath);
+      }
 
       doc.rect(0, 0, pageWidth, 14).fill(RECEIPT_PRIMARY_COLOR);
       doc.rect(0, 14, pageWidth, 4).fill(RECEIPT_SECONDARY_COLOR);
@@ -394,10 +456,14 @@ export const createPaymentReceiptPdf = async ({ student, payment, mode }) => {
       doc.fillColor(RECEIPT_TEXT_COLOR).font("Helvetica-Bold").fontSize(11);
       doc.text(receiptNumber, 56, 186, { width: 124 });
       doc.fillColor(RECEIPT_TEXT_COLOR).text(receiptDate, 194, 186, { width: 90 });
-      doc.fillColor(RECEIPT_SUCCESS_COLOR).text(paymentStatus, 312, 186, {
+      doc.fillColor(paymentStatus === "Late Payment" ? RECEIPT_WARNING_COLOR : RECEIPT_SUCCESS_COLOR).text(paymentStatus, 312, 186, {
         width: 110,
       });
-      doc.fillColor(RECEIPT_TEXT_COLOR).text(amountPaid, 442, 186, { width: 70, align: "right" });
+      doc
+        .fillColor(RECEIPT_TEXT_COLOR)
+        .font(receiptFontPath ? RECEIPT_UNICODE_FONT_NAME : "Helvetica-Bold")
+        .text(amountPaid, 442, 186, { width: 70, align: "right" });
+      doc.font("Helvetica");
 
       let nextY = 222;
       nextY = drawReceiptSection({
@@ -421,9 +487,16 @@ export const createPaymentReceiptPdf = async ({ student, payment, mode }) => {
         rows: [
           ["Month / Fee Period", payment?.month || "-"],
           ["Academic Year", academicYearLabel],
+          ["Paid On", formatReceiptDate(paidOnDate)],
+          ["Payment Status", paymentStatus],
           [
             "Payment Method",
-            formatPaymentMethodLabel({ payment, gatewayOrder, latestAttempt, mode }),
+            formatPaymentMethodLabel({
+              payment,
+              gatewayOrder: effectiveGatewayOrder,
+              latestAttempt,
+              mode,
+            }),
           ],
           ["Transaction ID", transactionId],
         ],

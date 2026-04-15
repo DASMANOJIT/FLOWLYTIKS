@@ -2,7 +2,7 @@
 .payment-container {
   width: 100%;
   min-height: 90vh;
-  padding: 40px;
+  padding: clamp(18px, 4vw, 40px);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -43,8 +43,7 @@
 
 /* CARD */
 .payment-box {
-  width: 480px;
-  max-width: 95%;
+  width: min(100%, 480px);
   padding: 32px;
   background: rgba(255, 255, 255, 0.45);
   backdrop-filter: blur(20px);
@@ -87,7 +86,7 @@
 
 /* SEARCH INPUT */
 .student-search-input {
-  width: 95%;
+  width: 100%;
   padding: 13px;
   border-radius: 12px;
   border: 1px solid #bcd0ff;
@@ -121,11 +120,44 @@
   border-radius: 10px;
   transition: 0.2s ease;
   font-weight: 500;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
 }
 
 .student-result-item:hover {
   background: #e7efff;
   transform: scale(1.02);
+}
+
+.student-result-item--selected {
+  background: #dbeafe;
+  border: 1px solid #93c5fd;
+}
+
+.student-result-checkbox {
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  accent-color: #16a34a;
+  flex-shrink: 0;
+}
+
+.student-result-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.student-result-meta strong,
+.student-result-meta span {
+  overflow-wrap: anywhere;
+}
+
+.student-result-meta span {
+  font-size: 13px;
+  color: #475569;
 }
 
 .student-result-item--loading,
@@ -153,6 +185,57 @@
   border-left: 4px solid #003bb3;
 }
 
+.selected-student-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.selected-student-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.selected-student-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(147, 197, 253, 0.65);
+}
+
+.selected-student-chip span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.selected-student-chip small {
+  color: #475569;
+}
+
+.remove-selected-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.remove-selected-btn:hover {
+  background: #bfdbfe;
+}
+
 /* BUTTON */
 .pay-btn {
   width: 100%;
@@ -176,6 +259,128 @@
 .pay-btn:disabled {
   background: #a9c2f7;
   cursor: not-allowed;
+}
+
+.payment-feedback {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.payment-feedback--success {
+  border-color: rgba(34, 197, 94, 0.3);
+  background: rgba(240, 253, 244, 0.92);
+}
+
+.payment-feedback--error {
+  border-color: rgba(239, 68, 68, 0.28);
+  background: rgba(254, 242, 242, 0.94);
+}
+
+.payment-feedback__message {
+  margin: 0;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.payment-feedback__section {
+  margin-top: 12px;
+}
+
+.payment-feedback__section strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #0f172a;
+}
+
+.payment-feedback__section ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #334155;
+}
+
+.payment-feedback__section li + li {
+  margin-top: 4px;
+}
+
+.payment-box--history {
+  margin-top: 22px;
+}
+
+.recent-payments-header {
+  margin-bottom: 16px;
+}
+
+.recent-payments-title {
+  margin: 0;
+  font-size: 22px;
+  color: #0a3d91;
+}
+
+.recent-payments-subtitle {
+  margin: 4px 0 0;
+  color: #475569;
+  font-size: 14px;
+}
+
+.recent-payments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.recent-payment-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(147, 197, 253, 0.42);
+}
+
+.recent-payment-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recent-payment-meta strong,
+.recent-payment-meta span {
+  overflow-wrap: anywhere;
+}
+
+.recent-payment-meta span {
+  color: #475569;
+  font-size: 14px;
+}
+
+.reverse-pay-btn {
+  width: auto;
+  min-width: 132px;
+  margin-top: 0;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, #d97706, #b45309);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.reverse-pay-btn:disabled {
+  background: #f3c58a;
+  cursor: not-allowed;
+}
+
+.recent-payments-empty {
+  margin: 0;
+  color: #475569;
 }
 
 /* =============================
@@ -203,23 +408,36 @@
   }
 
   .student-search-input {
-    width: 90%;
+    width: 100%;
   }
 
   .pay-btn {
     font-size: 16px;
     padding: 13px;
   }
+
+  .selected-student-chip {
+    align-items: flex-start;
+  }
+
+  .recent-payment-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .reverse-pay-btn {
+    width: 100%;
+  }
 }
 
 /* Tablets 480px–768px */
 @media (max-width: 768px) {
   .payment-container {
-    padding: 30px;
+    padding: 24px 16px;
   }
 
   .payment-box {
-    width: 90%;
+    width: 100%;
   }
 
   .payment-title {

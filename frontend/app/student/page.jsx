@@ -21,6 +21,11 @@ const RECEIPT_TEXT_MUTED = [110, 118, 129];
 const RECEIPT_PANEL_BG = [246, 247, 249];
 const RECEIPT_BORDER = [232, 236, 241];
 const RECEIPT_SUCCESS = [34, 197, 94];
+const RECEIPT_WARNING = [239, 68, 68];
+const RECEIPT_PDF_FONT_FILE = "NotoSans-Regular.ttf";
+const RECEIPT_PDF_FONT_NAME = "NotoSans";
+
+let receiptPdfFontBase64Promise;
 
 const formatReceiptDate = (value) =>
   value
@@ -32,12 +37,56 @@ const formatReceiptDate = (value) =>
       }).format(new Date(value))
     : "-";
 
-const formatReceiptCurrency = (amount, currency = "INR") =>
-  new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency,
+const formatReceiptCurrency = (amount, { fallback = false } = {}) => {
+  const formattedAmount = new Intl.NumberFormat("en-IN", {
     maximumFractionDigits: 0,
   }).format(Number(amount || 0));
+
+  return `${fallback ? "Rs." : "₹"} ${formattedAmount}`;
+};
+
+const loadReceiptPdfFont = async (doc) => {
+  if (typeof window === "undefined") {
+    return { fontName: "helvetica", currencyFallback: true };
+  }
+
+  try {
+    if (!receiptPdfFontBase64Promise) {
+      receiptPdfFontBase64Promise = fetch(`/fonts/${RECEIPT_PDF_FONT_FILE}`).then(
+        async (response) => {
+          if (!response.ok) {
+            throw new Error(`Unable to load receipt font (${response.status})`);
+          }
+
+          const buffer = await response.arrayBuffer();
+          const bytes = new Uint8Array(buffer);
+          const chunkSize = 0x8000;
+          let binary = "";
+
+          for (let index = 0; index < bytes.length; index += chunkSize) {
+            binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+          }
+
+          return btoa(binary);
+        }
+      );
+    }
+
+    const fontBase64 = await receiptPdfFontBase64Promise;
+    const fontList = doc.getFontList?.() || {};
+
+    if (!fontList?.[RECEIPT_PDF_FONT_NAME]) {
+      doc.addFileToVFS(RECEIPT_PDF_FONT_FILE, fontBase64);
+      doc.addFont(RECEIPT_PDF_FONT_FILE, RECEIPT_PDF_FONT_NAME, "normal");
+      doc.addFont(RECEIPT_PDF_FONT_FILE, RECEIPT_PDF_FONT_NAME, "bold");
+    }
+
+    return { fontName: RECEIPT_PDF_FONT_NAME, currencyFallback: false };
+  } catch (error) {
+    console.warn("Receipt font fallback enabled:", error);
+    return { fontName: "helvetica", currencyFallback: true };
+  }
+};
 
 const getReceiptPaymentMethod = (payment) =>
   payment?.receiptMeta?.paymentMethod ||
@@ -52,6 +101,64 @@ const getReceiptNumber = (payment) =>
   `FL-${payment?.academicYear || new Date().getFullYear()}-${String(
     payment?.id || 0
   ).padStart(6, "0")}`;
+
+const PAYMENT_MONTH_TO_INDEX = {
+  January: 0,
+  February: 1,
+  March: 2,
+  April: 3,
+  May: 4,
+  June: 5,
+  July: 6,
+  August: 7,
+  September: 8,
+  October: 9,
+  November: 10,
+  December: 11,
+};
+
+const getPaymentPeriodEnd = (month, academicYear) => {
+  const monthIndex = PAYMENT_MONTH_TO_INDEX[String(month || "").trim()];
+  if (!Number.isInteger(monthIndex) || !Number.isInteger(Number(academicYear))) return null;
+
+  const normalizedAcademicYear = Number(academicYear);
+  const calendarYear = monthIndex >= 2 ? normalizedAcademicYear : normalizedAcademicYear + 1;
+  return new Date(calendarYear, monthIndex + 1, 0, 23, 59, 59, 999);
+};
+
+const isLatePaymentRecord = (payment) => {
+  if (typeof payment?.isLatePayment === "boolean") {
+    return payment.isLatePayment;
+  }
+
+  if (typeof payment?.receiptMeta?.isLatePayment === "boolean") {
+    return payment.receiptMeta.isLatePayment;
+  }
+
+  const paidAt = payment?.receiptMeta?.paymentDate || payment?.paidAt || payment?.createdAt;
+  const periodEnd = getPaymentPeriodEnd(payment?.month, payment?.academicYear);
+  const paidDate = paidAt ? new Date(paidAt) : null;
+
+  if (!periodEnd || !paidDate || Number.isNaN(paidDate.getTime())) {
+    return false;
+  }
+
+  return paidDate.getTime() > periodEnd.getTime();
+};
+
+const getPaymentStatusLabel = (payment) => {
+  if (payment?.receiptMeta?.paymentStatusLabel) {
+    return payment.receiptMeta.paymentStatusLabel;
+  }
+
+  if (String(payment?.status || "").toLowerCase() === "paid" && isLatePaymentRecord(payment)) {
+    return "Late Payment";
+  }
+
+  return String(payment?.status || "created")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+};
 
 const getReceiptFilename = ({ student, payment, month }) => {
   const namePart = String(student?.name || "student")
@@ -197,9 +304,13 @@ export default function StudentDashboard() {
 
     const generatedAt = new Date();
     const receiptNumber = getReceiptNumber(payment);
-    const amountPaid = formatReceiptCurrency(payment?.amount || totalMonthlyFees);
-    const paymentStatus = String(payment?.status || "paid").toUpperCase();
+    const paymentStatus = getPaymentStatusLabel(payment).toUpperCase();
+    const paymentStatusColor =
+      paymentStatus === "LATE PAYMENT" ? RECEIPT_WARNING : RECEIPT_SUCCESS;
     const receiptDate = formatReceiptDate(generatedAt);
+    const paidOnDate = formatReceiptDate(
+      payment?.receiptMeta?.paymentDate || payment?.paidAt || payment?.createdAt
+    );
     const academicYearLabel = payment?.academicYear
       ? `${payment.academicYear}-${payment.academicYear + 1}`
       : "-";
@@ -220,12 +331,18 @@ export default function StudentDashboard() {
     const feeRows = [
       ["Month / Fee Period", payment?.month || month || "-"],
       ["Academic Year", academicYearLabel],
+      ["Paid On", paidOnDate],
+      ["Payment Status", getPaymentStatusLabel(payment)],
       ["Payment Method", getReceiptPaymentMethod(payment)],
       ["Transaction ID", transactionId],
     ];
 
-    const renderReceipt = (logoImage = null) => {
+    const renderReceipt = async (logoImage = null) => {
       const doc = new jsPDF("p", "mm", "a4");
+      const { fontName: receiptFontName, currencyFallback } = await loadReceiptPdfFont(doc);
+      const amountPaid = formatReceiptCurrency(payment?.amount || totalMonthlyFees, {
+        fallback: currencyFallback,
+      });
       const pageWidth = doc.internal.pageSize.getWidth();
       const pageHeight = doc.internal.pageSize.getHeight();
       const accentHeight = 10;
@@ -291,10 +408,12 @@ export default function StudentDashboard() {
       doc.setFontSize(10.2);
       doc.text(receiptNumber, 22, 85);
       doc.text(receiptDate, 76, 85);
-      doc.setTextColor(...RECEIPT_SUCCESS);
+      doc.setTextColor(...paymentStatusColor);
       doc.text(paymentStatus, 124, 85);
       doc.setTextColor(...RECEIPT_TEXT_DARK);
+      doc.setFont(receiptFontName, receiptFontName === "helvetica" ? "bold" : "normal");
       doc.text(amountPaid, 166, 85, { align: "left" });
+      doc.setFont("helvetica", "normal");
 
       autoTable(doc, {
         startY: 96,
@@ -386,8 +505,12 @@ export default function StudentDashboard() {
 
     const img = new Image();
     img.src = "/logo.png";
-    img.onload = () => renderReceipt(img);
-    img.onerror = () => renderReceipt(null);
+    img.onload = () => {
+      void renderReceipt(img);
+    };
+    img.onerror = () => {
+      void renderReceipt(null);
+    };
   };
 
 
@@ -405,9 +528,9 @@ export default function StudentDashboard() {
       <Nav />
 
       <MotionSection className="student-header" delay={0.04}>
-        <h1 className="student-name">____________</h1>
-        <h1 className="student-name">____________</h1>
-        <p className="student-subtitle">Student Dashboard</p>
+        <div className="student-header-divider" aria-hidden="true" />
+        <h1 className="student-dashboard-title">Student Dashboard</h1>
+        <p className="student-subtitle">Track your fees, payments, and upcoming dues in one place.</p>
       </MotionSection>
       <MotionSection className="dashboard-top" delay={0.08}>
         <MotionCard className="total-fees-container" hover={false}>
@@ -439,15 +562,18 @@ export default function StudentDashboard() {
 
       <div className="month-list">
         {months.map((month) => {
-          const isPaid = payments.some(
+          const matchingPayment = payments.find(
             (p) => p.month === month && p.status === "paid"
           );
+          const isPaid = Boolean(matchingPayment);
+          const isLatePayment = matchingPayment ? isLatePaymentRecord(matchingPayment) : false;
 
           return (
             <MotionCard key={month} className="month-card" delay={0.04}>
               <div className="month-info">
                 <p className="month-name">{month}</p>
                 <p className="month-fee">₹{totalMonthlyFees}</p>
+                {isLatePayment ? <span className="late-payment-badge">Late Payment</span> : null}
               </div>
 
               {isPaid ? (

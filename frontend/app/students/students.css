@@ -2,7 +2,7 @@
    MAIN LAYOUT
 ========================================================= */
 .students-container {
-  padding: 30px;
+  padding: clamp(18px, 4vw, 30px);
   max-width: 1000px;
   margin: auto;
   animation: fadeIn 0.4s ease-in-out;
@@ -177,6 +177,7 @@
   font-size: 20px;
   font-weight: 700;
   color: #0f172a;
+  overflow-wrap: anywhere;
 }
 
 .student-card p {
@@ -184,6 +185,7 @@
   font-size: 15px;
   font-weight: 500;
   color: #334155;
+  overflow-wrap: anywhere;
 }
 
 .students-pagination {

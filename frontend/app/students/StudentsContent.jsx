@@ -7,7 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import "./students.css";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection, fadeUpItem, staggerContainer } from "../components/motion/primitives.jsx";
-import { getAuthToken } from "../../lib/authStorage.js";
+import { clearAuthSession, getAuthRole, getAuthToken } from "../../lib/authStorage.js";
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
 const PAGE_SIZE = 12;
@@ -75,7 +75,13 @@ export default function StudentsPage() {
   // 🔹 Fetch students from paginated backend response
   useEffect(() => {
     const token = getAuthToken();
+    const role = getAuthRole();
     if (!token) {
+      window.location.href = "/login";
+      return;
+    }
+    if (role && role !== "admin") {
+      clearAuthSession();
       window.location.href = "/login";
       return;
     }
@@ -112,6 +118,11 @@ export default function StudentsPage() {
       .then(async (res) => {
         const data = await res.json();
         if (!res.ok) {
+          if (res.status === 401 || res.status === 403) {
+            clearAuthSession();
+            window.location.href = "/login";
+            return;
+          }
           throw new Error(data?.message || "Failed to fetch students");
         }
         if (requestKeyRef.current !== requestKey) {

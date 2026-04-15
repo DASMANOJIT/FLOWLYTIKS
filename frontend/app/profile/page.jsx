@@ -11,6 +11,67 @@ import { clearAuthSession, getAuthToken } from "../../lib/authStorage.js";
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
 
+const PAYMENT_MONTH_TO_INDEX = {
+  January: 0,
+  February: 1,
+  March: 2,
+  April: 3,
+  May: 4,
+  June: 5,
+  July: 6,
+  August: 7,
+  September: 8,
+  October: 9,
+  November: 10,
+  December: 11,
+};
+
+const getPaymentPeriodEnd = (month, academicYear) => {
+  const monthIndex = PAYMENT_MONTH_TO_INDEX[String(month || "").trim()];
+  const normalizedAcademicYear = Number(academicYear);
+
+  if (!Number.isInteger(monthIndex) || !Number.isInteger(normalizedAcademicYear)) {
+    return null;
+  }
+
+  const calendarYear = monthIndex >= 2 ? normalizedAcademicYear : normalizedAcademicYear + 1;
+  return new Date(calendarYear, monthIndex + 1, 0, 23, 59, 59, 999);
+};
+
+const isLatePaymentRecord = (payment) => {
+  if (typeof payment?.isLatePayment === "boolean") {
+    return payment.isLatePayment;
+  }
+
+  if (typeof payment?.receiptMeta?.isLatePayment === "boolean") {
+    return payment.receiptMeta.isLatePayment;
+  }
+
+  const paidAt = payment?.receiptMeta?.paymentDate || payment?.paidAt || payment?.createdAt;
+  const periodEnd = getPaymentPeriodEnd(payment?.month, payment?.academicYear);
+  const paidDate = paidAt ? new Date(paidAt) : null;
+
+  if (!periodEnd || !paidDate || Number.isNaN(paidDate.getTime())) {
+    return false;
+  }
+
+  return paidDate.getTime() > periodEnd.getTime();
+};
+
+const getPaymentStatusLabel = (payment) => {
+  if (payment?.receiptMeta?.paymentStatusLabel) {
+    return payment.receiptMeta.paymentStatusLabel;
+  }
+
+  if (String(payment?.status || "").toLowerCase() === "paid" && isLatePaymentRecord(payment)) {
+    return "Late Payment";
+  }
+
+  return String(payment?.status || "created")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+};
+
 export default function StudentSelfProfile() {
   const router = useRouter();
 
@@ -118,19 +179,23 @@ export default function StudentSelfProfile() {
                   <div>
                     <p className="payment-month">{p.month}</p>
                     <p className="payment-date">
-                      {new Date(p.createdAt).toLocaleDateString()}
+                      {new Date(
+                        p.receiptMeta?.paymentDate || p.paidAt || p.createdAt
+                      ).toLocaleDateString()}
                     </p>
                   </div>
                   <div className="payment-right">
                     <p className="payment-amount">₹{p.amount}</p>
                     <span
                       className={
-                        p.status === "paid"
+                        getPaymentStatusLabel(p) === "Late Payment"
+                          ? "status-late"
+                          : p.status === "paid"
                           ? "status-paid"
                           : "status-unpaid"
                       }
                     >
-                      {p.status}
+                      {getPaymentStatusLabel(p)}
                     </span>
                   </div>
                 </div>

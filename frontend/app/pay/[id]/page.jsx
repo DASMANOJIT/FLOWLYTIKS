@@ -8,7 +8,7 @@ import "./pay.css";
 import PremiumLoader from "../../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard } from "../../components/motion/primitives.jsx";
 import { readApiResponse } from "../../../lib/api.js";
-import { getAuthToken } from "../../../lib/authStorage.js";
+import { clearAuthSession, getAuthRole, getAuthToken } from "../../../lib/authStorage.js";
 import { openCashfreeCheckout } from "../../../lib/cashfree.js";
 
 export default function PayPage() {
@@ -33,7 +33,13 @@ export default function PayPage() {
     const fetchStudent = async () => {
       try {
         const token = getAuthToken();
+        const role = getAuthRole();
         if (!token) {
+          router.push("/login");
+          return;
+        }
+        if (role && role !== "student") {
+          clearAuthSession();
           router.push("/login");
           return;
         }
@@ -49,8 +55,6 @@ export default function PayPage() {
         );
 
         if (!res.ok) {
-          const errorText = await res.text();
-          console.error("Fetch failed:", res.status, errorText);
           throw new Error("Student fetch failed");
         }
 
@@ -106,10 +110,6 @@ export default function PayPage() {
         res,
         "Unable to initialize checkout right now."
       );
-
-      console.log("Payment initiate response:", data);
-      console.log("payment_session_id from backend:", data?.payment_session_id);
-      console.log("paymentSessionId from backend:", data?.paymentSessionId);
 
       const paymentSessionId =
         String(data?.payment_session_id || data?.paymentSessionId || "").trim() || null;

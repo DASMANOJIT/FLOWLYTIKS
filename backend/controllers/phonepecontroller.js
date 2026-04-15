@@ -1,6 +1,7 @@
 import prisma from "../prisma/client.js";
 import { phonepeConfig, generateChecksum } from "../config/phonepe.config.js";
 import { getAcademicYear } from "../utils/academicYear.js";
+import { isLatePaymentForPeriod } from "../utils/paymentPeriod.js";
 import { sendFeePaidWhatsAppNotification } from "../services/whatsappservice.js";
 import { autoPromoteIfEligible } from "./studentcontrollers.js";
 import { withPgAdvisoryLock } from "../utils/dbLocks.js";
@@ -199,10 +200,16 @@ export const phonePeCallback = async (req, res) => {
         if (!payment) return { missing: true };
 
         if (code === "PAYMENT_SUCCESS" || code === "SUCCESS") {
+          const paidAt = new Date();
           const paidData = {
             status: "paid",
             paymentProvider: "PHONEPE",
-            paidAt: new Date(),
+            paidAt,
+            isLatePayment: isLatePaymentForPeriod({
+              month: payment.month,
+              academicYear: payment.academicYear,
+              paidAt,
+            }),
             phonepePaymentId: transactionId,
           };
 

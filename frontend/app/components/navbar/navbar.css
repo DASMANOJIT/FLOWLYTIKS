@@ -59,6 +59,9 @@
   font-size: 18px;
   font-weight: 600;
   color: white;
+  max-width: min(34vw, 220px);
+  overflow-wrap: anywhere;
+  line-height: 1.2;
 }
 
 .logout-btn {

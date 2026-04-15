@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import "./login.css";
 import Fall from "../animation/fallingword.jsx";
@@ -10,26 +10,6 @@ import { clearLegacyAuthStorage, storeAuthSession } from "../../lib/authStorage.
 
 export default function Login() {
   const OTP_RESEND_COOLDOWN_SECONDS = 15;
-  const debugRenders = process.env.NEXT_PUBLIC_RENDER_DEBUG === "1";
-  const renderCount = useRef(0);
-  const warned = useRef(false);
-
-  useEffect(() => {
-    if (!debugRenders) return;
-
-    renderCount.current += 1;
-    const c = renderCount.current;
-
-    if (c === 1 || c === 2 || c === 3 || c === 5 || c === 10 || c === 20 || c % 50 === 0) {
-      // Avoid logging any secrets (OTP/password); only log the count.
-      console.log("[render] app/login", c);
-    }
-
-    if (!warned.current && c > 20) {
-      warned.current = true;
-      console.warn("⚠️ Excessive renders detected in app/login:", c);
-    }
-  });
 
   const [activeForm, setActiveForm] = useState("login");
   const [forgotOtpSent, setForgotOtpSent] = useState(false);
@@ -183,7 +163,7 @@ export default function Login() {
   };
 
   const handleSignupSuccess = (data) => {
-    storeAuthSession({ token: data.token, name: data.name });
+    storeAuthSession({ token: data.token, name: data.name, role: "student" });
     alert("Registered successfully!");
     resetSignupVerificationState();
     window.location.href = "/student";
@@ -236,7 +216,7 @@ export default function Login() {
         return;
       }
 
-      storeAuthSession({ token: data.token, name: data.name });
+      storeAuthSession({ token: data.token, name: data.name, role: data.role });
 
       if (data.role === "admin") {
         window.location.href = "/admin";
@@ -521,7 +501,7 @@ export default function Login() {
       );
       if (!ok) return alert(error);
 
-      storeAuthSession({ token: data.token, name: data.name });
+      storeAuthSession({ token: data.token, name: data.name, role: data.role });
       window.location.href = "/student";
     } catch (err) {
       alert("Cannot connect to backend!");
@@ -553,7 +533,7 @@ export default function Login() {
       );
       if (!ok) return alert(error);
 
-      storeAuthSession({ token: data.token, name: data.name });
+      storeAuthSession({ token: data.token, name: data.name, role: data.role });
       setTwoFaRequired(false);
       setTwoFaEmail("");
       setTwoFaOtp("");
@@ -635,6 +615,9 @@ export default function Login() {
                   className="form-input"
                   value={twoFaOtp}
                   onChange={(e) => setTwoFaOtp(e.target.value)}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
                 />
                 <MotionButton
                   type="button"
@@ -661,6 +644,8 @@ export default function Login() {
                   placeholder="Email"
                   className="form-input"
                   value={otpLoginEmail}
+                  inputMode="email"
+                  autoComplete="email"
                   onChange={(e) => {
                     setOtpLoginEmail(e.target.value);
                     setOtpLoginSent(false);
@@ -695,6 +680,9 @@ export default function Login() {
                         className="form-input"
                         value={otpLoginOtp}
                         onChange={(e) => setOtpLoginOtp(e.target.value)}
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        maxLength={6}
                       />
                       <MotionButton
                         type="button"
@@ -728,6 +716,8 @@ export default function Login() {
                   placeholder="Email"
                   className="form-input"
                   value={loginEmail}
+                  inputMode="email"
+                  autoComplete="email"
                   onChange={(e) => setLoginEmail(e.target.value)}
                 />
                 <div className="password-field">
@@ -737,6 +727,7 @@ export default function Login() {
                     placeholder="Password"
                     className="form-input"
                     value={loginPassword}
+                    autoComplete="current-password"
                     onChange={(e) => setLoginPassword(e.target.value)}
                   />
                   <button
@@ -775,6 +766,7 @@ export default function Login() {
               className="form-input"
               required
               value={signupName}
+              autoComplete="name"
               onChange={(e) => setSignupName(e.target.value)}
             />
             <select
@@ -806,6 +798,7 @@ export default function Login() {
                 className="form-input"
                 required
                 value={signupCustomSchool}
+                autoComplete="organization"
                 onChange={(e) => setSignupCustomSchool(e.target.value)}
               />
             )}
@@ -829,6 +822,8 @@ export default function Login() {
               className="form-input"
               required
               value={signupPhone}
+              inputMode="tel"
+              autoComplete="tel"
               onChange={(e) => setSignupPhone(e.target.value)}
             />
             <input
@@ -837,6 +832,8 @@ export default function Login() {
               className="form-input"
               required
               value={signupEmail}
+              inputMode="email"
+              autoComplete="email"
               onChange={(e) => {
                 setSignupEmail(e.target.value);
                 setSignupOtpSent(false);
@@ -873,6 +870,9 @@ export default function Login() {
                     required
                     value={signupOtpInput}
                     onChange={(e) => setSignupOtpInput(e.target.value)}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
                   />
                   <MotionButton
                     type="button"
@@ -897,6 +897,7 @@ export default function Login() {
                 className="form-input"
                 required
                 value={signupPassword}
+                autoComplete="new-password"
                 onChange={(e) => setSignupPassword(e.target.value)}
               />
               <button
@@ -939,6 +940,8 @@ export default function Login() {
               placeholder="Email"
               className="form-input"
               value={forgotEmail}
+              inputMode="email"
+              autoComplete="email"
               onChange={(e) => {
                 setForgotEmail(e.target.value);
                 setForgotOtpSent(false);
@@ -977,16 +980,20 @@ export default function Login() {
                     className="form-input"
                     value={forgotOtpInput}
                     onChange={(e) => setForgotOtpInput(e.target.value)}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
                   />
                   <div className="password-field">
                     <input
                       name="newPassword"
                       type={showResetPassword ? "text" : "password"}
                       placeholder="New Password"
-                      className="form-input"
-                      value={forgotNewPassword}
-                      onChange={(e) => setForgotNewPassword(e.target.value)}
-                    />
+                    className="form-input"
+                    value={forgotNewPassword}
+                    autoComplete="new-password"
+                    onChange={(e) => setForgotNewPassword(e.target.value)}
+                  />
                     <button
                       type="button"
                       className="eye-btn"

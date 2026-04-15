@@ -2,7 +2,7 @@
 .pay-wrapper {
   max-width: 680px;
   margin: auto;
-  padding: 20px;
+  padding: 72px 20px 20px;
   animation: fadeIn 0.4s ease;
   position: relative; /* ✅ IMPORTANT */
 }
@@ -204,6 +204,10 @@
 
 /* ---------- RESPONSIVE ---------- */
 @media (max-width: 640px) {
+  .pay-wrapper {
+    padding: 56px 14px 18px;
+  }
+
   .pay-card {
     padding: 20px;
   }
@@ -228,6 +232,7 @@
     font-size: 16px;
   }
 }
+
 .back-btn {
   position: absolute;
   top: 12px;
@@ -251,8 +256,8 @@
 
 @media (max-width: 640px) {
   .back-btn {
-    top: 8px;
-    left: 8px;
+    top: 12px;
+    left: 14px;
     font-size: 14px;
   }
 }

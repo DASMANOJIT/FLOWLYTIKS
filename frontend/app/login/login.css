@@ -1,9 +1,11 @@
 .login-container {
   min-height: 100vh;
-  width: 100vw;
+  min-height: 100svh;
+  width: 100%;
   padding: 24px 16px 36px;
   position: relative;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -320,21 +322,112 @@
 }
 
 @media (max-width: 640px) {
-  .auth-shell {
-    width: min(96vw, 460px);
-    padding: 10px;
+  .login-container {
+    justify-content: flex-start;
+    min-height: 100svh;
+    padding:
+      max(16px, env(safe-area-inset-top))
+      14px
+      max(24px, env(safe-area-inset-bottom));
   }
 
-  .card-wrapper.signup {
-    height: 88vh;
-    min-height: 760px;
+  .login-header {
+    width: 100%;
+    margin-bottom: 12px;
+  }
+
+  .login-header h1 {
+    font-size: clamp(24px, 9vw, 34px);
+    line-height: 1.1;
+  }
+
+  .login-subtitle {
+    font-size: 14px;
+    margin-top: 10px;
+  }
+
+  .auth-shell {
+    width: min(100%, 460px);
+    padding: 10px;
+    border-radius: 20px;
+  }
+
+  .card-wrapper,
+  .card-wrapper.login,
+  .card-wrapper.signup,
+  .card-wrapper.forgot {
+    height: auto;
+    min-height: 0;
+    perspective: none;
+    transition: none;
+  }
+
+  .auth-switch {
+    margin-bottom: 10px;
+    gap: 6px;
+    padding: 5px;
+  }
+
+  .switch-btn {
+    font-size: 13px;
+    padding: 10px 6px;
   }
 
   .card-form {
+    position: relative;
+    top: 0;
+    left: 0;
     padding: 18px 14px;
+    max-height: none;
+    overflow: visible;
+    border-radius: 18px;
   }
 
   .card-form h2 {
     font-size: 30px;
+  }
+
+  .card-wrapper.login .signup-side,
+  .card-wrapper.login .forgot-side,
+  .card-wrapper.signup .login-side,
+  .card-wrapper.signup .forgot-side,
+  .card-wrapper.forgot .login-side,
+  .card-wrapper.forgot .signup-side {
+    display: none;
+  }
+
+  .card-wrapper.login .login-side,
+  .card-wrapper.signup .signup-side,
+  .card-wrapper.forgot .forgot-side {
+    display: flex;
+  }
+
+  .form-input,
+  .form-btn {
+    font-size: 15px;
+  }
+
+  .password-rules,
+  .switch-link {
+    font-size: 12px;
+    line-height: 1.5;
+  }
+}
+
+@media (max-width: 380px) {
+  .auth-shell {
+    padding: 8px;
+  }
+
+  .card-form {
+    padding: 16px 12px;
+  }
+
+  .card-form h2 {
+    font-size: 26px;
+  }
+
+  .switch-btn {
+    font-size: 12px;
   }
 }

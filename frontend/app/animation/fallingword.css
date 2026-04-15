@@ -40,3 +40,9 @@
     opacity: 0;
   }
 }
+
+@media (max-width: 640px), (prefers-reduced-motion: reduce) {
+  .falling-layer {
+    display: none;
+  }
+}

@@ -27,9 +27,19 @@ import {
   parseStudentClass,
   resolveSchoolValue,
 } from "../utils/authValidation.js";
+import { buildRequestLogMeta, logInfo, logWarn } from "../utils/appLogger.js";
 
 const MAX_DEVICES_PER_ACCOUNT = 2;
 const INVALID_CREDENTIALS_MESSAGE = "Invalid credentials.";
+
+const maskEmailForLog = (email) => {
+  const value = String(email || "").trim().toLowerCase();
+  if (!value.includes("@")) return value || "unknown";
+  const [local, domain] = value.split("@");
+  if (!local || !domain) return value;
+  if (local.length <= 2) return `${local[0] || "*"}***@${domain}`;
+  return `${local[0]}***${local.slice(-1)}@${domain}`;
+};
 
 const authError = (res, status, error, extra = {}) =>
   res.status(status).json({
@@ -240,12 +250,17 @@ export const loginUser = async (req, res) => {
   try {
     const { email, password, otp } = req.body;
     const normalizedEmail = normalizeEmail(email);
+    const requestMeta = buildRequestLogMeta(req, {
+      email: maskEmailForLog(normalizedEmail),
+    });
 
     if (email && !password && !otp) {
       if (!isValidEmail(normalizedEmail)) {
+        logWarn("auth.login_otp_request_invalid_email", requestMeta);
         return authError(res, 400, "Please provide a valid email.");
       }
       const result = await sendEmailOtp({ email: normalizedEmail, purpose: "login" });
+      logInfo("auth.login_otp_requested", requestMeta);
       return authSuccess(res, {
         message: "OTP sent successfully",
         maskedEmail: result.maskedEmail,
@@ -254,9 +269,11 @@ export const loginUser = async (req, res) => {
 
     if (email && otp) {
       if (!isValidEmail(normalizedEmail)) {
+        logWarn("auth.login_otp_invalid_email", requestMeta);
         return authError(res, 400, "Please provide a valid email.");
       }
       if (!isValidOtp(otp)) {
+        logWarn("auth.login_otp_invalid_code", requestMeta);
         return authError(res, 400, "Please enter the 6-digit OTP.");
       }
       await verifyEmailOtp({ email: normalizedEmail, purpose: "login", code: normalizeOtp(otp) });
@@ -265,9 +282,16 @@ export const loginUser = async (req, res) => {
         select: selectStudentAuthFields,
       });
       if (!student) {
+        logWarn("auth.login_otp_failed", requestMeta);
         return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
       }
       const token = await issueToken({ role: "student", id: student.id });
+      logInfo("auth.login_success", {
+        ...requestMeta,
+        role: "student",
+        userId: student.id,
+        loginMethod: "otp",
+      });
       return authSuccess(res, {
         token,
         role: "student",
@@ -283,9 +307,20 @@ export const loginUser = async (req, res) => {
       if (admin) {
         const isMatch = await bcrypt.compare(password, admin.password);
         if (!isMatch) {
+          logWarn("auth.login_failed", {
+            ...requestMeta,
+            role: "admin",
+            loginMethod: "password",
+          });
           return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
         }
         const token = await issueToken({ role: "admin", id: admin.id });
+        logInfo("auth.login_success", {
+          ...requestMeta,
+          role: "admin",
+          userId: admin.id,
+          loginMethod: "password",
+        });
         return authSuccess(res, {
           token,
           role: "admin",
@@ -315,16 +350,32 @@ export const loginUser = async (req, res) => {
       }
 
       if (!student) {
+        logWarn("auth.login_failed", {
+          ...requestMeta,
+          role: "student",
+          loginMethod: "password",
+        });
         return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
       }
 
       const isMatch = await bcrypt.compare(password, student.password);
       if (!isMatch) {
+        logWarn("auth.login_failed", {
+          ...requestMeta,
+          role: "student",
+          userId: student.id,
+          loginMethod: "password",
+        });
         return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
       }
 
       if (student.isTwoFactorEnabled && student.email) {
         await sendEmailOtp({ email: student.email, purpose: "2fa" });
+        logInfo("auth.login_2fa_required", {
+          ...requestMeta,
+          role: "student",
+          userId: student.id,
+        });
         return authSuccess(res, {
           requires2fa: true,
           role: "student",
@@ -333,6 +384,12 @@ export const loginUser = async (req, res) => {
       }
 
       const token = await issueToken({ role: "student", id: student.id });
+      logInfo("auth.login_success", {
+        ...requestMeta,
+        role: "student",
+        userId: student.id,
+        loginMethod: "password",
+      });
       return authSuccess(res, {
         token,
         role: "student",
@@ -340,9 +397,11 @@ export const loginUser = async (req, res) => {
       });
     }
 
+    logWarn("auth.login_invalid_payload", requestMeta);
     return authError(res, 400, "Provide email (with OTP or password).");
   } catch (err) {
     if (err?.status) {
+      logWarn("auth.login_rejected", buildRequestLogMeta(req, { status: err.status }));
       return authError(res, err.status, err.message, err.retryAfter ? { retryAfter: err.retryAfter } : {});
     }
     if (isDbUnavailableError(err)) {
