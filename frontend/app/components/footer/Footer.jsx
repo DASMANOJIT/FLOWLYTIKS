@@ -19,18 +19,20 @@ export default function Footer() {
               <div className="app-footer__brand-copy">
                 <span className="app-footer__title">Flowlytiks</span>
                 <p className="app-footer__subtitle">
-                  Smart fee operations and secure tuition payments for modern institutes.
-                </p>
-                <p className="app-footer__credits-text">
-                  Developed and maintained by{" "}
+                  Flowlytiks is created by{" "}
                   <a
-                    href="https://www.dmstacklabs.in/"
+                    href="https://dmstacklabs.in"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="app-footer__nav-link"
                   >
                     DM Stack Labs
                   </a>
+                  , a web development company founded by Manojit Das,
+                </p>
+                <p className="app-footer__credits-text">
+                  to help tutors and institutes manage fees, payments, reminders, and
+                  receipts.
                 </p>
               </div>
             </div>
