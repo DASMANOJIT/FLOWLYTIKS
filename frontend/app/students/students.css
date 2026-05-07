@@ -23,6 +23,14 @@
   margin-bottom: 8px;
 }
 
+.students-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .students-header-row .students-title {
   margin-bottom: 0;
   text-align: left;
@@ -47,6 +55,33 @@
 .students-add-btn:hover {
   transform: translateY(-2px);
   box-shadow: 0 16px 28px rgba(37, 99, 235, 0.24);
+}
+
+.students-export-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: linear-gradient(135deg, #0f172a, #1e293b);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+
+.students-export-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 28px rgba(15, 23, 42, 0.22);
+}
+
+.students-export-btn:disabled {
+  opacity: 0.72;
+  cursor: wait;
 }
 
 .students-statbar {
@@ -343,10 +378,15 @@
     align-items: stretch;
   }
 
+  .students-header-actions {
+    justify-content: stretch;
+  }
+
   .students-header-row .students-title {
     text-align: center;
   }
 
+  .students-export-btn,
   .students-add-btn {
     width: 100%;
   }

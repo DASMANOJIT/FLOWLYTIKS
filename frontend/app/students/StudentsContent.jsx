@@ -42,6 +42,7 @@ export default function StudentsPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [listLoading, setListLoading] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
   const [page, setPage] = useState(
     () => Math.max(1, Number(searchParams.get("page") || 1) || 1)
   );
@@ -216,6 +217,93 @@ export default function StudentsPage() {
     router.replace("/students", { scroll: false });
   };
 
+  const buildExportParams = () => {
+    const params = new URLSearchParams();
+    const nextSearch = search.trim();
+
+    if (nextSearch) params.set("search", nextSearch);
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    if (monthFilter) params.set("month", monthFilter);
+    if (classFilter !== "all") params.set("class", classFilter);
+    if (schoolFilter !== "all") params.set("school", schoolFilter);
+    if (sortOrder !== "none") params.set("sort", sortOrder);
+    if (fromDate) params.set("from", fromDate);
+    if (toDate) params.set("to", toDate);
+
+    return params;
+  };
+
+  const parseDownloadFileName = (contentDisposition) => {
+    const headerValue = String(contentDisposition || "");
+    const utfMatch = headerValue.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utfMatch?.[1]) {
+      return decodeURIComponent(utfMatch[1]);
+    }
+
+    const asciiMatch = headerValue.match(/filename="([^"]+)"/i);
+    return asciiMatch?.[1] || "students-export.csv";
+  };
+
+  const handleExportCsv = async () => {
+    const token = getAuthToken();
+    const role = getAuthRole();
+    if (!token) {
+      window.location.href = "/login";
+      return;
+    }
+    if (role && role !== "admin") {
+      clearAuthSession();
+      window.location.href = "/login";
+      return;
+    }
+
+    setExportLoading(true);
+
+    try {
+      const params = buildExportParams();
+      const res = await fetch(`${API_BASE}/api/students/export.csv?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          clearAuthSession();
+          window.location.href = "/login";
+          return;
+        }
+
+        const contentType = res.headers.get("content-type") || "";
+        let message = "Failed to export students CSV";
+        if (contentType.includes("application/json")) {
+          const data = await res.json();
+          message = data?.message || message;
+        } else {
+          const text = await res.text();
+          message = text || message;
+        }
+        throw new Error(message);
+      }
+
+      const blob = await res.blob();
+      const fileName = parseDownloadFileName(
+        res.headers.get("content-disposition")
+      );
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      console.error("Students CSV export error:", err);
+      window.alert(err?.message || "Failed to export students CSV.");
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
   if (loading) {
     return <PremiumLoader fullScreen label="Loading students" />;
   }
@@ -229,9 +317,19 @@ export default function StudentsPage() {
     >
       <div className="students-header-row">
         <h1 className="students-title">Students</h1>
-        <Link href="/students/add" className="students-add-btn">
-          Add Student
-        </Link>
+        <div className="students-header-actions">
+          <MotionButton
+            type="button"
+            className="students-export-btn"
+            onClick={handleExportCsv}
+            disabled={exportLoading}
+          >
+            {exportLoading ? "Exporting…" : "Export CSV"}
+          </MotionButton>
+          <Link href="/students/add" className="students-add-btn">
+            Add Student
+          </Link>
+        </div>
       </div>
 
       <MotionSection className="students-statbar" delay={0.04}>

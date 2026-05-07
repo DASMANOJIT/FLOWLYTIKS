@@ -1,6 +1,7 @@
 import express from "express";
 import {
   getStudents,
+  exportStudentsCsv,
   getStudentCount,
   getLoggedInStudent,
   getStudentById,
@@ -20,6 +21,7 @@ const router = express.Router();
 
 // ADMIN
 router.get("/", protect, adminOnly, getStudents);
+router.get("/export.csv", protect, adminOnly, exportStudentsCsv);
 router.get("/count", protect, adminOnly, getStudentCount);
 router.post(
   "/send-create-otp",

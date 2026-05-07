@@ -80,6 +80,124 @@ const normalizeStudentMonthFilter = (value) => {
   return VALID_PAYMENT_MONTHS.has(normalized) ? normalized : "";
 };
 
+const normalizeAcademicYearFilter = (value, fallback) => {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(String(value).trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 2000 || parsed > 2100) {
+    return null;
+  }
+
+  return parsed;
+};
+
+const resolveStudentListQuery = (query = {}) => {
+  const currentAcademicYear = normalizeAcademicYearFilter(
+    query.academicYear,
+    getAcademicYear()
+  );
+  if (query.academicYear && currentAcademicYear === null) {
+    return { error: "Invalid academic year" };
+  }
+
+  const requestedMonth = normalizeStudentMonthFilter(query.month);
+  if (query.month && !requestedMonth) {
+    return { error: "Invalid month filter" };
+  }
+
+  const currentMonth = requestedMonth || currentMonthName();
+  const page = parsePositiveInt(query.page, 1, 10_000);
+  const limit = parsePositiveInt(query.limit, 25, 100);
+  const search = String(query.search || "").trim();
+  const statusFilter = String(query.status || "all");
+  const classFilter = String(query.class || "all");
+  const schoolFilter = String(query.school || "all");
+  const sortOrder = String(query.sort || "az");
+  const compact = query.compact === "1";
+  const includeSummary = query.includeSummary === "1";
+  const includeFilters = query.includeFilters === "1";
+
+  const fromDate =
+    query.from && !normalizeDateBoundary(query.from)
+      ? null
+      : normalizeDateBoundary(query.from);
+  const toDate =
+    query.to && !normalizeDateBoundary(query.to, true)
+      ? null
+      : normalizeDateBoundary(query.to, true);
+
+  if ((query.from && !fromDate) || (query.to && !toDate)) {
+    return { error: "Invalid date filter" };
+  }
+
+  return {
+    currentAcademicYear,
+    requestedMonth,
+    currentMonth,
+    page,
+    limit,
+    search,
+    statusFilter,
+    classFilter,
+    schoolFilter,
+    sortOrder,
+    compact,
+    includeSummary,
+    includeFilters,
+    fromDate,
+    toDate,
+  };
+};
+
+const buildStudentOrderBy = (sortOrder) =>
+  sortOrder === "az" ? { name: "asc" } : { createdAt: "desc" };
+
+const safeCsvCell = (value) => {
+  const normalized = value === null || value === undefined ? "" : String(value);
+  const formulaSafe = /^[=+\-@]/.test(normalized) ? `'${normalized}` : normalized;
+  return `"${formulaSafe.replace(/"/g, '""')}"`;
+};
+
+const formatCsvDate = (value) => {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString();
+};
+
+const resolveStudentMonthPaymentStatus = ({
+  studentPayments,
+  currentMonth,
+}) => {
+  const monthPayment = studentPayments.find(
+    (payment) => String(payment.month || "") === String(currentMonth)
+  );
+
+  if (!monthPayment) return "missing/unpaid";
+
+  const status = String(monthPayment.status || "").trim().toLowerCase();
+  return status || "missing/unpaid";
+};
+
+const resolveAcademicYearPaymentSummary = (studentPayments = []) => {
+  const paidMonths = new Set(
+    studentPayments
+      .filter(
+        (payment) =>
+          String(payment.status || "").trim().toLowerCase() === "paid" &&
+          VALID_PAYMENT_MONTHS.has(String(payment.month || ""))
+      )
+      .map((payment) => payment.month)
+  );
+
+  return {
+    totalPaidMonths: paidMonths.size,
+    totalUnpaidMonths: Math.max(VALID_PAYMENT_MONTHS.size - paidMonths.size, 0),
+  };
+};
+
 const buildStudentWhere = ({
   search,
   statusFilter,
@@ -179,35 +297,26 @@ export const getStudents = async (req, res) => {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    const currentAcademicYear = getAcademicYear();
-    const requestedMonth = normalizeStudentMonthFilter(req.query.month);
-    if (req.query.month && !requestedMonth) {
-      return res.status(400).json({ message: "Invalid month filter" });
+    const resolvedQuery = resolveStudentListQuery(req.query);
+    if (resolvedQuery.error) {
+      return res.status(400).json({ message: resolvedQuery.error });
     }
-    const currentMonth = requestedMonth || currentMonthName();
-    const page = parsePositiveInt(req.query.page, 1, 10_000);
-    const limit = parsePositiveInt(req.query.limit, 25, 100);
-    const search = String(req.query.search || "").trim();
-    const statusFilter = String(req.query.status || "all");
-    const classFilter = String(req.query.class || "all");
-    const schoolFilter = String(req.query.school || "all");
-    const sortOrder = String(req.query.sort || "az");
-    const compact = req.query.compact === "1";
-    const includeSummary = req.query.includeSummary === "1";
-    const includeFilters = req.query.includeFilters === "1";
-
-    const fromDate =
-      req.query.from && !normalizeDateBoundary(req.query.from)
-        ? null
-        : normalizeDateBoundary(req.query.from);
-    const toDate =
-      req.query.to && !normalizeDateBoundary(req.query.to, true)
-        ? null
-        : normalizeDateBoundary(req.query.to, true);
-
-    if ((req.query.from && !fromDate) || (req.query.to && !toDate)) {
-      return res.status(400).json({ message: "Invalid date filter" });
-    }
+    const {
+      currentAcademicYear,
+      currentMonth,
+      page,
+      limit,
+      search,
+      statusFilter,
+      classFilter,
+      schoolFilter,
+      sortOrder,
+      compact,
+      includeSummary,
+      includeFilters,
+      fromDate,
+      toDate,
+    } = resolvedQuery;
 
     const where = buildStudentWhere({
       search,
@@ -220,8 +329,7 @@ export const getStudents = async (req, res) => {
       currentAcademicYear,
     });
 
-    const orderBy =
-      sortOrder === "az" ? { name: "asc" } : { createdAt: "desc" };
+    const orderBy = buildStudentOrderBy(sortOrder);
 
     const studentSelect = compact
       ? studentListCompactSelect
@@ -325,6 +433,131 @@ export const getStudents = async (req, res) => {
   } catch (err) {
     console.error("getStudents error:", err);
     res.status(500).json({ message: "Failed to fetch students" });
+  }
+};
+
+export const exportStudentsCsv = async (req, res) => {
+  try {
+    if (req.userRole !== "admin") {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const resolvedQuery = resolveStudentListQuery(req.query);
+    if (resolvedQuery.error) {
+      return res.status(400).json({ message: resolvedQuery.error });
+    }
+
+    const {
+      currentAcademicYear,
+      currentMonth,
+      search,
+      statusFilter,
+      classFilter,
+      schoolFilter,
+      sortOrder,
+      fromDate,
+      toDate,
+    } = resolvedQuery;
+
+    const where = buildStudentWhere({
+      search,
+      statusFilter,
+      classFilter,
+      schoolFilter,
+      fromDate,
+      toDate,
+      currentMonth,
+      currentAcademicYear,
+    });
+
+    const students = await prisma.student.findMany({
+      where,
+      orderBy: buildStudentOrderBy(sortOrder),
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        class: true,
+        school: true,
+        monthlyFee: true,
+        createdAt: true,
+        updatedAt: true,
+        payments: {
+          where: {
+            academicYear: currentAcademicYear,
+            month: {
+              in: [...VALID_PAYMENT_MONTHS],
+            },
+          },
+          select: {
+            month: true,
+            status: true,
+          },
+        },
+      },
+    });
+
+    const headers = [
+      "Student ID",
+      "Name",
+      "Email",
+      "Phone",
+      "Class",
+      "School",
+      "Monthly Fee",
+      "Selected Month",
+      "Selected Month Payment Status",
+      "Academic Year",
+      "Total Paid Months",
+      "Total Unpaid Months",
+      "Created At",
+      "Last Updated At",
+    ];
+
+    const rows = students.map((student) => {
+      const summary = resolveAcademicYearPaymentSummary(student.payments);
+      const selectedMonthStatus = resolveStudentMonthPaymentStatus({
+        studentPayments: student.payments,
+        currentMonth,
+      });
+
+      return [
+        student.id,
+        student.name,
+        student.email || "",
+        student.phone || "",
+        student.class || "",
+        student.school || "",
+        student.monthlyFee ?? "",
+        currentMonth,
+        selectedMonthStatus,
+        currentAcademicYear,
+        summary.totalPaidMonths,
+        summary.totalUnpaidMonths,
+        formatCsvDate(student.createdAt),
+        formatCsvDate(student.updatedAt),
+      ];
+    });
+
+    const csvContent = [
+      headers.map(safeCsvCell).join(","),
+      ...rows.map((row) => row.map(safeCsvCell).join(",")),
+    ].join("\n");
+
+    const exportDate = new Date().toISOString().slice(0, 10);
+    const fileName = `students-export-${exportDate}.csv`;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${fileName}"`
+    );
+
+    return res.status(200).send(`\uFEFF${csvContent}`);
+  } catch (err) {
+    console.error("exportStudentsCsv error:", err);
+    return res.status(500).json({ message: "Failed to export students CSV" });
   }
 };
 

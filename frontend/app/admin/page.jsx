@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
@@ -52,6 +53,7 @@ export default function AdminDashboard() {
   const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [assistantPortalRoot, setAssistantPortalRoot] = useState(null);
   const [chatMessages, setChatMessages] = useState([
     {
       role: "bot",
@@ -69,6 +71,10 @@ export default function AdminDashboard() {
   const [filterLoading, setFilterLoading] = useState(false);
   const dashboardRequestKeyRef = useRef("");
   const initialLoadRef = useRef(true);
+
+  useEffect(() => {
+    setAssistantPortalRoot(document.body);
+  }, []);
 
   // =========================
   // Fetch dashboard summary + paginated students
@@ -300,13 +306,14 @@ export default function AdminDashboard() {
   }
 
   return (
-    <motion.div
-      className="admin-dashboard"
-      id="dashboard-root"
-      initial={{ opacity: 0, y: 18 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-    >
+    <>
+      <motion.div
+        className="admin-dashboard"
+        id="dashboard-root"
+        initial={{ opacity: 0, y: 18 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+      >
 
       {/* NAVBAR */}
       <MotionSection className="admin-nav" delay={0.02}>
@@ -491,48 +498,67 @@ export default function AdminDashboard() {
       </motion.div>
       </MotionSection>
 
-      <MotionButton className="assistant-toggle" onClick={() => setChatOpen((v) => !v)}>
-        {chatOpen ? "Close Assistant" : "Admin Assistant"}
-      </MotionButton>
+      </motion.div>
 
-      <AnimatePresence>
-      {chatOpen && (
-        <motion.div
-          className="assistant-panel"
-          initial={{ opacity: 0, y: 20, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 12, scale: 0.98 }}
-          transition={{ duration: 0.25 }}
-        >
-          <h3>Admin Chatbot</h3>
-          <div className="assistant-messages">
-            {chatMessages.map((message, index) => (
-              <div
-                key={`${message.role}-${index}`}
-                className={`assistant-msg ${message.role === "user" ? "assistant-user" : "assistant-bot"}`}
+      {assistantPortalRoot
+        ? createPortal(
+            <div className="assistant-floating-layer" aria-live="polite">
+              <MotionButton
+                className="assistant-toggle"
+                onClick={() => setChatOpen((v) => !v)}
               >
-                {message.text}
-              </div>
-            ))}
-          </div>
+                {chatOpen ? "Close Assistant" : "Admin Assistant"}
+              </MotionButton>
 
-          <div className="assistant-input-row">
-            <input
-              type="text"
-              value={chatInput}
-              placeholder="Type command for admin actions..."
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") sendAdminPrompt();
-              }}
-            />
-            <MotionButton onClick={sendAdminPrompt} disabled={chatLoading}>
-              {chatLoading ? <span className="button-loading-content"><PremiumLoader inline compact /><span>Sending</span></span> : "Send"}
-            </MotionButton>
-          </div>
-        </motion.div>
-      )}
-      </AnimatePresence>
-    </motion.div>
+              <AnimatePresence>
+                {chatOpen && (
+                  <motion.div
+                    className="assistant-panel"
+                    initial={{ opacity: 0, y: 20, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                    transition={{ duration: 0.25 }}
+                  >
+                    <h3>Admin Chatbot</h3>
+                    <div className="assistant-messages">
+                      {chatMessages.map((message, index) => (
+                        <div
+                          key={`${message.role}-${index}`}
+                          className={`assistant-msg ${message.role === "user" ? "assistant-user" : "assistant-bot"}`}
+                        >
+                          {message.text}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="assistant-input-row">
+                      <input
+                        type="text"
+                        value={chatInput}
+                        placeholder="Type command for admin actions..."
+                        onChange={(e) => setChatInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") sendAdminPrompt();
+                        }}
+                      />
+                      <MotionButton onClick={sendAdminPrompt} disabled={chatLoading}>
+                        {chatLoading ? (
+                          <span className="button-loading-content">
+                            <PremiumLoader inline compact />
+                            <span>Sending</span>
+                          </span>
+                        ) : (
+                          "Send"
+                        )}
+                      </MotionButton>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>,
+            assistantPortalRoot
+          )
+        : null}
+    </>
   );
 }
