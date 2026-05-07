@@ -53,6 +53,7 @@ export default function PaymentsPage() {
     }
 
     const params = new URLSearchParams({
+      page: "1",
       search: trimmedSearch,
       limit: "7",
       compact: "1",

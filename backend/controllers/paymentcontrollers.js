@@ -637,7 +637,6 @@ export const getAllPayments = async (req, res) => {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    const shouldPaginate = "page" in req.query || "limit" in req.query;
     const page = parsePositiveInt(req.query.page, 1, 10_000);
     const limit = parsePositiveInt(req.query.limit, 25, 100);
     const paymentSelect = {
@@ -646,30 +645,6 @@ export const getAllPayments = async (req, res) => {
         select: paymentStudentListSelect,
       },
     };
-
-    if (!shouldPaginate) {
-      let payments;
-      try {
-        payments = await prisma.payment.findMany({
-          select: paymentSelect,
-          orderBy: { createdAt: "desc" },
-        });
-      } catch (error) {
-        if (!isPaymentSchemaCompatibilityError(error)) throw error;
-        logPaymentCompatibilityFallback("getAllPayments", error);
-        payments = await prisma.payment.findMany({
-          select: {
-            ...legacyPaymentSelect,
-            student: {
-              select: paymentStudentListSelect,
-            },
-          },
-          orderBy: { createdAt: "desc" },
-        });
-      }
-
-      return res.json(payments);
-    }
 
     const totalPayments = await prisma.payment.count();
     let payments;

@@ -11,7 +11,7 @@ import {
 } from "./backgroundJobService.js";
 
 const shouldRunSchedulers = () => {
-  return process.env.RUN_SCHEDULED_JOBS !== "0";
+  return String(process.env.RUN_SCHEDULED_JOBS || "").trim() === "1";
 };
 
 const schedulerDateKey = (timeZone = "Asia/Kolkata") =>

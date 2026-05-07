@@ -59,6 +59,129 @@ const jsonSuccess = (res, payload = {}, status = 200) =>
 
 const isUniqueConstraintError = (error) => error?.code === "P2002";
 
+const CASHFREE_WEBHOOK_HEADER_KEYS = [
+  "x-idempotency-key",
+  "x-webhook-id",
+  "x-event-id",
+  "x-cf-event-id",
+];
+
+const CASHFREE_VOLATILE_WEBHOOK_FIELDS = new Set([
+  "timestamp",
+  "event_timestamp",
+  "event_time",
+  "webhook_timestamp",
+  "received_at",
+  "receivedat",
+  "delivered_at",
+  "deliveredat",
+]);
+
+const firstNonEmptyString = (...values) => {
+  for (const value of values) {
+    const normalized = String(value || "").trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+};
+
+const normalizeStableWebhookPayload = (value) => {
+  if (Array.isArray(value)) {
+    return value.map(normalizeStableWebhookPayload);
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  return Object.keys(value)
+    .sort((left, right) => left.localeCompare(right))
+    .reduce((accumulator, key) => {
+      const normalizedKey = String(key || "").trim();
+      const loweredKey = normalizedKey.toLowerCase();
+      if (CASHFREE_VOLATILE_WEBHOOK_FIELDS.has(loweredKey)) {
+        return accumulator;
+      }
+
+      const normalizedValue = normalizeStableWebhookPayload(value[key]);
+      if (typeof normalizedValue === "undefined") {
+        return accumulator;
+      }
+
+      accumulator[normalizedKey] = normalizedValue;
+      return accumulator;
+    }, {});
+};
+
+const extractCashfreeWebhookEventId = (payload) =>
+  firstNonEmptyString(
+    payload?.event_id,
+    payload?.eventId,
+    payload?.data?.event_id,
+    payload?.data?.eventId,
+    payload?.data?.id,
+    payload?.id
+  );
+
+const buildCashfreeWebhookDedupeKey = ({
+  headers,
+  payload,
+  eventType,
+  cashfreeOrderId,
+  cfPaymentId,
+}) => {
+  for (const headerName of CASHFREE_WEBHOOK_HEADER_KEYS) {
+    const headerValue = firstNonEmptyString(headers?.[headerName]);
+    if (headerValue) {
+      return `header:${headerValue}`;
+    }
+  }
+
+  const eventId = extractCashfreeWebhookEventId(payload);
+  if (eventId) {
+    return `event:${eventId}`;
+  }
+
+  const paymentId = firstNonEmptyString(
+    payload?.data?.payment?.payment_id,
+    payload?.payment_id,
+    payload?.data?.order?.order_tags?.paymentId,
+    payload?.data?.order?.order_tags?.payment_id
+  );
+  const paymentStatus = firstNonEmptyString(
+    payload?.data?.payment?.payment_status,
+    payload?.payment_status
+  );
+  const orderStatus = firstNonEmptyString(
+    payload?.data?.order?.order_status,
+    payload?.order_status,
+    payload?.data?.order?.status
+  );
+
+  if (cashfreeOrderId || cfPaymentId || paymentId) {
+    // Do not include delivery timestamps here: the same gateway event can be
+    // retried later with a different receive time, which would break dedupe.
+    return [
+      "stable",
+      eventType || "payment",
+      cashfreeOrderId || "no-order",
+      cfPaymentId || paymentId || "no-payment",
+      paymentStatus || "no-payment-status",
+      orderStatus || "no-order-status",
+    ].join(":");
+  }
+
+  const normalizedPayload = normalizeStableWebhookPayload(payload);
+  const payloadHash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(normalizedPayload))
+    .digest("hex");
+  return `payload:${eventType || "payment"}:${payloadHash}`;
+};
+
 const createPendingWebhookEvent = async ({
   dedupeKey,
   eventType,
@@ -870,9 +993,13 @@ export const handleCashfreeWebhook = async (req, res) => {
       null;
     const cfPaymentId =
       payload?.data?.payment?.cf_payment_id || payload?.cf_payment_id || null;
-    const dedupeKey =
-      String(req.headers["x-idempotency-key"] || "").trim() ||
-      `${eventType}:${cashfreeOrderId || "no-order"}:${cfPaymentId || "no-payment"}:${timestamp}`;
+    const dedupeKey = buildCashfreeWebhookDedupeKey({
+      headers: req.headers,
+      payload,
+      eventType,
+      cashfreeOrderId,
+      cfPaymentId,
+    });
 
     const { event: webhookEvent, duplicate } = await createPendingWebhookEvent({
       dedupeKey,

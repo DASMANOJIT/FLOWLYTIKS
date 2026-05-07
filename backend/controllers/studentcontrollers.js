@@ -53,21 +53,6 @@ const normalizeDateBoundary = (value, endOfDay = false) => {
   return date;
 };
 
-const hasStructuredStudentQuery = (query) => [
-  "page",
-  "limit",
-  "search",
-  "status",
-  "class",
-  "school",
-  "from",
-  "to",
-  "sort",
-  "compact",
-  "includeSummary",
-  "includeFilters",
-].some((key) => key in query);
-
 const buildStudentWhere = ({
   search,
   statusFilter,
@@ -169,37 +154,8 @@ export const getStudents = async (req, res) => {
 
     const currentAcademicYear = getAcademicYear();
     const currentMonth = currentMonthName();
-
-    if (!hasStructuredStudentQuery(req.query)) {
-      const students = await prisma.student.findMany({
-        select: {
-          ...studentBaseSelect,
-          payments: {
-            select: legacyPaymentSelect,
-          },
-        },
-        orderBy: { name: "asc" },
-      });
-
-      const enriched = students.map((student) => {
-        const hasPaidCurrentMonth = student.payments.some(
-          (payment) =>
-            payment.status === "paid" &&
-            payment.academicYear === currentAcademicYear &&
-            payment.month === currentMonth
-        );
-
-        return {
-          ...stripStudentSecrets(student),
-          feesStatus: hasPaidCurrentMonth ? "paid" : "unpaid",
-        };
-      });
-
-      return res.json(enriched);
-    }
-
     const page = parsePositiveInt(req.query.page, 1, 10_000);
-    const limit = parsePositiveInt(req.query.limit, 12, 100);
+    const limit = parsePositiveInt(req.query.limit, 25, 100);
     const search = String(req.query.search || "").trim();
     const statusFilter = String(req.query.status || "all");
     const classFilter = String(req.query.class || "all");
