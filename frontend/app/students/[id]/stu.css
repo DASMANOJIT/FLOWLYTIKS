@@ -130,6 +130,26 @@
   color: #1f2937;
 }
 
+.payment-record-actions {
+  margin-top: 12px;
+}
+
+.receipt-download-btn {
+  background: linear-gradient(135deg, #facc15, #f59e0b);
+  color: #1f1f1f;
+  border: none;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 12px 24px rgba(245, 158, 11, 0.18);
+}
+
+.receipt-download-btn:hover {
+  background: #eab308;
+}
+
 .payment-date {
   font-size: 13px;
   opacity: 0.7;

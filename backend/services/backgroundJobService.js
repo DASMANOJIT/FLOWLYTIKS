@@ -1,10 +1,17 @@
 import prisma from "../prisma/client.js";
-import { getAcademicYear } from "../utils/academicYear.js";
+import {
+  getAcademicYear,
+  getPromotionDateGate,
+} from "../utils/academicYear.js";
 import { withPgAdvisoryLock } from "../utils/dbLocks.js";
 import { forEachStudentBatch } from "../utils/studentBatching.js";
 import { runDailyFeeReminderJob } from "./reminderservice.js";
 import { markPaidForStudent, sendReminderToStudent } from "./feeOpsService.js";
-import { autoPromoteIfEligible } from "../controllers/studentcontrollers.js";
+import {
+  getPromotionHistoryForAcademicYear,
+  normalizePromotionJobResult,
+  promoteStudentForAcademicYear,
+} from "./promotionService.js";
 
 export const BACKGROUND_JOB_TYPES = {
   DAILY_FEE_REMINDER: "DAILY_FEE_REMINDER",
@@ -64,6 +71,11 @@ export const createBackgroundJob = async ({
       return { job: existingJob, requeued: false };
     }
 
+    const preservedResult =
+      existingJob.type === BACKGROUND_JOB_TYPES.ANNUAL_STUDENT_PROMOTION
+        ? existingJob.result
+        : null;
+
     const job = await prisma.backgroundJob.update({
       where: { id: existingJob.id },
       data: {
@@ -73,7 +85,7 @@ export const createBackgroundJob = async ({
         succeededItems: 0,
         failedItems: 0,
         errorMessage: null,
-        result: null,
+        result: preservedResult,
         startedAt: null,
         completedAt: null,
         lastHeartbeatAt: null,
@@ -199,29 +211,45 @@ const failBackgroundJob = async (jobId, error, patch = {}) => {
 
 const requeueStaleRunningJobs = async () => {
   const staleBefore = new Date(Date.now() - WORKER_STALE_MINUTES * 60_000);
-  const result = await prisma.backgroundJob.updateMany({
+  const staleJobs = await prisma.backgroundJob.findMany({
     where: {
       status: BACKGROUND_JOB_STATUS.RUNNING,
       lastHeartbeatAt: {
         lt: staleBefore,
       },
     },
-    data: {
-      status: BACKGROUND_JOB_STATUS.PENDING,
-      totalItems: 0,
-      processedItems: 0,
-      succeededItems: 0,
-      failedItems: 0,
-      errorMessage: "Requeued after stale worker heartbeat.",
-      result: null,
-      startedAt: null,
-      completedAt: null,
-      lastHeartbeatAt: null,
+    select: {
+      id: true,
+      type: true,
+      result: true,
     },
   });
 
-  if (result.count) {
-    backgroundJobLog("requeued-stale", { count: result.count });
+  for (const job of staleJobs) {
+    const preservedResult =
+      job.type === BACKGROUND_JOB_TYPES.ANNUAL_STUDENT_PROMOTION
+        ? job.result
+        : null;
+
+    await prisma.backgroundJob.update({
+      where: { id: job.id },
+      data: {
+        status: BACKGROUND_JOB_STATUS.PENDING,
+        totalItems: 0,
+        processedItems: 0,
+        succeededItems: 0,
+        failedItems: 0,
+        errorMessage: "Requeued after stale worker heartbeat.",
+        result: preservedResult,
+        startedAt: null,
+        completedAt: null,
+        lastHeartbeatAt: null,
+      },
+    });
+  }
+
+  if (staleJobs.length) {
+    backgroundJobLog("requeued-stale", { count: staleJobs.length });
   }
 };
 
@@ -258,8 +286,28 @@ const claimNextPendingJob = async () => {
 };
 
 const runAnnualPromotionJob = async ({ jobId, payload }) => {
-  const targetAcademicYear = Number(payload?.targetAcademicYear || new Date().getFullYear() - 1);
+  const gate = getPromotionDateGate();
+  const targetAcademicYear = Number(
+    payload?.targetAcademicYear ?? gate.academicYear ?? NaN
+  );
   const totalItems = await prisma.student.count();
+  const currentJob = await prisma.backgroundJob.findUnique({
+    where: { id: jobId },
+    select: { result: true },
+  });
+  const currentJobState = normalizePromotionJobResult(
+    currentJob?.result,
+    targetAcademicYear
+  );
+  const historicalState = Number.isInteger(targetAcademicYear)
+    ? await getPromotionHistoryForAcademicYear(targetAcademicYear, {
+        excludeJobId: jobId,
+      })
+    : {
+        academicYear: null,
+        promotedStudentIds: new Set(),
+        class12ManualReviewStudentIds: new Set(),
+      };
   const summary = {
     totalItems,
     processedItems: 0,
@@ -267,9 +315,26 @@ const runAnnualPromotionJob = async ({ jobId, payload }) => {
     failedItems: 0,
     batchesProcessed: 0,
     targetAcademicYear,
+    academicYear: Number.isInteger(targetAcademicYear) ? targetAcademicYear : null,
+    dateGateOpen: gate.allowed,
+    gateDate: gate.date,
+    gateTimeZone: gate.timeZone,
+    gateReason: gate.reason,
+    promotedCount: currentJobState.promotedStudentIds.length,
+    skippedUnpaidCount: 0,
+    skippedAlreadyPromotedCount: 0,
+    skippedClass12ManualReviewCount: 0,
+    promotedStudentIds: [...currentJobState.promotedStudentIds],
+    class12ManualReviewStudentIds: [
+      ...currentJobState.class12ManualReviewStudentIds,
+    ],
   };
 
   await updateBackgroundJobProgress(jobId, { totalItems });
+
+  if (!gate.allowed || Number(gate.academicYear) !== targetAcademicYear) {
+    return summary;
+  }
 
   const batchSize = parsePositiveInt(payload?.batchSize, DEFAULT_BATCH_SIZE, 500);
 
@@ -282,8 +347,49 @@ const runAnnualPromotionJob = async ({ jobId, payload }) => {
 
       for (const student of students) {
         try {
-          await autoPromoteIfEligible(student.id, targetAcademicYear);
-          summary.succeededItems += 1;
+          const normalizedStudentId = Number(student.id);
+
+          if (
+            historicalState.promotedStudentIds.has(normalizedStudentId) ||
+            summary.promotedStudentIds.includes(normalizedStudentId)
+          ) {
+            summary.skippedAlreadyPromotedCount += 1;
+            continue;
+          }
+
+          const result = await promoteStudentForAcademicYear({
+            jobId,
+            studentId: normalizedStudentId,
+            academicYear: targetAcademicYear,
+          });
+
+          if (result?.outcome === "promoted") {
+            summary.succeededItems += 1;
+            summary.promotedCount += 1;
+            if (!summary.promotedStudentIds.includes(normalizedStudentId)) {
+              summary.promotedStudentIds.push(normalizedStudentId);
+            }
+          } else if (result?.outcome === "not_eligible") {
+            summary.skippedUnpaidCount += 1;
+          } else if (result?.outcome === "already_promoted") {
+            summary.skippedAlreadyPromotedCount += 1;
+          } else if (
+            result?.outcome === "class12_manual_review" ||
+            result?.outcome === "invalid_class"
+          ) {
+            summary.skippedClass12ManualReviewCount += 1;
+            if (!summary.class12ManualReviewStudentIds.includes(normalizedStudentId)) {
+              summary.class12ManualReviewStudentIds.push(normalizedStudentId);
+            }
+          } else if (result?.outcome === "missing_student") {
+            summary.failedItems += 1;
+          } else if (
+            result?.outcome === "date_blocked" ||
+            result?.outcome === "job_required" ||
+            result?.outcome === "missing_job"
+          ) {
+            summary.failedItems += 1;
+          }
         } catch (error) {
           summary.failedItems += 1;
           console.error(`Promotion check failed for student ${student.id}:`, safeErrorMessage(error));
@@ -297,12 +403,19 @@ const runAnnualPromotionJob = async ({ jobId, payload }) => {
         succeededItems: summary.succeededItems,
         failedItems: summary.failedItems,
         totalItems: summary.totalItems,
+        result: {
+          academicYear: summary.academicYear,
+          promotedStudentIds: summary.promotedStudentIds,
+          class12ManualReviewStudentIds: summary.class12ManualReviewStudentIds,
+          alreadyPromotedStudentIds: [],
+        },
       });
 
       backgroundJobLog("promotion-batch", {
         jobId,
         batchNumber: meta.batchNumber,
         processedItems: summary.processedItems,
+        promotedCount: summary.promotedCount,
       });
     },
   });

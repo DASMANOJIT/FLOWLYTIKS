@@ -15,6 +15,40 @@
   text-align: center;
 }
 
+.students-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.students-header-row .students-title {
+  margin-bottom: 0;
+  text-align: left;
+}
+
+.students-add-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #1d4ed8, #2563eb);
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.18);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.students-add-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 28px rgba(37, 99, 235, 0.24);
+}
+
 .students-statbar {
   display: flex;
   justify-content: center;
@@ -164,6 +198,17 @@
   text-align: right;
 }
 
+.student-card__status {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding-top: 12px;
+  margin-top: 4px;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
 .student-card__label {
   font-size: 11px;
   font-weight: 700;
@@ -210,6 +255,10 @@
 
 /* FEE STATUS BADGE */
 .fee-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
   font-weight: 600;
   padding: 7px 18px;
   border-radius: 12px;
@@ -289,6 +338,19 @@
 
 /* === Mobile Large (700px) === */
 @media (max-width: 700px) {
+  .students-header-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .students-header-row .students-title {
+    text-align: center;
+  }
+
+  .students-add-btn {
+    width: 100%;
+  }
+
   .students-title {
     font-size: 28px;
   }
@@ -302,6 +364,11 @@
   .student-card__school {
     justify-items: start;
     text-align: left;
+  }
+
+  .student-card__status {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .student-card h3 {

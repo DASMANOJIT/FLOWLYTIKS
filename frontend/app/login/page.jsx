@@ -781,8 +781,8 @@ export default function Login() {
               }}
             >
               <option value="">Select School</option>
-              <option>St. Augustine's Day School - Barrackpore</option>
-              <option>St. Augustine's Day School - Shyamnagar</option>
+              <option>St. Augustine&apos;s Day School - Barrackpore</option>
+              <option>St. Augustine&apos;s Day School - Shyamnagar</option>
               <option>Modern English Academy</option>
               <option>St. Claret School</option>
               <option>Douglas Memorial Higher Secondary School</option>

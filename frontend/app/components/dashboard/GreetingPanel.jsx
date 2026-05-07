@@ -17,10 +17,9 @@ export default function GreetingPanel({
   accent = "blue",
 }) {
   const reducedMotion = useReducedMotion();
-  const [now, setNow] = useState(null);
+  const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
-    setNow(new Date());
     const timer = window.setInterval(() => {
       setNow(new Date());
     }, 1000);
@@ -48,23 +47,19 @@ export default function GreetingPanel({
     };
   }, [accent]);
 
-  const greeting = now ? getGreeting(now) : "Welcome Back";
-  const timeLabel = now
-    ? new Intl.DateTimeFormat("en-IN", {
-        hour: "numeric",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: true,
-      }).format(now)
-    : "--:--:--";
-  const dateLabel = now
-    ? new Intl.DateTimeFormat("en-IN", {
-        weekday: "long",
-        day: "numeric",
-        month: "long",
-        year: "numeric",
-      }).format(now)
-    : "Loading current date";
+  const greeting = getGreeting(now);
+  const timeLabel = new Intl.DateTimeFormat("en-IN", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  }).format(now);
+  const dateLabel = new Intl.DateTimeFormat("en-IN", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(now);
 
   return (
     <motion.div

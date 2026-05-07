@@ -4,11 +4,15 @@ import { purgeAuthRateLimitEvents } from "../middleware/security.js";
 import { purgeExpiredEmailOtps } from "./emailOtpService.js";
 import { purgeExpiredSessions } from "../utils/sessionStore.js";
 import { withPgAdvisoryLock } from "../utils/dbLocks.js";
-import { getAcademicYear } from "../utils/academicYear.js";
+import { getAcademicYear, getPromotionDateGate } from "../utils/academicYear.js";
 import {
   BACKGROUND_JOB_TYPES,
   createBackgroundJob,
 } from "./backgroundJobService.js";
+import {
+  buildPromotionJobDedupeKey,
+  findActivePromotionJobForAcademicYear,
+} from "./promotionService.js";
 
 const shouldRunSchedulers = () => {
   return String(process.env.RUN_SCHEDULED_JOBS || "").trim() === "1";
@@ -28,34 +32,69 @@ export const registerScheduledJobs = () => {
     return;
   }
 
-  cron.schedule("0 0 1 3 *", async () => {
-    await withPgAdvisoryLock(prisma, "annual-student-promotion", async () => {
-      const targetAcademicYear = new Date().getFullYear() - 1;
-      const dedupeKey = `annual-promotion:${targetAcademicYear}`;
-      const { job, created, requeued } = await createBackgroundJob({
-        type: BACKGROUND_JOB_TYPES.ANNUAL_STUDENT_PROMOTION,
-        source: "scheduler",
-        dedupeKey,
-        payload: {
-          targetAcademicYear,
-        },
-      });
+  cron.schedule(
+    "10 0 * * *",
+    async () => {
+      const gate = getPromotionDateGate();
+      if (!gate.allowed || !Number.isInteger(Number(gate.academicYear))) {
+        console.log("ℹ️ Annual promotion gate closed.", {
+          date: gate.date,
+          reason: gate.reason,
+        });
+        return;
+      }
 
-      console.log(
-        created
-          ? "📥 Annual promotion job queued."
-          : requeued
-            ? "🔄 Annual promotion job requeued after failure."
-            : "ℹ️ Annual promotion job already queued.",
-        {
-          jobId: job.id,
-          targetAcademicYear,
+      const promotionDate = schedulerDateKey();
+
+      await withPgAdvisoryLock(prisma, "annual-student-promotion", async () => {
+        const targetAcademicYear = Number(gate.academicYear);
+        const activeJob = await findActivePromotionJobForAcademicYear(
+          targetAcademicYear
+        );
+
+        if (activeJob) {
+          console.log("ℹ️ Annual promotion job already active.", {
+            jobId: activeJob.id,
+            targetAcademicYear,
+            status: activeJob.status,
+          });
+          return;
         }
-      );
-    }).catch((err) => {
-      console.error("❌ Error during promotion cron:", err?.message || err);
-    });
-  });
+
+        const dedupeKey = buildPromotionJobDedupeKey(
+          targetAcademicYear,
+          promotionDate
+        );
+        const { job, created, requeued } = await createBackgroundJob({
+          type: BACKGROUND_JOB_TYPES.ANNUAL_STUDENT_PROMOTION,
+          source: "scheduler",
+          dedupeKey,
+          payload: {
+            targetAcademicYear,
+            scheduledDate: promotionDate,
+          },
+        });
+
+        console.log(
+          created
+            ? "📥 Annual promotion job queued."
+            : requeued
+              ? "🔄 Annual promotion job requeued after failure."
+              : "ℹ️ Annual promotion job already queued.",
+          {
+            jobId: job.id,
+            targetAcademicYear,
+            promotionDate,
+          }
+        );
+      }).catch((err) => {
+        console.error("❌ Error during promotion cron:", err?.message || err);
+      });
+    },
+    {
+      timezone: "Asia/Kolkata",
+    }
+  );
 
   cron.schedule(
     process.env.REMINDER_CRON || "0 9 * * *",

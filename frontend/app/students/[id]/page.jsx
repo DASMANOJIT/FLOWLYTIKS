@@ -7,6 +7,7 @@ import "./stu.css";
 import PremiumLoader from "../../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection } from "../../components/motion/primitives.jsx";
 import { clearAuthSession, getAuthRole, getAuthToken } from "../../../lib/authStorage.js";
+import { downloadPaymentReceiptPdf } from "../../../lib/paymentReceiptPdf.js";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
@@ -94,6 +95,25 @@ export default function StudentProfile() {
     }
   };
 
+  const handleDownloadReceipt = async (payment) => {
+    if (!student || !payment) {
+      alert("Receipt details are not available right now.");
+      return;
+    }
+
+    try {
+      await downloadPaymentReceiptPdf({
+        student,
+        payment,
+        amountFallback: student.monthlyFee || payment.amount || 0,
+        month: payment.month,
+      });
+    } catch (error) {
+      console.error("Admin receipt download failed:", error);
+      alert("Failed to generate the receipt PDF.");
+    }
+  };
+
   if (!student) return <PremiumLoader fullScreen label="Loading student profile" />;
 
   return (
@@ -162,6 +182,17 @@ export default function StudentProfile() {
                   <p className="payment-date">
                     {new Date(p.createdAt).toLocaleDateString()}
                   </p>
+                  {String(p.status || "").toLowerCase() === "paid" ? (
+                    <div className="payment-record-actions">
+                      <MotionButton
+                        type="button"
+                        className="receipt-download-btn"
+                        onClick={() => void handleDownloadReceipt(p)}
+                      >
+                        Download PDF Receipt
+                      </MotionButton>
+                    </div>
+                  ) : null}
                 </div>
               ))}
             </div>

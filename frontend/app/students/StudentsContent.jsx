@@ -11,6 +11,27 @@ import { clearAuthSession, getAuthRole, getAuthToken } from "../../lib/authStora
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
 const PAGE_SIZE = 12;
+const ACADEMIC_MONTHS = [
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+  "January",
+  "February",
+];
+const VALID_MONTH_FILTERS = new Set(ACADEMIC_MONTHS);
+const CURRENT_FEE_STATUS_MONTH = new Date().toLocaleString("en-US", { month: "long" });
+
+const normalizeMonthFilterValue = (value) => {
+  const rawValue = String(value || "").trim();
+  return VALID_MONTH_FILTERS.has(rawValue) ? rawValue : "";
+};
 
 export default function StudentsPage() {
   const router = useRouter();
@@ -29,6 +50,9 @@ export default function StudentsPage() {
   const [statusFilter, setStatusFilter] = useState(
     () => searchParams.get("status") || "all"
   );
+  const [monthFilter, setMonthFilter] = useState(
+    () => normalizeMonthFilterValue(searchParams.get("month"))
+  );
   const [classFilter, setClassFilter] = useState(
     () => searchParams.get("class") || "all"
   );
@@ -42,6 +66,7 @@ export default function StudentsPage() {
   const [toDate, setToDate] = useState(() => searchParams.get("to") || "");
   const [classes, setClasses] = useState([]);
   const [schools, setSchools] = useState([]);
+  const [resolvedMonthLabel, setResolvedMonthLabel] = useState(CURRENT_FEE_STATUS_MONTH);
   const requestKeyRef = useRef("");
   const initialLoadRef = useRef(true);
 
@@ -60,6 +85,7 @@ export default function StudentsPage() {
     if (search) params.set("search", search);
     if (page > 1) params.set("page", String(page));
     if (statusFilter !== "all") params.set("status", statusFilter);
+    if (monthFilter) params.set("month", monthFilter);
     if (classFilter !== "all") params.set("class", classFilter);
     if (schoolFilter !== "all") params.set("school", schoolFilter);
     if (sortOrder !== "none") params.set("sort", sortOrder);
@@ -70,7 +96,7 @@ export default function StudentsPage() {
     router.replace(queryString ? `/students?${queryString}` : "/students", {
       scroll: false,
     });
-  }, [search, page, statusFilter, classFilter, schoolFilter, sortOrder, fromDate, toDate, router]);
+  }, [search, page, statusFilter, monthFilter, classFilter, schoolFilter, sortOrder, fromDate, toDate, router]);
 
   // 🔹 Fetch students from paginated backend response
   useEffect(() => {
@@ -94,6 +120,7 @@ export default function StudentsPage() {
 
     if (debouncedSearch) params.set("search", debouncedSearch);
     if (statusFilter !== "all") params.set("status", statusFilter);
+    if (monthFilter) params.set("month", monthFilter);
     if (classFilter !== "all") params.set("class", classFilter);
     if (schoolFilter !== "all") params.set("school", schoolFilter);
     if (sortOrder !== "none") params.set("sort", sortOrder);
@@ -106,10 +133,11 @@ export default function StudentsPage() {
     }
     requestKeyRef.current = requestKey;
 
-    if (initialLoadRef.current) {
-      setLoading(true);
-    } else {
-      setListLoading(true);
+    let listLoadingTimer = null;
+    if (!initialLoadRef.current) {
+      listLoadingTimer = window.setTimeout(() => {
+        setListLoading(true);
+      }, 0);
     }
 
     fetch(`${API_BASE}/api/students?${params.toString()}`, {
@@ -133,6 +161,7 @@ export default function StudentsPage() {
           setStudents(data);
           setTotalStudents(data.length);
           setTotalPages(1);
+          setResolvedMonthLabel(monthFilter || CURRENT_FEE_STATUS_MONTH);
           setClasses([...new Set(data.map((student) => student.class).filter(Boolean))]);
           setSchools([...new Set(data.map((student) => student.school).filter(Boolean))]);
           return;
@@ -140,6 +169,7 @@ export default function StudentsPage() {
 
         setStudents(Array.isArray(data.students) ? data.students : []);
         setTotalStudents(typeof data.totalStudents === "number" ? data.totalStudents : 0);
+        setResolvedMonthLabel(data.selectedMonth || monthFilter || CURRENT_FEE_STATUS_MONTH);
         const nextTotalPages = data.totalPages || 1;
         setTotalPages(nextTotalPages);
         if (page > nextTotalPages) {
@@ -162,18 +192,26 @@ export default function StudentsPage() {
         }
         setListLoading(false);
       });
-  }, [page, debouncedSearch, statusFilter, classFilter, schoolFilter, sortOrder, fromDate, toDate]);
+
+    return () => {
+      if (listLoadingTimer) {
+        window.clearTimeout(listLoadingTimer);
+      }
+    };
+  }, [page, debouncedSearch, statusFilter, monthFilter, classFilter, schoolFilter, sortOrder, fromDate, toDate]);
 
   // 🔹 CLEAR ALL FILTERS
   const clearAllFilters = () => {
     setSearch("");
     setStatusFilter("all");
+    setMonthFilter("");
     setClassFilter("all");
     setSchoolFilter("all");
     setSortOrder("none");
     setFromDate("");
     setToDate("");
     setPage(1);
+    setResolvedMonthLabel(CURRENT_FEE_STATUS_MONTH);
 
     router.replace("/students", { scroll: false });
   };
@@ -189,7 +227,12 @@ export default function StudentsPage() {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
     >
-      <h1 className="students-title">Students</h1>
+      <div className="students-header-row">
+        <h1 className="students-title">Students</h1>
+        <Link href="/students/add" className="students-add-btn">
+          Add Student
+        </Link>
+      </div>
 
       <MotionSection className="students-statbar" delay={0.04}>
         <MotionCard className="students-statcard">
@@ -227,6 +270,19 @@ export default function StudentsPage() {
           <option value="all">All Fees</option>
           <option value="paid">Paid</option>
           <option value="unpaid">Unpaid</option>
+        </select>
+
+        <select
+          value={monthFilter}
+          onChange={(e) => {
+            setMonthFilter(normalizeMonthFilterValue(e.target.value));
+            setPage(1);
+          }}
+        >
+          <option value="">Current Month ({CURRENT_FEE_STATUS_MONTH})</option>
+          {ACADEMIC_MONTHS.map((month) => (
+            <option key={month} value={month}>{month}</option>
+          ))}
         </select>
 
         <select
@@ -317,6 +373,12 @@ export default function StudentsPage() {
               <div className="student-card__school">
                 <span className="student-card__label">School</span>
                 <p>{student.school}</p>
+              </div>
+              <div className="student-card__status">
+                <span className="student-card__label">{resolvedMonthLabel} Fee Status</span>
+                <span className={`fee-status ${student.feesStatus === "paid" ? "paid" : "unpaid"}`}>
+                  {student.feesStatus === "paid" ? "Paid" : "Unpaid"}
+                </span>
               </div>
             </Link>
           </motion.div>

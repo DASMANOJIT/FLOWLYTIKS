@@ -13,9 +13,27 @@ ChartJS.register(ArcElement, Tooltip, Legend);
 
 const chartOptions = {
   responsive: true,
+  maintainAspectRatio: false,
+  layout: {
+    padding: {
+      top: 6,
+      right: 8,
+      bottom: 6,
+      left: 8,
+    },
+  },
   plugins: {
     legend: {
       position: "bottom",
+      labels: {
+        usePointStyle: true,
+        boxWidth: 10,
+        boxHeight: 10,
+        padding: 18,
+        font: {
+          size: 12,
+        },
+      },
     },
   },
 };
@@ -35,5 +53,9 @@ export default function AdminFeeStatusChart({ paid = 0, unpaid = 0 }) {
     [paid, unpaid]
   );
 
-  return <Pie data={data} options={chartOptions} />;
+  return (
+    <div className="admin-fee-chart">
+      <Pie data={data} options={chartOptions} />
+    </div>
+  );
 }

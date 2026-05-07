@@ -44,6 +44,7 @@
 /* CARD */
 .payment-box {
   width: min(100%, 480px);
+  box-sizing: border-box;
   padding: 32px;
   background: rgba(255, 255, 255, 0.45);
   backdrop-filter: blur(20px);
@@ -70,6 +71,7 @@
 /* SELECT */
 .payment-box select {
   width: 100%;
+  box-sizing: border-box;
   padding: 12px;
   margin-top: 6px;
   border-radius: 12px;
@@ -87,6 +89,7 @@
 /* SEARCH INPUT */
 .student-search-input {
   width: 100%;
+  box-sizing: border-box;
   padding: 13px;
   border-radius: 12px;
   border: 1px solid #bcd0ff;
@@ -104,6 +107,7 @@
 /* LIVE SEARCH DROPDOWN */
 .student-search-results {
   width: 100%;
+  box-sizing: border-box;
   max-height: 260px;
   overflow-y: auto;
   background: #ffffffee;
@@ -239,6 +243,7 @@
 /* BUTTON */
 .pay-btn {
   width: 100%;
+  box-sizing: border-box;
   margin-top: 28px;
   padding: 15px;
   background: linear-gradient(135deg, #1d6ef0, #003bb3);
@@ -390,39 +395,68 @@
 /* Phones ≤ 480px */
 @media (max-width: 480px) {
   .payment-container {
-    padding: 20px;
+    padding: 18px 12px 28px;
+    align-items: stretch;
   }
 
   .back-btn {
     font-size: 14px;
     padding: 8px 14px;
+    margin-bottom: 16px;
   }
 
   .payment-title {
-    font-size: 26px;
+    font-size: 28px;
+    margin-bottom: 18px;
   }
 
   .payment-box {
-    padding: 24px;
+    width: 100%;
+    max-width: none;
+    padding: 24px 20px;
     border-radius: 16px;
   }
 
-  .student-search-input {
+  .payment-box label {
+    margin-top: 12px;
+  }
+
+  .payment-box select,
+  .student-search-input,
+  .pay-btn {
     width: 100%;
   }
 
   .pay-btn {
     font-size: 16px;
-    padding: 13px;
+    padding: 14px 16px;
   }
 
   .selected-student-chip {
     align-items: flex-start;
   }
 
+  .student-search-results {
+    padding: 12px;
+  }
+
+  .payment-feedback {
+    padding: 15px 16px;
+  }
+
+  .payment-box--history {
+    margin-top: 18px;
+  }
+
+  .recent-payments-header {
+    margin-bottom: 14px;
+  }
+
   .recent-payment-item {
     flex-direction: column;
     align-items: flex-start;
+    gap: 12px;
+    padding: 14px 16px;
   }
 
   .reverse-pay-btn {
@@ -433,11 +467,12 @@
 /* Tablets 480px–768px */
 @media (max-width: 768px) {
   .payment-container {
-    padding: 24px 16px;
+    padding: 22px 14px 30px;
   }
 
   .payment-box {
     width: 100%;
+    max-width: 620px;
   }
 
   .payment-title {

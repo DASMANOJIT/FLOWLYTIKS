@@ -10,6 +10,21 @@ const formatZodMessage = (error) => {
   return `${path}: ${issue.message}`;
 };
 
+const applyValidatedData = (req, source, data) => {
+  if (source === "query" || source === "params") {
+    const currentValue = req[source];
+    if (currentValue && typeof currentValue === "object") {
+      for (const key of Object.keys(currentValue)) {
+        delete currentValue[key];
+      }
+      Object.assign(currentValue, data);
+      return;
+    }
+  }
+
+  req[source] = data;
+};
+
 const createValidator = (schema, source) => {
   return (req, res, next) => {
     const result = schema.safeParse(req[source]);
@@ -22,7 +37,7 @@ const createValidator = (schema, source) => {
       });
     }
 
-    req[source] = result.data;
+    applyValidatedData(req, source, result.data);
     return next();
   };
 };

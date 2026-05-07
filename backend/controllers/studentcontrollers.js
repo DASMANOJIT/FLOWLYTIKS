@@ -1,6 +1,10 @@
 import prisma from "../prisma/client.js";
-import { getAcademicYear } from "../utils/academicYear.js";
+import {
+  getAcademicYear,
+  getPromotionDateGate,
+} from "../utils/academicYear.js";
 import { legacyPaymentSelect } from "../utils/paymentCompat.js";
+import { isStudentEligibleForPromotion } from "../services/promotionService.js";
 
 const stripStudentSecrets = (student) => {
   if (!student || typeof student !== "object") return student;
@@ -11,6 +15,21 @@ const stripStudentSecrets = (student) => {
 
 const currentMonthName = () =>
   new Date().toLocaleString("en-US", { month: "long" });
+
+const VALID_PAYMENT_MONTHS = new Set([
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+  "January",
+  "February",
+]);
 
 const studentBaseSelect = {
   id: true,
@@ -51,6 +70,14 @@ const normalizeDateBoundary = (value, endOfDay = false) => {
     date.setHours(0, 0, 0, 0);
   }
   return date;
+};
+
+const normalizeStudentMonthFilter = (value) => {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) return "";
+
+  const normalized = `${rawValue.charAt(0).toUpperCase()}${rawValue.slice(1).toLowerCase()}`;
+  return VALID_PAYMENT_MONTHS.has(normalized) ? normalized : "";
 };
 
 const buildStudentWhere = ({
@@ -153,7 +180,11 @@ export const getStudents = async (req, res) => {
     }
 
     const currentAcademicYear = getAcademicYear();
-    const currentMonth = currentMonthName();
+    const requestedMonth = normalizeStudentMonthFilter(req.query.month);
+    if (req.query.month && !requestedMonth) {
+      return res.status(400).json({ message: "Invalid month filter" });
+    }
+    const currentMonth = requestedMonth || currentMonthName();
     const page = parsePositiveInt(req.query.page, 1, 10_000);
     const limit = parsePositiveInt(req.query.limit, 25, 100);
     const search = String(req.query.search || "").trim();
@@ -286,6 +317,7 @@ export const getStudents = async (req, res) => {
       filteredStudents,
       page,
       limit,
+      selectedMonth: currentMonth,
       totalPages,
       ...(filters ? { filters } : {}),
       ...(summary ? { summary } : {}),
@@ -405,46 +437,23 @@ export const autoPromoteIfEligible = async (
   targetAcademicYear = getAcademicYear()
 ) => {
   const academicYear = Number(targetAcademicYear);
+  const gate = getPromotionDateGate();
 
-  const student = await prisma.student.findUnique({
-    where: { id: studentId },
-    include: {
-      payments: {
-        select: {
-          month: true,
-          status: true,
-          academicYear: true,
-        },
-      },
-    },
-  });
+  if (!gate.allowed || Number(gate.academicYear) !== academicYear) {
+    return {
+      promoted: false,
+      academicYear,
+      reason: "date_gate_closed",
+      gate,
+    };
+  }
 
-  if (!student) return;
+  const eligibility = await isStudentEligibleForPromotion(studentId, academicYear);
 
-  const paidMonths = student.payments
-    .filter(
-      (p) =>
-        p.status === "paid" &&
-        p.academicYear === academicYear &&
-        p.month
-    )
-    .map((p) => p.month);
-
-  const uniqueMonths = [...new Set(paidMonths)];
-
-  if (uniqueMonths.length !== 12) return;
-
-  const currentClassNum = parseInt(student.class, 10);
-  if (isNaN(currentClassNum)) return;
-
-  await prisma.student.update({
-    where: { id: studentId },
-    data: {
-      class: String(currentClassNum + 1),
-    },
-  });
-
-  console.log(
-    `✅ Auto-promoted ${student.name} for academic year ${academicYear}`
-  );
+  return {
+    promoted: false,
+    academicYear,
+    reason: eligibility.eligible ? "worker_job_required" : "not_eligible",
+    ...eligibility,
+  };
 };

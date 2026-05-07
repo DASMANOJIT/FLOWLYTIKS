@@ -119,17 +119,31 @@ export default function PaymentsPage() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(async (res) => {
-        const data = await res.json();
+        let data = null;
+        try {
+          data = await res.json();
+        } catch {
+          data = null;
+        }
+
         if (!res.ok) {
           if (res.status === 401 || res.status === 403) {
             clearAuthSession();
             window.location.href = "/login";
             return [];
           }
-          throw new Error(data?.message || "Failed to load recent payments");
+          console.warn(
+            "Recent payments fetch skipped:",
+            data?.message || data?.error || "Failed to load recent payments"
+          );
+          return [];
         }
 
-        const rows = Array.isArray(data) ? data : data?.payments || [];
+        const rows = Array.isArray(data)
+          ? data
+          : Array.isArray(data?.payments)
+          ? data.payments
+          : [];
         return rows
           .filter(
             (payment) =>

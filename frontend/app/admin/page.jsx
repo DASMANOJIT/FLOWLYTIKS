@@ -55,7 +55,7 @@ export default function AdminDashboard() {
   const [chatMessages, setChatMessages] = useState([
     {
       role: "bot",
-      text: "Admin assistant ready. Use keyword prompts: 'paid id 3 march', 'reminder all', 'unpaid november', 'details id 3', 'update student id 3 phone 9876543210', 'fee 700', 'summary'.",
+      text: "Admin assistant ready. Use keyword prompts: 'paid id 3 march', 'mark everyone as paid for May', 'reminder all', 'unpaid november', 'details id 3', 'update student id 3 phone 9876543210', 'fee 700', 'summary'.",
     },
   ]);
 

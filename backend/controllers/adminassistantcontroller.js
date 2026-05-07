@@ -1,5 +1,6 @@
 import prisma from "../prisma/client.js";
-import { getAcademicYear } from "../utils/academicYear.js";
+import { getAcademicYear, getPromotionDateGate } from "../utils/academicYear.js";
+import { isLatePaymentForPeriod } from "../utils/paymentPeriod.js";
 import {
   markPaidForStudent,
   sendReminderToStudent,
@@ -9,6 +10,13 @@ import {
   createBackgroundJob,
   getBackgroundJobStatus,
 } from "../services/backgroundJobService.js";
+import { findActivePromotionJobForAcademicYear } from "../services/promotionService.js";
+import { autoPromoteIfEligible } from "./studentcontrollers.js";
+import {
+  isPaymentSchemaCompatibilityError,
+  logPaymentCompatibilityFallback,
+  stripExtendedPaymentWriteData,
+} from "../utils/paymentCompat.js";
 
 const MONTH_ALIASES = {
   march: "March",
@@ -35,6 +43,21 @@ const MONTH_ALIASES = {
   jan: "January",
   february: "February",
   feb: "February",
+};
+
+const MONTH_TO_INDEX = {
+  January: 0,
+  February: 1,
+  March: 2,
+  April: 3,
+  May: 4,
+  June: 5,
+  July: 6,
+  August: 7,
+  September: 8,
+  October: 9,
+  November: 10,
+  December: 11,
 };
 
 const sanitizePrompt = (text) => String(text || "").trim();
@@ -84,6 +107,196 @@ const extractFeeAmount = (promptText) => {
   return match ? Number(match[1]) : null;
 };
 
+const extractCalendarYear = (promptText) => {
+  const match = sanitizePrompt(promptText).match(
+    /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b[^\d]{0,8}(20\d{2}|21\d{2})\b/i
+  );
+  return match ? Number(match[1]) : null;
+};
+
+const buildAcademicYearLabel = (academicYear) =>
+  `${academicYear}-${Number(academicYear) + 1}`;
+
+const isBulkAllStudentsPrompt = (promptText) =>
+  /\beveryone\b/i.test(promptText) ||
+  /\ball\s+students\b/i.test(promptText) ||
+  /\ball\b/i.test(promptText);
+
+const extractBulkMarkPaidConfirmation = (promptText) => {
+  const match = sanitizePrompt(promptText).match(
+    /^confirm\s+mark\s+([a-z]+)(?:\s+(\d{4}))?\s+paid$/i
+  );
+  if (!match) return null;
+
+  const month = MONTH_ALIASES[String(match[1] || "").toLowerCase()] || null;
+  if (!month) return null;
+
+  return {
+    month,
+    calendarYear: match[2] ? Number(match[2]) : null,
+  };
+};
+
+const resolveAcademicYearForMonth = (month, calendarYear = null) => {
+  if (!calendarYear) {
+    return getAcademicYear();
+  }
+
+  const monthIndex = MONTH_TO_INDEX[month];
+  if (!Number.isInteger(monthIndex)) {
+    return getAcademicYear();
+  }
+
+  return monthIndex >= 2 ? Number(calendarYear) : Number(calendarYear) - 1;
+};
+
+const buildBulkMarkPaidConfirmationCommand = ({ month, calendarYear }) =>
+  calendarYear
+    ? `CONFIRM MARK ${month.toUpperCase()} ${calendarYear} PAID`
+    : `CONFIRM MARK ${month.toUpperCase()} PAID`;
+
+const executeBulkMarkPaidForAllStudents = async ({
+  month,
+  academicYear,
+  monthlyFee,
+  requestedByUserId = null,
+}) => {
+  const students = await prisma.student.findMany({
+    select: { id: true, name: true },
+    orderBy: { id: "asc" },
+  });
+
+  const studentIds = students.map((student) => Number(student.id));
+  const existingPayments =
+    studentIds.length > 0
+      ? await prisma.payment.findMany({
+          where: {
+            studentId: { in: studentIds },
+            month,
+            academicYear,
+          },
+          select: {
+            id: true,
+            studentId: true,
+            status: true,
+          },
+        })
+      : [];
+
+  const alreadyPaidPayments = existingPayments.filter(
+    (payment) => String(payment.status || "").toLowerCase() === "paid"
+  );
+  const paymentsToUpdate = existingPayments.filter(
+    (payment) => String(payment.status || "").toLowerCase() !== "paid"
+  );
+  const existingPaymentStudentIds = new Set(
+    existingPayments.map((payment) => Number(payment.studentId))
+  );
+  const studentsMissingPayments = students.filter(
+    (student) => !existingPaymentStudentIds.has(Number(student.id))
+  );
+
+  const paidAt = new Date();
+  const paymentWriteData = {
+    amount: Number(monthlyFee),
+    status: "paid",
+    currency: "INR",
+    paymentProvider: "CASH",
+    paidAt,
+    isLatePayment: isLatePaymentForPeriod({
+      month,
+      academicYear,
+      paidAt,
+    }),
+    phonepeTransactionId: null,
+    phonepePaymentId: null,
+    teacherAdminId: requestedByUserId ? Number(requestedByUserId) : null,
+  };
+
+  let updatedCount = 0;
+  let createdCount = 0;
+
+  await prisma.$transaction(async (tx) => {
+    try {
+      if (paymentsToUpdate.length) {
+        const result = await tx.payment.updateMany({
+          where: {
+            id: { in: paymentsToUpdate.map((payment) => payment.id) },
+            status: { not: "paid" },
+          },
+          data: paymentWriteData,
+        });
+        updatedCount = result.count;
+      }
+
+      if (studentsMissingPayments.length) {
+        const result = await tx.payment.createMany({
+          data: studentsMissingPayments.map((student) => ({
+            studentId: Number(student.id),
+            month,
+            academicYear,
+            ...paymentWriteData,
+          })),
+          skipDuplicates: true,
+        });
+        createdCount = result.count;
+      }
+    } catch (error) {
+      if (!isPaymentSchemaCompatibilityError(error)) {
+        throw error;
+      }
+
+      logPaymentCompatibilityFallback("executeBulkMarkPaidForAllStudents", error);
+      const legacyWriteData = stripExtendedPaymentWriteData(paymentWriteData);
+
+      if (paymentsToUpdate.length) {
+        const result = await tx.payment.updateMany({
+          where: {
+            id: { in: paymentsToUpdate.map((payment) => payment.id) },
+            status: { not: "paid" },
+          },
+          data: legacyWriteData,
+        });
+        updatedCount = result.count;
+      }
+
+      if (studentsMissingPayments.length) {
+        const result = await tx.payment.createMany({
+          data: studentsMissingPayments.map((student) => ({
+            studentId: Number(student.id),
+            month,
+            academicYear,
+            ...legacyWriteData,
+          })),
+          skipDuplicates: true,
+        });
+        createdCount = result.count;
+      }
+    }
+  });
+
+  const changedStudentIds = [
+    ...paymentsToUpdate.map((payment) => Number(payment.studentId)),
+    ...studentsMissingPayments.map((student) => Number(student.id)),
+  ];
+
+  await Promise.allSettled(
+    changedStudentIds.map((studentId) => autoPromoteIfEligible(studentId, academicYear))
+  );
+
+  const totalChecked = students.length;
+  const skippedCount = alreadyPaidPayments.length;
+  const newlyMarkedPaid = updatedCount + createdCount;
+  const failedCount = Math.max(0, totalChecked - skippedCount - newlyMarkedPaid);
+
+  return {
+    totalChecked,
+    newlyMarkedPaid,
+    skippedCount,
+    failedCount,
+  };
+};
+
 const matchStudentsFromPrompt = (promptText, students) => {
   const text = lower(promptText);
   const studentId = extractStudentId(promptText);
@@ -108,38 +321,59 @@ const matchStudentsFromPrompt = (promptText, students) => {
 };
 
 const runMarkPaidCommand = async (promptText, requestedByUserId = null) => {
+  const confirmation = extractBulkMarkPaidConfirmation(promptText);
+  if (confirmation) {
+    const academicYear = resolveAcademicYearForMonth(
+      confirmation.month,
+      confirmation.calendarYear
+    );
+    const settings = await prisma.appSettings.findUnique({ where: { id: 1 } });
+    if (!settings?.monthlyFee) {
+      return { ok: false, message: "Monthly fee not configured." };
+    }
+
+    const summary = await executeBulkMarkPaidForAllStudents({
+      month: confirmation.month,
+      academicYear,
+      monthlyFee: settings.monthlyFee,
+      requestedByUserId,
+    });
+
+    return {
+      ok: true,
+      message: [
+        `Bulk mark-paid completed for ${confirmation.month} (${buildAcademicYearLabel(academicYear)}).`,
+        `Total students checked: ${summary.totalChecked}`,
+        `Newly marked paid: ${summary.newlyMarkedPaid}`,
+        `Already paid / skipped: ${summary.skippedCount}`,
+        `Failed: ${summary.failedCount}`,
+      ].join("\n"),
+    };
+  }
+
   const month = extractMonth(promptText);
   if (!month) {
     return { ok: false, message: "Please mention month. Example: mark paid for Rahul for March" };
   }
 
-  const academicYear = getAcademicYear();
+  const calendarYear = extractCalendarYear(promptText);
+  const academicYear = resolveAcademicYearForMonth(month, calendarYear);
   const settings = await prisma.appSettings.findUnique({ where: { id: 1 } });
   if (!settings?.monthlyFee) {
     return { ok: false, message: "Monthly fee not configured." };
   }
 
-  const applyAll = /\ball\s+students\b/i.test(promptText) || /\ball\b/i.test(promptText);
+  const applyAll = isBulkAllStudentsPrompt(promptText);
   if (applyAll) {
-    const { job, created } = await createBackgroundJob({
-      type: BACKGROUND_JOB_TYPES.ASSISTANT_BULK_MARK_PAID,
-      source: "admin-assistant",
-      requestedByRole: "admin",
-      requestedByUserId,
-      payload: {
-        month,
-        academicYear,
-        monthlyFee: settings.monthlyFee,
-      },
-    });
-
     return {
       ok: true,
-      queued: true,
-      jobId: job.id,
-      message: created
-        ? `Bulk mark-paid job queued for ${month}. Job ID: ${job.id}.`
-        : `Bulk mark-paid job is already queued. Job ID: ${job.id}.`,
+      requiresConfirmation: true,
+      message: `This will mark all students as paid for ${month} ${buildAcademicYearLabel(
+        academicYear
+      )}. Type ${buildBulkMarkPaidConfirmationCommand({
+        month,
+        calendarYear,
+      })} to continue.`,
     };
   }
 
@@ -170,7 +404,9 @@ const runMarkPaidCommand = async (promptText, requestedByUserId = null) => {
 
   return {
     ok: true,
-    message: `Done. Marked paid for ${created} student(s), already paid: ${alreadyPaid}, month: ${month}.`,
+    message: `Done. Marked paid for ${created} student(s), already paid: ${alreadyPaid}, month: ${month}, academic year: ${buildAcademicYearLabel(
+      academicYear
+    )}.`,
   };
 };
 
@@ -305,6 +541,53 @@ const runSummaryCommand = async () => {
   };
 };
 
+const runPromotionCheckCommand = async (requestedByUserId = null) => {
+  const gate = getPromotionDateGate();
+
+  if (!gate.allowed || !Number.isInteger(Number(gate.academicYear))) {
+    return {
+      ok: false,
+      message: `Promotion check is locked until February 28 or later in Asia/Kolkata. Current date: ${gate.date}.`,
+    };
+  }
+
+  const targetAcademicYear = Number(gate.academicYear);
+  const activeJob = await findActivePromotionJobForAcademicYear(
+    targetAcademicYear
+  );
+
+  if (activeJob) {
+    return {
+      ok: true,
+      queued: true,
+      jobId: activeJob.id,
+      message: `Promotion check is already ${String(activeJob.status || "").toLowerCase()} for ${buildAcademicYearLabel(
+        targetAcademicYear
+      )}. Job ID: ${activeJob.id}.`,
+    };
+  }
+
+  const { job } = await createBackgroundJob({
+    type: BACKGROUND_JOB_TYPES.ANNUAL_STUDENT_PROMOTION,
+    source: "admin-assistant",
+    requestedByRole: "admin",
+    requestedByUserId,
+    payload: {
+      targetAcademicYear,
+      triggeredAt: gate.date,
+    },
+  });
+
+  return {
+    ok: true,
+    queued: true,
+    jobId: job.id,
+    message: `Promotion check queued for ${buildAcademicYearLabel(
+      targetAcademicYear
+    )}. Job ID: ${job.id}. Use the job status endpoint to see promoted, unpaid, already-promoted, and class-12 review counts.`,
+  };
+};
+
 const runSetFeeCommand = async (promptText) => {
   const fee = extractFeeAmount(promptText);
   if (!fee || fee <= 0) {
@@ -404,6 +687,7 @@ const detectIntent = (promptText) => {
     studentDetails: 0,
     setFee: 0,
     summary: 0,
+    promotionCheck: 0,
   };
 
   if (hasAny(text, ["mark", "paid", "payment"])) scores.markPaid += 2;
@@ -432,6 +716,9 @@ const detectIntent = (promptText) => {
   if (hasAny(text, ["summary", "stats", "dashboard", "report", "overview", "revenue"])) {
     scores.summary += 2;
   }
+
+  if (hasAny(text, ["promote", "promotion"])) scores.promotionCheck += 2;
+  if (hasAny(text, ["run", "check", "trigger"])) scores.promotionCheck += 1;
 
   const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
   const [intent, score] = sorted[0];
@@ -471,13 +758,15 @@ export const adminAssistantChat = async (req, res) => {
       result = await runStudentDetailsCommand(prompt);
     } else if (intent === "setFee") {
       result = await runSetFeeCommand(prompt);
+    } else if (intent === "promotionCheck") {
+      result = await runPromotionCheckCommand(adminUserId);
     } else if (intent === "summary") {
       result = await runSummaryCommand();
     } else {
       result = {
         ok: false,
         message:
-          "Command not recognized. Use keywords like: 'paid id 3 march', 'reminder all', 'unpaid november', 'details id 3', 'update student id 3 phone 98...', 'fee 700', 'summary'.",
+          "Command not recognized. Use keywords like: 'paid id 3 march', 'reminder all', 'unpaid november', 'details id 3', 'update student id 3 phone 98...', 'fee 700', 'summary', 'run promotion check'.",
       };
     }
 
