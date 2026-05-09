@@ -47,7 +47,7 @@ export default function GreetingPanel({
     };
   }, [accent]);
 
-  const greeting = getGreeting(now);
+  const greeting = `${getGreeting(now)}, Mr. Subhabrata Datta`;
   const timeLabel = new Intl.DateTimeFormat("en-IN", {
     hour: "numeric",
     minute: "2-digit",
