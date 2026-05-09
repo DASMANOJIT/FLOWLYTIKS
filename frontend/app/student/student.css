@@ -123,6 +123,13 @@
     color: rgba(239, 246, 255, 0.82);
 }
 
+.total-caption a {
+    color: inherit;
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 0.16em;
+}
+
 /* ---------- Progress Bar ---------- */
 .progress-section {
     margin-top: 24px;

@@ -219,6 +219,7 @@ export default function StudentDashboard() {
 
       <MotionSection className="student-header" delay={0.04}>
         <div className="student-header-divider" aria-hidden="true" />
+        <h1 className="student-dashboard-title">--</h1>
         <h1 className="student-dashboard-title">Student Dashboard</h1>
         <p className="student-subtitle">Track your fees, payments, and upcoming dues in one place.</p>
       </MotionSection>
@@ -227,7 +228,16 @@ export default function StudentDashboard() {
           <h2 className="total-title">Total Monthly Fees</h2>
           <p className="total-amount">₹{totalMonthlyFees}</p>
           <p className="total-caption">
-            Your standard monthly tuition amount is shown here for quick reference.
+            Students are paying their fees to Mr. Subhabrata Datta. To know more about the institute,
+            visit{" "}
+            <a
+              href="https://subhoscomputerinstitute.com"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              SUBHO&apos;S COMPUTER INSTITUTE
+            </a>
+            .
           </p>
         </MotionCard>
 
