@@ -16,7 +16,12 @@ import {
   fadeUpItem,
   staggerContainer,
 } from "../components/motion/primitives.jsx";
-import { clearAuthSession, getAuthRole, getAuthToken } from "../../lib/authStorage.js";
+import {
+  clearAuthSession,
+  getAuthName,
+  getAuthRole,
+  getAuthToken,
+} from "../../lib/authStorage.js";
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
 const STUDENT_PAGE_SIZE = 8;
@@ -36,6 +41,7 @@ const AdminFeeStatusChart = dynamic(
 export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [adminName, setAdminName] = useState("");
 
   const [students, setStudents] = useState([]);
   const [studentPage, setStudentPage] = useState(1);
@@ -74,6 +80,7 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     setAssistantPortalRoot(document.body);
+    setAdminName(getAuthName());
   }, []);
 
   // =========================
@@ -340,6 +347,7 @@ export default function AdminDashboard() {
 
       <MotionSection delay={0.04}>
         <GreetingPanel
+          name={adminName}
           accent="violet"
           subtitle="Stay on top of collections, student activity, and daily institute operations with one clean live view."
         />

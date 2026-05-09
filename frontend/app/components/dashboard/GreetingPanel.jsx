@@ -15,6 +15,7 @@ const getGreeting = (date) => {
 export default function GreetingPanel({
   subtitle = "A calm overview of your day, right when you need it.",
   accent = "blue",
+  name = "",
 }) {
   const reducedMotion = useReducedMotion();
   const [now, setNow] = useState(() => new Date());
@@ -47,7 +48,9 @@ export default function GreetingPanel({
     };
   }, [accent]);
 
-  const greeting = `${getGreeting(now)}, Mr. Subhabrata Datta`;
+  const baseGreeting = getGreeting(now);
+  const trimmedName = String(name || "").trim();
+  const greeting = trimmedName ? `${baseGreeting}, ${trimmedName}` : baseGreeting;
   const timeLabel = new Intl.DateTimeFormat("en-IN", {
     hour: "numeric",
     minute: "2-digit",

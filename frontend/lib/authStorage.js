@@ -67,3 +67,9 @@ export const getAuthRole = () => {
   const sessionStorageRef = getBrowserStorage("session");
   return sessionStorageRef?.getItem(AUTH_ROLE_KEY)?.trim() || "";
 };
+
+export const getAuthName = () => {
+  clearLegacyAuthStorage();
+  const sessionStorageRef = getBrowserStorage("session");
+  return sessionStorageRef?.getItem(AUTH_NAME_KEY)?.trim() || "";
+};
