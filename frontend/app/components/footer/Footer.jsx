@@ -28,7 +28,7 @@ export default function Footer() {
                   >
                     DM Stack Labs
                   </a>
-                  , a web development company ,
+                  , a web development company , Founded by Manojit Das in 2025. We are dedicated to building software solutions that simplify and streamline administrative tasks for tutors and educational institutes.
                 </p>
                 <p className="app-footer__credits-text">
                   to help tutors and institutes manage fees, payments, reminders, and
