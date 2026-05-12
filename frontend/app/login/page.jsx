@@ -827,8 +827,7 @@ export default function Login() {
               onChange={(e) => setSignupPhone(e.target.value)}
             />
             <p className="form-help-text">
-              This number will be used by the institute for payment reminders. No WhatsApp
-              verification is required.
+              
             </p>
             <input
               name="email"
