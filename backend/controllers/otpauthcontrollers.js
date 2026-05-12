@@ -61,7 +61,7 @@ const getSignupValidationError = ({
   if (!isValidStudentClass(classNum)) {
     return "Please select a valid class (3 to 12).";
   }
-  if (!isValidPhone(normalizedPhone)) return "Please enter a valid phone number.";
+  if (!isValidPhone(normalizedPhone)) return "Please enter a valid WhatsApp number.";
   if (!isValidEmail(normalizedEmail)) return "Please provide a valid email address.";
   if (!String(password || "").trim()) return "Password is required.";
   if (!isStrongPassword(password)) {
@@ -167,7 +167,7 @@ export const sendOtp = async (req, res) => {
         },
       });
       if (existingPhone) {
-        return authError(res, 400, "Phone number is already registered.");
+        return authError(res, 400, "WhatsApp number is already registered.");
       }
     } else if (normalizedPurpose === "reset") {
       const [student, admin] = await Promise.all([
@@ -277,7 +277,7 @@ export const signupWithOtp = async (req, res) => {
       },
     });
     if (existsPhone) {
-      return authError(res, 400, "Phone number is already registered.");
+      return authError(res, 400, "WhatsApp number is already registered.");
     }
 
     await verifyEmailOtp({ email: normalizedEmail, purpose: "signup", code });

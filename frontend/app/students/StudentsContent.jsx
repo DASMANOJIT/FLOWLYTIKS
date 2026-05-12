@@ -7,7 +7,17 @@ import { useRouter, useSearchParams } from "next/navigation";
 import "./students.css";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection, fadeUpItem, staggerContainer } from "../components/motion/primitives.jsx";
-import { clearAuthSession, getAuthRole, getAuthToken } from "../../lib/authStorage.js";
+import {
+  clearAuthSession,
+  getAuthName,
+  getAuthRole,
+  getAuthToken,
+} from "../../lib/authStorage.js";
+import {
+  createWhatsAppReminderLink,
+  formatWhatsAppDisplay,
+  isValidWhatsAppNumber,
+} from "../../lib/whatsapp.js";
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
 const PAGE_SIZE = 12;
@@ -70,6 +80,7 @@ export default function StudentsPage() {
   const [resolvedMonthLabel, setResolvedMonthLabel] = useState(CURRENT_FEE_STATUS_MONTH);
   const requestKeyRef = useRef("");
   const initialLoadRef = useRef(true);
+  const reminderSenderName = getAuthName().trim() || "Flowlytiks";
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -304,6 +315,10 @@ export default function StudentsPage() {
     }
   };
 
+  const openStudentProfile = (studentId) => {
+    router.push(`/students/${studentId}`);
+  };
+
   if (loading) {
     return <PremiumLoader fullScreen label="Loading students" />;
   }
@@ -454,33 +469,87 @@ export default function StudentsPage() {
         initial="hidden"
         animate="visible"
       >
-        {students.map((student) => (
-          <motion.div key={student.id} variants={fadeUpItem} whileHover={{ y: -4 }}>
-            <Link
-              href={`/students/${student.id}`}
-              className="student-card"
-            >
-              <div className="student-card__name">
-                <span className="student-card__label">Student Name</span>
-                <h3>{student.name}</h3>
+        {students.map((student) => {
+          const isPaid = student.feesStatus === "paid";
+          const whatsappLink = createWhatsAppReminderLink({
+            number: student.phone,
+            studentName: student.name,
+            monthName: resolvedMonthLabel,
+            amount: student.monthlyFee ?? 0,
+            senderName: reminderSenderName,
+          });
+          const hasValidWhatsAppNumber = isValidWhatsAppNumber(student.phone);
+
+          return (
+            <motion.article key={student.id} className="student-card" variants={fadeUpItem} whileHover={{ y: -4 }}>
+              <div
+                className="student-card__content"
+                role="link"
+                tabIndex={0}
+                onClick={() => openStudentProfile(student.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    openStudentProfile(student.id);
+                  }
+                }}
+              >
+                <div className="student-card__name">
+                  <span className="student-card__label">Student Name</span>
+                  <h3>{student.name}</h3>
+                </div>
+                <div className="student-card__class">
+                  <span className="student-card__label">Class</span>
+                  <p>{student.class}</p>
+                </div>
+                <div className="student-card__school">
+                  <span className="student-card__label">School</span>
+                  <p>{student.school}</p>
+                </div>
+                <div className="student-card__whatsapp">
+                  <span className="student-card__label">WhatsApp</span>
+                  <p>
+                    {hasValidWhatsAppNumber
+                      ? formatWhatsAppDisplay(student.phone)
+                      : "No WhatsApp number"}
+                  </p>
+                </div>
+                <div className="student-card__status">
+                  <span className="student-card__label">{resolvedMonthLabel} Fee Status</span>
+                  <span className={`fee-status ${isPaid ? "paid" : "unpaid"}`}>
+                    {isPaid ? "Paid" : "Unpaid"}
+                  </span>
+                </div>
               </div>
-              <div className="student-card__class">
-                <span className="student-card__label">Class</span>
-                <p>{student.class}</p>
-              </div>
-              <div className="student-card__school">
-                <span className="student-card__label">School</span>
-                <p>{student.school}</p>
-              </div>
-              <div className="student-card__status">
-                <span className="student-card__label">{resolvedMonthLabel} Fee Status</span>
-                <span className={`fee-status ${student.feesStatus === "paid" ? "paid" : "unpaid"}`}>
-                  {student.feesStatus === "paid" ? "Paid" : "Unpaid"}
-                </span>
-              </div>
-            </Link>
-          </motion.div>
-        ))}
+
+              {!isPaid ? (
+                <div className="student-card__actions">
+                  {whatsappLink ? (
+                    <a
+                      href={whatsappLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="student-whatsapp-btn"
+                      aria-label={`Send WhatsApp reminder to ${student.name}`}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      WhatsApp Reminder
+                    </a>
+                  ) : (
+                    <button
+                      type="button"
+                      className="student-whatsapp-btn student-whatsapp-btn--disabled"
+                      disabled
+                      aria-label={`No WhatsApp number for ${student.name}`}
+                    >
+                      No WhatsApp number
+                    </button>
+                  )}
+                </div>
+              ) : null}
+            </motion.article>
+          );
+        })}
         {!students.length ? (
           <MotionCard className="students-empty-state" hover={false}>
             No students match the current filters.

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isValidPhone } from "../utils/authValidation.js";
 
 const emailSchema = z.string().trim().email("Please provide a valid email address.");
 const otpSchema = z
@@ -10,11 +11,25 @@ const purposeSchema = z.enum(["signup", "login", "reset", "2fa"]).optional();
 const optionalTrimmedString = (max = 160) =>
   z.string().trim().max(max).optional();
 
+const phoneSchema = z
+  .string()
+  .trim()
+  .min(10, "WhatsApp number is required.")
+  .max(24, "Please enter a valid WhatsApp number.")
+  .refine((value) => isValidPhone(value), "Please enter a valid WhatsApp number.");
+
+const optionalPhoneSchema = z
+  .string()
+  .trim()
+  .max(24, "Please enter a valid WhatsApp number.")
+  .optional()
+  .refine((value) => !value || isValidPhone(value), "Please enter a valid WhatsApp number.");
+
 export const sendOtpBodySchema = z.object({
   email: emailSchema,
   purpose: purposeSchema,
   name: optionalTrimmedString(120),
-  phone: optionalTrimmedString(20),
+  phone: optionalPhoneSchema,
   password: optionalTrimmedString(200),
   school: optionalTrimmedString(160),
   customSchool: optionalTrimmedString(160),
@@ -30,7 +45,7 @@ export const verifyOtpBodySchema = z.object({
 export const signupBodySchema = z.object({
   name: z.string().trim().min(1, "Full name is required.").max(120),
   email: emailSchema,
-  phone: z.string().trim().min(10, "Please enter a valid phone number.").max(20),
+  phone: phoneSchema,
   password: z.string().min(8, "Password must be at least 8 characters.").max(200),
   school: z.string().trim().min(1, "School is required.").max(160),
   customSchool: optionalTrimmedString(160),

@@ -3,6 +3,7 @@ import { useRouter } from "next/navigation";
 import { useParams, useSearchParams } from "next/navigation";
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
+import Link from "next/link";
 
 import "./pay.css";
 import PremiumLoader from "../../components/ui/PremiumLoader.jsx";
@@ -141,13 +142,9 @@ export default function PayPage() {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
     >
-     
-  <MotionButton
-  className="back-btn"
-  onClick={() => router.back()}
->
-  ← Back
-</MotionButton>
+      <Link href="/student" className="back-btn">
+        ← Back to Dashboard
+      </Link>
 
 
  

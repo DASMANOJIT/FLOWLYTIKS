@@ -7,6 +7,7 @@ import { MotionButton } from "../components/motion/primitives.jsx";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { readApiResponse } from "../../lib/api.js";
 import { clearLegacyAuthStorage, storeAuthSession } from "../../lib/authStorage.js";
+import { isValidWhatsAppNumber } from "../../lib/whatsapp.js";
 
 export default function Login() {
   const OTP_RESEND_COOLDOWN_SECONDS = 15;
@@ -58,8 +59,7 @@ export default function Login() {
       String(password || "")
     );
 
-  const isValidPhone = (phone) =>
-    /^\+?\d{10,15}$/.test(String(phone || "").trim());
+  const isValidPhone = (phone) => isValidWhatsAppNumber(phone);
 
   const isValidEmail = (email) =>
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
@@ -101,8 +101,8 @@ export default function Login() {
       return "Please enter your school name.";
     }
     if (!studentClass) return "Class is required.";
-    if (!phone) return "Phone number is required.";
-    if (!isValidPhone(phone)) return "Please enter a valid phone number.";
+    if (!phone) return "WhatsApp number is required.";
+    if (!isValidPhone(phone)) return "Please enter a valid WhatsApp number.";
     if (!email) return "Email is required.";
     if (!isValidEmail(email)) return "Please enter a valid email address.";
     if (!password) return "Password is required.";
@@ -326,7 +326,7 @@ export default function Login() {
       return alert("Please enter the 6-digit OTP.");
     }
     if (!isValidPhone(signupValues.phone)) {
-      return alert("Please enter a valid phone number.");
+      return alert("Please enter a valid WhatsApp number.");
     }
 
     setSignupLoading(true);
@@ -818,7 +818,7 @@ export default function Login() {
             </select>
             <input
               name="phone"
-              placeholder="Phone Number"
+              placeholder="Enter WhatsApp number"
               className="form-input"
               required
               value={signupPhone}
@@ -826,6 +826,10 @@ export default function Login() {
               autoComplete="tel"
               onChange={(e) => setSignupPhone(e.target.value)}
             />
+            <p className="form-help-text">
+              This number will be used by the institute for payment reminders. No WhatsApp
+              verification is required.
+            </p>
             <input
               name="email"
               placeholder="Email"

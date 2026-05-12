@@ -120,7 +120,7 @@ const getStudentRegistrationValidationError = ({
   if (!isValidStudentClass(studentClass)) {
     return "Please select a valid class (3 to 12).";
   }
-  if (!isValidPhone(phone)) return "Please enter a valid phone number.";
+  if (!isValidPhone(phone)) return "Please enter a valid WhatsApp number.";
   if (!isValidEmail(email)) return "Please enter a valid email address.";
   if (!isStrongPassword(password)) {
     return "Password must be at least 8 characters and include uppercase, lowercase, number, and special character.";
@@ -206,7 +206,7 @@ export const registerUser = async (req, res) => {
       },
     });
     if (existsPhone) {
-      return authError(res, 400, "Phone number is already registered.");
+      return authError(res, 400, "WhatsApp number is already registered.");
     }
 
     // 🔥 FETCH GLOBAL MONTHLY FEE

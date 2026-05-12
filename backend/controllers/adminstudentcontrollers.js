@@ -67,7 +67,7 @@ const getSignupValidationError = ({
   if (!isValidStudentClass(classNum)) {
     return "Please select a valid class (3 to 12).";
   }
-  if (!isValidPhone(normalizedPhone)) return "Please enter a valid phone number.";
+  if (!isValidPhone(normalizedPhone)) return "Please enter a valid WhatsApp number.";
   if (!isValidEmail(normalizedEmail)) return "Please provide a valid email address.";
   if (!String(password || "").trim()) return "Password is required.";
   if (!isStrongPassword(password)) {
@@ -138,7 +138,7 @@ const ensureStudentAccountAvailable = async ({ normalizedEmail, normalizedPhone 
   });
 
   if (existingByPhone) {
-    const err = new Error("Phone number is already registered.");
+    const err = new Error("WhatsApp number is already registered.");
     err.status = 400;
     throw err;
   }
@@ -226,7 +226,7 @@ export const verifyAdminCreateStudentOtp = async (req, res) => {
         return authError(
           res,
           400,
-          "Student account already exists with this email or phone number."
+          "Student account already exists with this email or WhatsApp number."
         );
       }
       throw err;

@@ -16,6 +16,7 @@ import {
   getAuthRole,
   getAuthToken,
 } from "../../../lib/authStorage.js";
+import { isValidWhatsAppNumber } from "../../../lib/whatsapp.js";
 
 const API_BASE = "";
 const OTP_RESEND_COOLDOWN_SECONDS = 15;
@@ -35,8 +36,7 @@ const isStrongPassword = (password) =>
     String(password || "")
   );
 
-const isValidPhone = (phone) =>
-  /^\+?\d{10,15}$/.test(String(phone || "").trim());
+const isValidPhone = (phone) => isValidWhatsAppNumber(phone);
 
 const isValidEmail = (email) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
@@ -56,8 +56,8 @@ const getValidationMessage = ({
     return "Please enter the school name.";
   }
   if (!studentClass) return "Class is required.";
-  if (!String(phone || "").trim()) return "Phone number is required.";
-  if (!isValidPhone(phone)) return "Please enter a valid phone number.";
+  if (!String(phone || "").trim()) return "WhatsApp number is required.";
+  if (!isValidPhone(phone)) return "Please enter a valid WhatsApp number.";
   if (!String(email || "").trim()) return "Email is required.";
   if (!isValidEmail(email)) return "Please enter a valid email address.";
   if (!String(password || "").trim()) return "Password is required.";
@@ -364,15 +364,20 @@ export default function AddStudentPage() {
             </label>
 
             <label className="add-student-field">
-              <span>Phone Number</span>
+              <span>WhatsApp Number</span>
               <input
                 type="tel"
                 value={phone}
                 autoComplete="tel"
                 inputMode="tel"
+                placeholder="Enter WhatsApp number"
                 onChange={(event) => setPhone(event.target.value)}
                 required
               />
+              <p className="add-student-field-help">
+                This number will be used by the institute for payment reminders. No WhatsApp
+                verification is required.
+              </p>
             </label>
 
             <label className="add-student-field">
