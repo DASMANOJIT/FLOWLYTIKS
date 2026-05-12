@@ -14,6 +14,7 @@ import paymentRoutes from "./routes/paymentroute.js";
 import settingsRoutes from "./routes/settingsroute.js";
 import adminAssistantRoutes from "./routes/adminassistantroute.js";
 import adminRoutes from "./routes/adminroute.js";
+import reminderRoutes from "./routes/reminderroute.js";
 
 validateEnv();
 
@@ -194,6 +195,7 @@ app.use("/api/students", studentRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/admin-assistant", adminAssistantRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/reminders", reminderRoutes);
 
 
 // Health check

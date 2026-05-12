@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import "./students.css";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection, fadeUpItem, staggerContainer } from "../components/motion/primitives.jsx";
+import WhatsAppReminderButton from "../components/reminders/WhatsAppReminderButton.jsx";
 import {
   clearAuthSession,
   getAuthName,
@@ -14,7 +15,6 @@ import {
   getAuthToken,
 } from "../../lib/authStorage.js";
 import {
-  createWhatsAppReminderLink,
   formatWhatsAppDisplay,
   isValidWhatsAppNumber,
 } from "../../lib/whatsapp.js";
@@ -78,6 +78,9 @@ export default function StudentsPage() {
   const [classes, setClasses] = useState([]);
   const [schools, setSchools] = useState([]);
   const [resolvedMonthLabel, setResolvedMonthLabel] = useState(CURRENT_FEE_STATUS_MONTH);
+  const [resolvedAcademicYear, setResolvedAcademicYear] = useState(
+    new Date().getMonth() >= 2 ? new Date().getFullYear() : new Date().getFullYear() - 1
+  );
   const requestKeyRef = useRef("");
   const initialLoadRef = useRef(true);
   const reminderSenderName = getAuthName().trim() || "Flowlytiks";
@@ -174,6 +177,9 @@ export default function StudentsPage() {
           setTotalStudents(data.length);
           setTotalPages(1);
           setResolvedMonthLabel(monthFilter || CURRENT_FEE_STATUS_MONTH);
+          setResolvedAcademicYear(
+            new Date().getMonth() >= 2 ? new Date().getFullYear() : new Date().getFullYear() - 1
+          );
           setClasses([...new Set(data.map((student) => student.class).filter(Boolean))]);
           setSchools([...new Set(data.map((student) => student.school).filter(Boolean))]);
           return;
@@ -182,6 +188,13 @@ export default function StudentsPage() {
         setStudents(Array.isArray(data.students) ? data.students : []);
         setTotalStudents(typeof data.totalStudents === "number" ? data.totalStudents : 0);
         setResolvedMonthLabel(data.selectedMonth || monthFilter || CURRENT_FEE_STATUS_MONTH);
+        setResolvedAcademicYear(
+          Number.isFinite(Number(data.selectedAcademicYear))
+            ? Number(data.selectedAcademicYear)
+            : new Date().getMonth() >= 2
+              ? new Date().getFullYear()
+              : new Date().getFullYear() - 1
+        );
         const nextTotalPages = data.totalPages || 1;
         setTotalPages(nextTotalPages);
         if (page > nextTotalPages) {
@@ -224,6 +237,9 @@ export default function StudentsPage() {
     setToDate("");
     setPage(1);
     setResolvedMonthLabel(CURRENT_FEE_STATUS_MONTH);
+    setResolvedAcademicYear(
+      new Date().getMonth() >= 2 ? new Date().getFullYear() : new Date().getFullYear() - 1
+    );
 
     router.replace("/students", { scroll: false });
   };
@@ -471,13 +487,6 @@ export default function StudentsPage() {
       >
         {students.map((student) => {
           const isPaid = student.feesStatus === "paid";
-          const whatsappLink = createWhatsAppReminderLink({
-            number: student.phone,
-            studentName: student.name,
-            monthName: resolvedMonthLabel,
-            amount: student.monthlyFee ?? 0,
-            senderName: reminderSenderName,
-          });
           const hasValidWhatsAppNumber = isValidWhatsAppNumber(student.phone);
 
           return (
@@ -524,27 +533,21 @@ export default function StudentsPage() {
 
               {!isPaid ? (
                 <div className="student-card__actions">
-                  {whatsappLink ? (
-                    <a
-                      href={whatsappLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="student-whatsapp-btn"
-                      aria-label={`Send WhatsApp reminder to ${student.name}`}
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      WhatsApp Reminder
-                    </a>
-                  ) : (
-                    <button
-                      type="button"
-                      className="student-whatsapp-btn student-whatsapp-btn--disabled"
-                      disabled
-                      aria-label={`No WhatsApp number for ${student.name}`}
-                    >
-                      No WhatsApp number
-                    </button>
-                  )}
+                  <WhatsAppReminderButton
+                    studentId={student.id}
+                    monthName={resolvedMonthLabel}
+                    academicYear={resolvedAcademicYear}
+                    amount={student.monthlyFee ?? 0}
+                    studentName={student.name}
+                    whatsappNumber={student.phone}
+                    senderName={reminderSenderName}
+                    reminderState={student.whatsappReminder}
+                    wrapperClassName="student-reminder-control"
+                    buttonClassName="student-whatsapp-btn"
+                    disabledButtonClassName="student-whatsapp-btn student-whatsapp-btn--disabled"
+                    noteClassName="student-reminder-note"
+                    invalidLabel="No valid WhatsApp number"
+                  />
                 </div>
               ) : null}
             </motion.article>

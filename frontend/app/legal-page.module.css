@@ -20,6 +20,47 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.84);
 }
 
+.backButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 16px;
+  margin-bottom: 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(239, 246, 255, 0.9)),
+    rgba(255, 255, 255, 0.94);
+  color: #1d4ed8;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  box-shadow:
+    0 12px 24px rgba(15, 23, 42, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.backButton:hover,
+.backButton:focus-visible {
+  color: #0f4bcf;
+  border-color: rgba(37, 99, 235, 0.3);
+  transform: translateY(-1px);
+  box-shadow:
+    0 16px 28px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.94);
+}
+
+.backButton:active {
+  transform: translateY(0);
+}
+
 .hero {
   display: grid;
   gap: 10px;
@@ -145,6 +186,12 @@
   .shell {
     padding: 20px 16px 24px;
     border-radius: 22px;
+  }
+
+  .backButton {
+    width: 100%;
+    min-height: 46px;
+    margin-bottom: 16px;
   }
 
   .section {

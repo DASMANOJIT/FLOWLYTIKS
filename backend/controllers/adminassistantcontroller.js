@@ -1,16 +1,22 @@
 import prisma from "../prisma/client.js";
-import { getAcademicYear, getPromotionDateGate } from "../utils/academicYear.js";
-import { isLatePaymentForPeriod } from "../utils/paymentPeriod.js";
 import {
-  markPaidForStudent,
-  sendReminderToStudent,
-} from "../services/feeOpsService.js";
+  ACADEMIC_YEAR_TIMEZONE,
+  getAcademicYear,
+  getPromotionDateGate,
+} from "../utils/academicYear.js";
+import { isLatePaymentForPeriod } from "../utils/paymentPeriod.js";
+import { markPaidForStudent } from "../services/feeOpsService.js";
 import {
   BACKGROUND_JOB_TYPES,
   createBackgroundJob,
   getBackgroundJobStatus,
 } from "../services/backgroundJobService.js";
 import { findActivePromotionJobForAcademicYear } from "../services/promotionService.js";
+import {
+  buildWhatsAppReminderState,
+  mapReminderLogsByStudentId,
+  WHATSAPP_REMINDER_CHANNEL,
+} from "../services/reminderCooldownService.js";
 import { autoPromoteIfEligible } from "./studentcontrollers.js";
 import {
   isPaymentSchemaCompatibilityError,
@@ -116,6 +122,12 @@ const extractCalendarYear = (promptText) => {
 
 const buildAcademicYearLabel = (academicYear) =>
   `${academicYear}-${Number(academicYear) + 1}`;
+
+const getCurrentReminderMonth = () =>
+  new Intl.DateTimeFormat("en-US", {
+    timeZone: ACADEMIC_YEAR_TIMEZONE,
+    month: "long",
+  }).format(new Date());
 
 const isBulkAllStudentsPrompt = (promptText) =>
   /\beveryone\b/i.test(promptText) ||
@@ -410,74 +422,88 @@ const runMarkPaidCommand = async (promptText, requestedByUserId = null) => {
   };
 };
 
-const runReminderCommand = async (promptText, requestedByUserId = null) => {
-  const month = extractMonth(promptText);
-  const academicYear = getAcademicYear();
-  const settings = await prisma.appSettings.findUnique({ where: { id: 1 } });
-  const monthlyFee = settings?.monthlyFee || 0;
+const runReminderCommand = async (promptText) => {
+  const month = extractMonth(promptText) || getCurrentReminderMonth();
+  const calendarYear = extractCalendarYear(promptText);
+  const academicYear = resolveAcademicYearForMonth(month, calendarYear);
+  const settings = await prisma.appSettings.findUnique({
+    where: { id: 1 },
+    select: { monthlyFee: true },
+  });
 
-  const applyAll = /\ball\s+students\b/i.test(promptText) || /\ball\b/i.test(promptText);
-  if (applyAll) {
-    const { job, created } = await createBackgroundJob({
-      type: BACKGROUND_JOB_TYPES.ASSISTANT_BULK_REMINDER,
-      source: "admin-assistant",
-      requestedByRole: "admin",
-      requestedByUserId,
-      payload: {
-        month,
-        academicYear,
-        monthlyFee,
+  const unpaidStudents = await prisma.student.findMany({
+    where: {
+      payments: {
+        none: {
+          academicYear,
+          month,
+          status: "paid",
+        },
       },
-    });
+    },
+    select: {
+      id: true,
+      name: true,
+      class: true,
+      school: true,
+      phone: true,
+      monthlyFee: true,
+    },
+    orderBy: { name: "asc" },
+  });
 
+  const reminderLogs =
+    unpaidStudents.length > 0
+      ? await prisma.feeReminderLog.findMany({
+          where: {
+            studentId: {
+              in: unpaidStudents.map((student) => Number(student.id)),
+            },
+            month,
+            academicYear,
+            channel: WHATSAPP_REMINDER_CHANNEL,
+          },
+          select: {
+            studentId: true,
+            lastRemindedAt: true,
+          },
+        })
+      : [];
+  const reminderLogMap = mapReminderLogsByStudentId(reminderLogs);
+
+  if (!unpaidStudents.length) {
     return {
       ok: true,
-      queued: true,
-      jobId: job.id,
-      message: created
-        ? `Reminder job queued${month ? ` for ${month}` : ""}. Job ID: ${job.id}.`
-        : `Reminder job is already queued. Job ID: ${job.id}.`,
+      month,
+      message: `All students are paid for ${month}. No reminders needed.`,
     };
   }
 
-  const allStudents = await prisma.student.findMany({
-    include: {
-      payments: {
-        where: { academicYear, status: "paid" },
-        select: { month: true, status: true },
-      },
-    },
-    orderBy: { id: "asc" },
-  });
-
-  const targets = applyAll ? allStudents : matchStudentsFromPrompt(promptText, allStudents);
-
-  if (!targets.length) {
-    return { ok: false, message: "No student matched. Try 'send reminder to all students'." };
-  }
-
-  let sent = 0;
-  let skipped = 0;
-  for (const student of targets) {
-    try {
-      const result = await sendReminderToStudent({
-        student,
-        month,
-        academicYear,
-        monthlyFee,
-      });
-      if (result.sent) sent += 1;
-      else skipped += 1;
-    } catch (err) {
-      skipped += 1;
-      console.error(`Assistant reminder failed for ${student.id}:`, err.message);
-    }
-  }
-
-  const monthInfo = month ? ` for ${month}` : "";
   return {
     ok: true,
-    message: `Reminder job done${monthInfo}. Sent: ${sent}, skipped: ${skipped}.`,
+    ui: "whatsapp_reminders",
+    month,
+    academicYear,
+    title: `Unpaid Fee Reminders for ${month}`,
+    subtitle: `Found ${unpaidStudents.length} unpaid student${
+      unpaidStudents.length === 1 ? "" : "s"
+    }. Click a button to open WhatsApp with a pre-filled reminder.`,
+    helperText:
+      "WhatsApp will open with a pre-filled message. Please review and press Send. Reminder buttons have a 24-hour cooldown after opening.",
+    reminders: unpaidStudents.map((student) => ({
+      id: Number(student.id),
+      name: student.name,
+      class: student.class,
+      school: student.school,
+      phone: student.phone || "",
+      amountDue: Number(student.monthlyFee || settings?.monthlyFee || 0),
+      status: "unpaid",
+      whatsappReminder: buildWhatsAppReminderState({
+        isPaid: false,
+        lastRemindedAt:
+          reminderLogMap.get(Number(student.id))?.lastRemindedAt || null,
+      }),
+    })),
   };
 };
 
@@ -766,7 +792,7 @@ export const adminAssistantChat = async (req, res) => {
       result = {
         ok: false,
         message:
-          "Command not recognized. Use keywords like: 'paid id 3 march', 'reminder all', 'unpaid november', 'details id 3', 'update student id 3 phone 98...', 'fee 700', 'summary', 'run promotion check'.",
+          "Command not recognized. Use keywords like: 'paid id 3 march', 'send fee reminder for May', 'unpaid november', 'details id 3', 'update student id 3 phone 98...', 'fee 700', 'summary', 'run promotion check'.",
       };
     }
 

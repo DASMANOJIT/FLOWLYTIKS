@@ -256,6 +256,13 @@
   margin-top: -2px;
 }
 
+.student-reminder-control {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+  width: min(100%, 320px);
+}
+
 .student-whatsapp-btn {
   display: inline-flex;
   align-items: center;
@@ -285,6 +292,14 @@
   color: #64748b;
   box-shadow: none;
   cursor: not-allowed;
+}
+
+.student-reminder-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #64748b;
+  text-align: right;
 }
 
 .student-card__label {
@@ -467,8 +482,17 @@
     justify-content: stretch;
   }
 
+  .student-reminder-control {
+    justify-items: stretch;
+    width: 100%;
+  }
+
   .student-whatsapp-btn {
     width: 100%;
+  }
+
+  .student-reminder-note {
+    text-align: left;
   }
 
   .student-card h3 {

@@ -17,6 +17,7 @@ model Admin {
   createdAt                DateTime                @default(now())
   payments                 Payment[]               @relation("AdminPayments")
   gatewayOrders            PaymentGatewayOrder[]   @relation("AdminGatewayOrders")
+  feeReminderLogs          FeeReminderLog[]
 }
 
 model Student {
@@ -35,10 +36,32 @@ model Student {
   updatedAt          DateTime              @updatedAt
   payments           Payment[]
   gatewayOrders      PaymentGatewayOrder[]
+  feeReminderLogs    FeeReminderLog[]
 
   @@index([class])
   @@index([school])
   @@index([joinDate])
+}
+
+model FeeReminderLog {
+  id             String   @id @default(cuid())
+  studentId      Int
+  adminId        Int?
+  month          String
+  academicYear   Int
+  channel        String   @default("whatsapp")
+  lastRemindedAt DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  student        Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  admin          Admin?   @relation(fields: [adminId], references: [id], onDelete: SetNull)
+
+  @@index([studentId])
+  @@index([adminId])
+  @@index([month])
+  @@index([academicYear])
+  @@index([lastRemindedAt])
+  @@unique([studentId, month, academicYear, channel])
 }
 
 model EmailOtp {

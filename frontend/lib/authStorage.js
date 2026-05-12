@@ -3,6 +3,7 @@
 const AUTH_TOKEN_KEY = "token";
 const AUTH_NAME_KEY = "studentName";
 const AUTH_ROLE_KEY = "authRole";
+const ADMIN_CHAT_HISTORY_PREFIX = "flowlytiks_admin_chat_history_";
 const LEGACY_KEYS = [AUTH_TOKEN_KEY, AUTH_NAME_KEY, AUTH_ROLE_KEY];
 
 const getBrowserStorage = (kind) => {
@@ -21,6 +22,23 @@ export const clearLegacyAuthStorage = () => {
 
   for (const key of LEGACY_KEYS) {
     legacyStorage.removeItem(key);
+  }
+};
+
+export const clearSessionStorageByPrefix = (prefix) => {
+  const sessionStorageRef = getBrowserStorage("session");
+  if (!sessionStorageRef || !prefix) return;
+
+  const keysToRemove = [];
+  for (let index = 0; index < sessionStorageRef.length; index += 1) {
+    const key = sessionStorageRef.key(index);
+    if (key && key.startsWith(prefix)) {
+      keysToRemove.push(key);
+    }
+  }
+
+  for (const key of keysToRemove) {
+    sessionStorageRef.removeItem(key);
   }
 };
 
@@ -59,6 +77,8 @@ export const clearAuthSession = () => {
     }
   }
 
+  clearSessionStorageByPrefix(ADMIN_CHAT_HISTORY_PREFIX);
+
   clearLegacyAuthStorage();
 };
 
@@ -72,4 +92,42 @@ export const getAuthName = () => {
   clearLegacyAuthStorage();
   const sessionStorageRef = getBrowserStorage("session");
   return sessionStorageRef?.getItem(AUTH_NAME_KEY)?.trim() || "";
+};
+
+const decodeJwtPayload = (token) => {
+  const rawToken = String(token || "").trim();
+  if (!rawToken) return null;
+
+  const parts = rawToken.split(".");
+  if (parts.length < 2) return null;
+
+  try {
+    const normalizedPayload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const paddedPayload = normalizedPayload.padEnd(
+      normalizedPayload.length + ((4 - (normalizedPayload.length % 4)) % 4),
+      "="
+    );
+    const decoded =
+      typeof window !== "undefined" && typeof window.atob === "function"
+        ? window.atob(paddedPayload)
+        : "";
+    return decoded ? JSON.parse(decoded) : null;
+  } catch {
+    return null;
+  }
+};
+
+export const getAuthUserId = () => {
+  const payload = decodeJwtPayload(getAuthToken());
+  const userId = payload?.id;
+
+  if (typeof userId === "number" && Number.isFinite(userId)) {
+    return String(userId);
+  }
+
+  if (typeof userId === "string" && userId.trim()) {
+    return userId.trim();
+  }
+
+  return "";
 };

@@ -5,6 +5,10 @@ import {
 } from "../utils/academicYear.js";
 import { legacyPaymentSelect } from "../utils/paymentCompat.js";
 import { isStudentEligibleForPromotion } from "../services/promotionService.js";
+import {
+  buildWhatsAppReminderState,
+  WHATSAPP_REMINDER_CHANNEL,
+} from "../services/reminderCooldownService.js";
 
 const stripStudentSecrets = (student) => {
   if (!student || typeof student !== "object") return student;
@@ -344,6 +348,17 @@ export const getStudents = async (req, res) => {
             select: { id: true },
             take: 1,
           },
+          feeReminderLogs: {
+            where: {
+              academicYear: currentAcademicYear,
+              month: currentMonth,
+              channel: WHATSAPP_REMINDER_CHANNEL,
+            },
+            select: {
+              lastRemindedAt: true,
+            },
+            take: 1,
+          },
         };
 
     const tasks = [
@@ -410,10 +425,15 @@ export const getStudents = async (req, res) => {
         return stripStudentSecrets(student);
       }
 
-      const { payments, ...rest } = student;
+      const { payments, feeReminderLogs, ...rest } = student;
+      const isPaid = payments.length > 0;
       return {
         ...stripStudentSecrets(rest),
-        feesStatus: payments.length ? "paid" : "unpaid",
+        feesStatus: isPaid ? "paid" : "unpaid",
+        whatsappReminder: buildWhatsAppReminderState({
+          isPaid,
+          lastRemindedAt: feeReminderLogs[0]?.lastRemindedAt || null,
+        }),
       };
     });
 
@@ -426,6 +446,7 @@ export const getStudents = async (req, res) => {
       page,
       limit,
       selectedMonth: currentMonth,
+      selectedAcademicYear: currentAcademicYear,
       totalPages,
       ...(filters ? { filters } : {}),
       ...(summary ? { summary } : {}),

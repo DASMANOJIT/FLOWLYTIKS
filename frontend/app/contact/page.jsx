@@ -1,9 +1,11 @@
 import styles from "../legal-page.module.css";
+import LegalBackButton from "../components/legal/LegalBackButton.jsx";
 
 export default function ContactPage() {
   return (
     <div className={styles.page}>
       <div className={styles.shell}>
+        <LegalBackButton />
         <header className={styles.hero}>
           <span className={styles.badge}>Contact &amp; Support</span>
           <h1 className={styles.title}>Contact Flowlytiks</h1>

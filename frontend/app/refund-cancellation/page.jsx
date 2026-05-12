@@ -1,9 +1,11 @@
 import styles from "../legal-page.module.css";
+import LegalBackButton from "../components/legal/LegalBackButton.jsx";
 
 export default function RefundCancellationPage() {
   return (
     <div className={styles.page}>
       <div className={styles.shell}>
+        <LegalBackButton />
         <header className={styles.hero}>
           <span className={styles.badge}>Refund &amp; Cancellation Policy</span>
           <h1 className={styles.title}>Refund &amp; Cancellation Policy</h1>
