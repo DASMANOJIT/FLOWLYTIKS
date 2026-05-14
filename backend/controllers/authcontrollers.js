@@ -28,6 +28,7 @@ import {
   resolveSchoolValue,
 } from "../utils/authValidation.js";
 import { buildRequestLogMeta, logInfo, logWarn } from "../utils/appLogger.js";
+import { resolveDefaultAdminId } from "../services/classSchoolGroupService.js";
 
 const MAX_DEVICES_PER_ACCOUNT = 2;
 const INVALID_CREDENTIALS_MESSAGE = "Invalid credentials.";
@@ -190,6 +191,7 @@ export const registerUser = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+    const defaultAdminId = await resolveDefaultAdminId();
 
     // =========================
     // STUDENT REGISTRATION
@@ -226,6 +228,7 @@ export const registerUser = async (req, res) => {
         password: hashedPassword,
         school: normalizedSchool,
         class: String(classNum),
+        adminId: defaultAdminId,
         monthlyFee: settings.monthlyFee, // ✅ CORRECT SOURCE
       },
     });

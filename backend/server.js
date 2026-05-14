@@ -28,6 +28,8 @@ const defaultDevOrigins = [
   "http://127.0.0.1:3001",
 ];
 const defaultProductionOrigins = [
+  "https://www.flowlytiks.in",
+  "https://flowlytiks.in",
   "https://flowlytiks-frontend.onrender.com",
 ];
 
@@ -45,13 +47,12 @@ const sanitizeOrigin = (origin) => {
   }
 };
 
-const configuredOrigins = (
-  process.env.ALLOWED_ORIGINS ||
-  process.env.CORS_ORIGIN ||
-  process.env.FRONTEND_URL ||
-  ""
-)
-  .split(",")
+const configuredOrigins = [
+  process.env.ALLOWED_ORIGINS,
+  process.env.CORS_ORIGIN,
+  process.env.FRONTEND_URL,
+]
+  .flatMap((value) => String(value || "").split(","))
   .map(sanitizeOrigin)
   .filter(Boolean);
 
@@ -78,8 +79,10 @@ app.use(
         if (corsOrigins.includes(origin)) {
           return callback(null, true);
         }
-        return callback(new Error("CORS origin not allowed"));
+        console.error("CORS blocked origin:", origin);
+        return callback(new Error("Request origin is not allowed"));
       },
+      credentials: true,
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization"],
       maxAge: 86400,
@@ -219,7 +222,11 @@ app.use((err, req, res, next) => {
     err?.statusCode ||
     err?.status ||
     (err instanceof SyntaxError && "body" in err ? 400 : null) ||
-    (/cors origin not allowed/i.test(String(err?.message || "")) ? 403 : null) ||
+    (/(cors origin not allowed|request origin is not allowed)/i.test(
+      String(err?.message || "")
+    )
+      ? 403
+      : null) ||
     500;
   logError("server.request_failed", {
     method: req.method,

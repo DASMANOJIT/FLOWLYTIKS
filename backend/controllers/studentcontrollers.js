@@ -9,11 +9,13 @@ import {
   buildWhatsAppReminderState,
   WHATSAPP_REMINDER_CHANNEL,
 } from "../services/reminderCooldownService.js";
+import { findMatchingClassSchoolGroupForStudent } from "../services/classSchoolGroupService.js";
 
 const stripStudentSecrets = (student) => {
   if (!student || typeof student !== "object") return student;
   const safe = { ...student };
   delete safe.password;
+  delete safe.adminId;
   return safe;
 };
 
@@ -37,6 +39,7 @@ const VALID_PAYMENT_MONTHS = new Set([
 
 const studentBaseSelect = {
   id: true,
+  adminId: true,
   name: true,
   phone: true,
   email: true,
@@ -619,7 +622,18 @@ export const getLoggedInStudent = async (req, res) => {
       return res.status(404).json({ message: "Student not found" });
     }
 
-    res.json(stripStudentSecrets(student));
+    const classSchoolGroup = await findMatchingClassSchoolGroupForStudent(student);
+
+    res.json({
+      ...stripStudentSecrets(student),
+      classSchoolGroup: classSchoolGroup
+        ? {
+            className: classSchoolGroup.className,
+            schoolName: classSchoolGroup.schoolName,
+            whatsappGroupLink: classSchoolGroup.whatsappGroupLink,
+          }
+        : null,
+    });
   } catch (err) {
     console.error("getLoggedInStudent error:", err);
     res.status(500).json({ message: "Failed to fetch student profile" });

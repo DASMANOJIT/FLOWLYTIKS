@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
+import { Trash2, X } from "lucide-react";
 import "./admin.css";
 import Cal from "../components/calender/calender.jsx";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
@@ -25,6 +26,12 @@ import {
   getAuthUserId,
 } from "../../lib/authStorage.js";
 import {
+  CLASS_OPTIONS,
+  SCHOOL_OPTIONS,
+  SCHOOL_OTHER_VALUE,
+  resolveSchoolOptionState,
+} from "../../lib/studentOptions.js";
+import {
   formatWhatsAppDisplay,
   isValidWhatsAppNumber,
 } from "../../lib/whatsapp.js";
@@ -32,8 +39,51 @@ import useSessionChatHistory from "../../lib/useSessionChatHistory.js";
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
 const STUDENT_PAGE_SIZE = 8;
+const createGroupFormState = ({
+  id = "",
+  className = "",
+  schoolName = "",
+  whatsappGroupLink = "",
+} = {}) => {
+  const { schoolOption, customSchool } = resolveSchoolOptionState(schoolName);
+
+  return {
+    id: String(id || ""),
+    className: String(className || "").trim(),
+    schoolOption,
+    customSchool,
+    whatsappGroupLink: String(whatsappGroupLink || "").trim(),
+  };
+};
+
+const EMPTY_GROUP_FORM = createGroupFormState();
+
+const resolveGroupSchoolName = (groupForm) =>
+  String(
+    groupForm.schoolOption === SCHOOL_OTHER_VALUE
+      ? groupForm.customSchool
+      : groupForm.schoolOption
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+
 const ADMIN_CHAT_STORAGE_KEY_PREFIX = "flowlytiks_admin_chat_history_";
 const DEFAULT_ADMIN_CHAT_STORAGE_KEY = `${ADMIN_CHAT_STORAGE_KEY_PREFIX}session`;
+const REVENUE_MONTH_OPTIONS = [
+  "All Months",
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
 const DEFAULT_CHAT_MESSAGES = [
   {
     role: "bot",
@@ -175,9 +225,17 @@ export default function AdminDashboard() {
   // =========================
   const [filterFrom, setFilterFrom] = useState("");
   const [filterTo, setFilterTo] = useState("");
+  const [filterMonth, setFilterMonth] = useState("All Months");
   const [filteredRevenue, setFilteredRevenue] = useState(0);
   const [filteredPaid, setFilteredPaid] = useState(0);
   const [filterLoading, setFilterLoading] = useState(false);
+  const [classSchoolGroups, setClassSchoolGroups] = useState([]);
+  const [missingGroupLinks, setMissingGroupLinks] = useState([]);
+  const [groupForm, setGroupForm] = useState(EMPTY_GROUP_FORM);
+  const [groupLoading, setGroupLoading] = useState(false);
+  const [groupSubmitting, setGroupSubmitting] = useState(false);
+  const [groupFeedback, setGroupFeedback] = useState(null);
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
   const dashboardRequestKeyRef = useRef("");
   const initialLoadRef = useRef(true);
   const {
@@ -201,6 +259,98 @@ export default function AdminDashboard() {
         : DEFAULT_ADMIN_CHAT_STORAGE_KEY
     );
   }, []);
+
+  const fetchGroupManagementData = async () => {
+    const token = getAuthToken();
+    const role = getAuthRole();
+    if (!token) {
+      window.location.href = "/login";
+      return;
+    }
+    if (role && role !== "admin") {
+      clearAuthSession();
+      window.location.href = "/login";
+      return;
+    }
+
+    setGroupLoading(true);
+    try {
+      const [groupsRes, missingRes] = await Promise.all([
+        fetch(`${API_BASE}/api/admin/class-school-groups`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${API_BASE}/api/admin/class-school-groups/missing`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      ]);
+
+      const [groupsData, missingData] = await Promise.all([
+        groupsRes.json().catch(() => ({})),
+        missingRes.json().catch(() => ({})),
+      ]);
+
+      if (
+        [groupsRes.status, missingRes.status].some(
+          (status) => status === 401 || status === 403
+        )
+      ) {
+        clearAuthSession();
+        window.location.href = "/login";
+        return;
+      }
+
+      if (!groupsRes.ok) {
+        throw new Error(
+          groupsData?.message || "Failed to fetch WhatsApp group links."
+        );
+      }
+
+      if (!missingRes.ok) {
+        throw new Error(
+          missingData?.message || "Failed to fetch missing group links."
+        );
+      }
+
+      setClassSchoolGroups(
+        Array.isArray(groupsData?.groups) ? groupsData.groups : []
+      );
+      setMissingGroupLinks(
+        Array.isArray(missingData?.missing) ? missingData.missing : []
+      );
+    } catch (error) {
+      console.error("Admin class-school group fetch error:", error);
+      setGroupFeedback({
+        type: "error",
+        message:
+          error?.message || "Failed to load class and school WhatsApp groups.",
+      });
+    } finally {
+      setGroupLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchGroupManagementData();
+  }, []);
+
+  useEffect(() => {
+    if (!groupModalOpen) return undefined;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const handleEscape = (event) => {
+      if (event.key === "Escape" && !groupSubmitting) {
+        setGroupModalOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [groupModalOpen, groupSubmitting]);
 
   const buildAssistantBotMessage = (data) => {
     if (data?.ui === "whatsapp_reminders" && Array.isArray(data?.reminders)) {
@@ -328,12 +478,199 @@ export default function AdminDashboard() {
     setChatInput("");
   };
 
+  const closeGroupModal = () => {
+    if (groupSubmitting) return;
+    setGroupModalOpen(false);
+  };
+
+  const openCreateGroupModal = () => {
+    setGroupFeedback(null);
+    resetGroupForm();
+    setGroupModalOpen(true);
+  };
+
+  const resetGroupForm = () => {
+    setGroupForm(createGroupFormState());
+  };
+
+  const handleGroupFieldChange = (field, value) => {
+    setGroupForm((current) => {
+      const next = {
+        ...current,
+        [field]: value,
+      };
+
+      if (field === "schoolOption" && value !== SCHOOL_OTHER_VALUE) {
+        next.customSchool = "";
+      }
+
+      return next;
+    });
+  };
+
+  const handleGroupSubmit = async (event) => {
+    event.preventDefault();
+    if (groupSubmitting) return;
+
+    const token = getAuthToken();
+    if (!token) {
+      window.location.href = "/login";
+      return;
+    }
+
+    setGroupSubmitting(true);
+    setGroupFeedback(null);
+
+    try {
+      const resolvedClassName = String(groupForm.className || "").trim();
+      const resolvedSchoolName = resolveGroupSchoolName(groupForm);
+      if (!resolvedClassName) {
+        throw new Error("Class is required.");
+      }
+      if (!resolvedSchoolName) {
+        throw new Error("School is required.");
+      }
+
+      const isEditing = Boolean(groupForm.id);
+      const res = await fetch(
+        isEditing
+          ? `${API_BASE}/api/admin/class-school-groups/${groupForm.id}`
+          : `${API_BASE}/api/admin/class-school-groups`,
+        {
+          method: isEditing ? "PUT" : "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            className: resolvedClassName,
+            schoolName: resolvedSchoolName,
+            whatsappGroupLink: groupForm.whatsappGroupLink,
+          }),
+        }
+      );
+
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401 || res.status === 403) {
+        clearAuthSession();
+        window.location.href = "/login";
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error(
+          data?.message || "Failed to save class and school WhatsApp group."
+        );
+      }
+
+      setGroupFeedback({
+        type: "success",
+        message:
+          data?.message ||
+          "Class and school WhatsApp group saved successfully.",
+      });
+      setGroupModalOpen(false);
+      resetGroupForm();
+      await fetchGroupManagementData();
+    } catch (error) {
+      console.error("Admin class-school group save error:", error);
+      setGroupFeedback({
+        type: "error",
+        message:
+          error?.message || "Failed to save class and school WhatsApp group.",
+      });
+    } finally {
+      setGroupSubmitting(false);
+    }
+  };
+
+  const handleEditGroup = (group) => {
+    setGroupFeedback(null);
+    setGroupForm(createGroupFormState({
+      id: group.id,
+      className: group.className || "",
+      schoolName: group.schoolName || "",
+      whatsappGroupLink: group.whatsappGroupLink || "",
+    }));
+    setGroupModalOpen(true);
+  };
+
+  const handleDeleteGroup = async (groupId) => {
+    if (!groupId || groupSubmitting) return;
+    const confirmed = window.confirm(
+      "Are you sure you want to delete this WhatsApp group link?"
+    );
+    if (!confirmed) return;
+
+    const token = getAuthToken();
+    if (!token) {
+      window.location.href = "/login";
+      return;
+    }
+
+    setGroupSubmitting(true);
+    setGroupFeedback(null);
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/admin/class-school-groups/${groupId}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 401 || res.status === 403) {
+        clearAuthSession();
+        window.location.href = "/login";
+        return;
+      }
+
+      if (!res.ok) {
+        throw new Error(
+          data?.message || "Failed to delete class and school WhatsApp group."
+        );
+      }
+
+      if (groupForm.id === groupId) {
+        resetGroupForm();
+      }
+
+      setGroupFeedback({
+        type: "success",
+        message:
+          data?.message ||
+          "Class and school WhatsApp group deleted successfully.",
+      });
+      await fetchGroupManagementData();
+    } catch (error) {
+      console.error("Admin class-school group delete error:", error);
+      setGroupFeedback({
+        type: "error",
+        message:
+          error?.message || "Failed to delete class and school WhatsApp group.",
+      });
+    } finally {
+      setGroupSubmitting(false);
+    }
+  };
+
+  const handleAddMissingGroup = (missingGroup) => {
+    setGroupFeedback(null);
+    setGroupForm(createGroupFormState({
+      id: "",
+      className: missingGroup.className || "",
+      schoolName: missingGroup.schoolName || "",
+      whatsappGroupLink: "",
+    }));
+    setGroupModalOpen(true);
+  };
+
   // =========================
   // Filter Functions
   // =========================
-  const applyFilter = async () => {
-    if (!filterFrom || !filterTo) return;
-
+  const fetchRevenueSummary = async ({ from = "", to = "", month = "All Months" } = {}) => {
     const token = getAuthToken();
     if (!token) {
       window.location.href = "/login";
@@ -343,15 +680,22 @@ export default function AdminDashboard() {
     setFilterLoading(true);
 
     try {
-      const params = new URLSearchParams({
-        from: filterFrom,
-        to: filterTo,
-      });
+      const params = new URLSearchParams();
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
+      if (month && month !== "All Months") params.set("month", month);
 
-      const res = await fetch(`${API_BASE}/api/payments/revenue?${params.toString()}`, {
+      const queryString = params.toString();
+      const res = await fetch(`${API_BASE}/api/payments/revenue${queryString ? `?${queryString}` : ""}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 401 || res.status === 403) {
+        clearAuthSession();
+        window.location.href = "/login";
+        return;
+      }
 
       if (!res.ok) {
         throw new Error(data?.message || "Failed to apply date filter");
@@ -361,18 +705,30 @@ export default function AdminDashboard() {
       setFilteredPaid(data.paidRevenue ?? data.totalRevenue ?? 0);
     } catch (err) {
       console.error("Admin revenue filter error:", err);
-      alert("Failed to apply the date filter.");
+      alert("Failed to apply the selected filters.");
     } finally {
       setFilterLoading(false);
     }
   };
 
-  const clearFilter = () => {
+  const applyFilter = async () => {
+    await fetchRevenueSummary({
+      from: filterFrom,
+      to: filterTo,
+      month: filterMonth,
+    });
+  };
+
+  const clearFilter = async () => {
     setFilterFrom("");
     setFilterTo("");
-    setFilteredRevenue(0);
-    setFilteredPaid(0);
+    setFilterMonth("All Months");
+    await fetchRevenueSummary();
   };
+
+  useEffect(() => {
+    fetchRevenueSummary();
+  }, []);
 
   const stats = {
     totalStudents: dashboardSummary.totalStudents,
@@ -545,6 +901,19 @@ export default function AdminDashboard() {
               onChange={(e) => setFilterTo(e.target.value)}
             />
           </div>
+          <div className="date-input">
+            <label>Month:</label>
+            <select
+              value={filterMonth}
+              onChange={(e) => setFilterMonth(e.target.value)}
+            >
+              {REVENUE_MONTH_OPTIONS.map((monthOption) => (
+                <option key={monthOption} value={monthOption}>
+                  {monthOption}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
         <div className="filter-actions">
           <MotionButton className="apply-btn" onClick={applyFilter} disabled={filterLoading}>
@@ -591,70 +960,326 @@ export default function AdminDashboard() {
       </MotionCard>
       </MotionSection>
 
-      {/* STUDENTS LIST */}
-      <MotionSection delay={0.2}>
-      <h2>Students List</h2>
-      <div className="student-list-meta">
-        <span>
-          Showing page {studentPage} of {studentTotalPages}
-        </span>
-        <div className="student-list-pagination">
+      <MotionSection className="group-links-section" delay={0.24}>
+        <div className="group-links-heading">
+          <div>
+            <h2>Class &amp; School WhatsApp Groups</h2>
+            <p className="group-links-subtitle">
+              Create invite links by class and school so each student sees only
+              the WhatsApp group meant for their batch.
+            </p>
+          </div>
+        </div>
+
+        <div className="group-links-actions-bar">
           <MotionButton
-            className="student-list-page-btn"
-            disabled={studentsLoading || studentPage === 1}
-            onClick={() => setStudentPage((current) => Math.max(1, current - 1))}
+            type="button"
+            className="group-create-trigger-btn"
+            onClick={openCreateGroupModal}
           >
-            Previous
-          </MotionButton>
-          <MotionButton
-            className="student-list-page-btn"
-            disabled={studentsLoading || studentPage >= studentTotalPages}
-            onClick={() =>
-              setStudentPage((current) =>
-                Math.min(studentTotalPages, current + 1)
-              )
-            }
-          >
-            Next
+            Create WhatsApp Group Link
           </MotionButton>
         </div>
-      </div>
-      <motion.div
-        className="student-list"
-        variants={staggerContainer}
-        initial="hidden"
-        animate="visible"
-      >
-        {students.map((s, i) => (
-          <motion.div key={s.id} variants={fadeUpItem} whileHover={{ y: -4 }}>
-            <Link
-              href={`/students/${s.id}`}
-              className="student-item"
-              style={{ animationDelay: `${i * 0.1}s` }}
-            >
-              <div>
-                <h3>
-                  {s.name}
-                  <span style={{ fontWeight: 400, fontSize: "14px", opacity: 0.85 }}>
-                    {" "}— Class {s.class}, {s.school}
-                  </span>
-                </h3>
-              </div>
-              <span className={s.feesStatus === "paid" ? "status-paid" : "status-unpaid"}>
-                {s.feesStatus === "paid" ? "Paid" : "Unpaid"}
-              </span>
-            </Link>
-          </motion.div>
-        ))}
-        {!students.length && !studentsLoading ? (
-          <MotionCard className="student-empty-state" hover={false}>
-            No students found for this page.
-          </MotionCard>
+
+        {groupFeedback && !groupModalOpen ? (
+          <div
+            className={`group-feedback ${
+              groupFeedback.type === "success"
+                ? "group-feedback--success"
+                : "group-feedback--error"
+            }`}
+          >
+            {groupFeedback.message}
+          </div>
         ) : null}
-      </motion.div>
+
+        <div className="group-links-layout">
+          <MotionCard className="missing-groups-card" hover={false}>
+            <div className="group-card-header">
+              <div>
+                <h3>Missing Group Links</h3>
+                <p>
+                  These class and school combinations already exist in student
+                  data but do not have a WhatsApp group link yet.
+                </p>
+              </div>
+            </div>
+
+            {groupLoading ? (
+              <div className="group-card-loading">
+                <PremiumLoader inline compact />
+                <span>Loading missing combinations</span>
+              </div>
+            ) : missingGroupLinks.length ? (
+              <div className="missing-groups-list">
+                {missingGroupLinks.map((missingGroup) => (
+                  <div
+                    key={`${missingGroup.normalizedClassName}::${missingGroup.normalizedSchoolName}`}
+                    className="missing-group-item"
+                  >
+                    <div className="missing-group-meta">
+                      <strong>
+                        Class {missingGroup.className} — {missingGroup.schoolName}
+                      </strong>
+                      <span>
+                        {missingGroup.studentCount} student
+                        {missingGroup.studentCount === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <MotionButton
+                      type="button"
+                      className="group-secondary-btn"
+                      onClick={() => handleAddMissingGroup(missingGroup)}
+                    >
+                      Add Group Link
+                    </MotionButton>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="group-empty-state">
+                All active class-school combinations have WhatsApp group links.
+              </div>
+            )}
+          </MotionCard>
+
+          <MotionCard className="existing-groups-card" hover={false}>
+            <div className="group-card-header">
+              <div>
+                <h3>Existing Group Links</h3>
+                <p>
+                  Open, update, or remove the links currently mapped to your
+                  class and school combinations.
+                </p>
+              </div>
+            </div>
+
+            {groupLoading ? (
+              <div className="group-card-loading">
+                <PremiumLoader inline compact />
+                <span>Loading group links</span>
+              </div>
+            ) : classSchoolGroups.length ? (
+              <div className="existing-groups-list">
+                {classSchoolGroups.map((group) => (
+                  <div key={group.id} className="existing-group-item">
+                    <div className="existing-group-meta">
+                      <strong>
+                        Class {group.className} — {group.schoolName}
+                      </strong>
+                      <a
+                        className="existing-group-link"
+                        href={group.whatsappGroupLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label={`Open WhatsApp group link for Class ${group.className} ${group.schoolName}`}
+                      >
+                        {group.whatsappGroupLink}
+                      </a>
+                    </div>
+                    <div className="existing-group-actions">
+                      <a
+                        className="group-open-link-btn"
+                        href={group.whatsappGroupLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label={`Open WhatsApp group for Class ${group.className} ${group.schoolName}`}
+                      >
+                        Open Link
+                      </a>
+                      <MotionButton
+                        type="button"
+                        className="group-secondary-btn"
+                        onClick={() => handleEditGroup(group)}
+                      >
+                        Edit
+                      </MotionButton>
+                      <MotionButton
+                        type="button"
+                        className="group-delete-icon-btn"
+                        onClick={() => handleDeleteGroup(group.id)}
+                        disabled={groupSubmitting}
+                        aria-label="Delete WhatsApp group link"
+                        title="Delete WhatsApp group link"
+                      >
+                        <Trash2 size={18} aria-hidden="true" />
+                      </MotionButton>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="group-empty-state">
+                No WhatsApp group links created yet.
+              </div>
+            )}
+          </MotionCard>
+        </div>
       </MotionSection>
 
       </motion.div>
+
+      {assistantPortalRoot && groupModalOpen
+        ? createPortal(
+            <AnimatePresence>
+              <motion.div
+                className="group-modal-backdrop"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+              >
+                <motion.div
+                  className="group-modal"
+                  initial={{ opacity: 0, y: 16, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                  transition={{ duration: 0.22 }}
+                  onClick={(event) => event.stopPropagation()}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="group-modal-title"
+                >
+                  <div className="group-modal-header">
+                    <div>
+                      <h3 id="group-modal-title">
+                        {groupForm.id
+                          ? "Edit WhatsApp Group Link"
+                          : "Create WhatsApp Group Link"}
+                      </h3>
+                      <p>
+                        Use the exact class and school combination used by your
+                        students during signup.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="group-modal-close"
+                      onClick={closeGroupModal}
+                      aria-label="Close WhatsApp group link form"
+                    >
+                      <X size={18} aria-hidden="true" />
+                    </button>
+                  </div>
+
+                  {groupFeedback ? (
+                    <div
+                      className={`group-feedback ${
+                        groupFeedback.type === "success"
+                          ? "group-feedback--success"
+                          : "group-feedback--error"
+                      }`}
+                    >
+                      {groupFeedback.message}
+                    </div>
+                  ) : null}
+
+                  <form className="group-form" onSubmit={handleGroupSubmit}>
+                    <div className="group-modal-body">
+                      <label className="group-form-field">
+                        <span>Class</span>
+                        <select
+                          value={groupForm.className}
+                          onChange={(event) =>
+                            handleGroupFieldChange("className", event.target.value)
+                          }
+                          required
+                        >
+                          <option value="">Select Class</option>
+                          {CLASS_OPTIONS.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label className="group-form-field">
+                        <span>School</span>
+                        <select
+                          value={groupForm.schoolOption}
+                          onChange={(event) =>
+                            handleGroupFieldChange("schoolOption", event.target.value)
+                          }
+                          required
+                        >
+                          <option value="">Select School</option>
+                          {SCHOOL_OPTIONS.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                          <option value={SCHOOL_OTHER_VALUE}>Other</option>
+                        </select>
+                      </label>
+
+                      {groupForm.schoolOption === SCHOOL_OTHER_VALUE ? (
+                        <label className="group-form-field">
+                          <span>Enter School Name</span>
+                          <input
+                            type="text"
+                            value={groupForm.customSchool}
+                            onChange={(event) =>
+                              handleGroupFieldChange(
+                                "customSchool",
+                                event.target.value
+                              )
+                            }
+                            placeholder="Type school name"
+                            required
+                          />
+                        </label>
+                      ) : null}
+
+                      <label className="group-form-field">
+                        <span>WhatsApp Group Link</span>
+                        <input
+                          type="url"
+                          value={groupForm.whatsappGroupLink}
+                          onChange={(event) =>
+                            handleGroupFieldChange(
+                              "whatsappGroupLink",
+                              event.target.value
+                            )
+                          }
+                          placeholder="https://chat.whatsapp.com/..."
+                          required
+                        />
+                      </label>
+                    </div>
+
+                    <div className="group-form-actions group-modal-actions">
+                      <MotionButton
+                        type="submit"
+                        className="group-primary-btn"
+                        disabled={groupSubmitting}
+                      >
+                        {groupSubmitting ? (
+                          <span className="button-loading-content">
+                            <PremiumLoader inline compact />
+                            <span>{groupForm.id ? "Saving" : "Creating"}</span>
+                          </span>
+                        ) : groupForm.id ? (
+                          "Save Changes"
+                        ) : (
+                          "Create Group Link"
+                        )}
+                      </MotionButton>
+                      <MotionButton
+                        type="button"
+                        className="group-secondary-btn"
+                        onClick={closeGroupModal}
+                        disabled={groupSubmitting}
+                      >
+                        Cancel
+                      </MotionButton>
+                    </div>
+                  </form>
+                </motion.div>
+              </motion.div>
+            </AnimatePresence>,
+            assistantPortalRoot
+          )
+        : null}
 
       {assistantPortalRoot
         ? createPortal(

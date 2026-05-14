@@ -258,6 +258,28 @@ export default function StudentDashboard() {
         </div>
       </MotionSection>
 
+      {student?.classSchoolGroup?.whatsappGroupLink ? (
+        <MotionSection className="student-group-section" delay={0.16}>
+          <MotionCard className="student-group-card" hover={false}>
+            <div className="student-group-copy">
+              <h3>Join Your Class WhatsApp Group</h3>
+              <p>
+                Your institute has shared a WhatsApp group for your class. Join
+                the group to receive important updates and reminders.
+              </p>
+            </div>
+            <a
+              className="student-group-button"
+              href={student.classSchoolGroup.whatsappGroupLink}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Join WhatsApp Group
+            </a>
+          </MotionCard>
+        </MotionSection>
+      ) : null}
+
       <h3 className="section-heading">Monthly Fee Details</h3>
 
       <div className="month-list">

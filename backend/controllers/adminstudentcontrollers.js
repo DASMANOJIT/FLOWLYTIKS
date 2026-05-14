@@ -217,6 +217,7 @@ export const verifyAdminCreateStudentOtp = async (req, res) => {
           password: hashedPassword,
           school: draft.finalSchool,
           class: String(draft.classNum),
+          adminId: Number(req.user?.id || 0) || null,
           monthlyFee: settings.monthlyFee,
           isVerified: true,
         },

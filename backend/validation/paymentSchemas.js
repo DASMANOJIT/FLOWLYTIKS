@@ -63,6 +63,7 @@ export const cashfreeCreateOrderBodySchema = z.object({
 export const revenueQuerySchema = z.object({
   from: isoDateStringSchema,
   to: isoDateStringSchema,
+  month: paymentMonthSchema.optional(),
 });
 
 export const paymentsQuerySchema = z.object({

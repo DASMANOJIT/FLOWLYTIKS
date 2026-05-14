@@ -169,6 +169,65 @@
     box-shadow: 0 8px 18px rgba(16, 185, 129, 0.24);
 }
 
+.student-group-section {
+    margin-bottom: 22px;
+}
+
+.student-group-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 20px 22px;
+    border-radius: 20px;
+    border: 1px solid rgba(191, 219, 254, 0.58);
+    background:
+        radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 28%),
+        linear-gradient(180deg, rgba(255,255,255,0.94), rgba(239,246,255,0.84));
+    box-shadow:
+        0 16px 30px rgba(15, 23, 42, 0.06),
+        inset 0 1px 0 rgba(255,255,255,0.82);
+}
+
+.student-group-copy {
+    display: grid;
+    gap: 8px;
+}
+
+.student-group-copy h3 {
+    margin: 0;
+    font-size: 19px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    color: #0f172a;
+}
+
+.student-group-copy p {
+    margin: 0;
+    max-width: 560px;
+    color: #475569;
+    line-height: 1.7;
+}
+
+.student-group-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 46px;
+    padding: 0 18px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #0f766e, #10b981);
+    color: #f8fafc;
+    font-weight: 700;
+    text-decoration: none;
+    white-space: nowrap;
+    box-shadow: 0 14px 24px rgba(16, 185, 129, 0.18);
+}
+
+.student-group-button:hover {
+    background: #0f9f7a;
+}
+
 /* ---------- Section Heading ---------- */
 .section-heading {
     font-size: 22px;
@@ -325,19 +384,22 @@
   }
 
   .month-card,
-  .upcoming-content {
+  .upcoming-content,
+  .student-group-card {
     flex-direction: column;
     align-items: stretch;
     gap: 12px;
   }
 
   .paid-actions,
-  .month-info {
+  .month-info,
+  .student-group-copy {
     width: 100%;
   }
 
   .pay-button,
-  .receipt-button {
+  .receipt-button,
+  .student-group-button {
     width: 100%;
   }
 }

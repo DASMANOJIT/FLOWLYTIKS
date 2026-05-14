@@ -16,20 +16,15 @@ import {
   getAuthRole,
   getAuthToken,
 } from "../../../lib/authStorage.js";
+import {
+  CLASS_OPTIONS,
+  SCHOOL_OPTIONS,
+  SCHOOL_OTHER_VALUE,
+} from "../../../lib/studentOptions.js";
 import { isValidWhatsAppNumber } from "../../../lib/whatsapp.js";
 
 const API_BASE = "";
 const OTP_RESEND_COOLDOWN_SECONDS = 15;
-const SCHOOL_OPTIONS = [
-  "St. Augustine's Day School - Barrackpore",
-  "St. Augustine's Day School - Shyamnagar",
-  "Modern English Academy",
-  "St. Claret School",
-  "Douglas Memorial Higher Secondary School",
-  "Assembly of Angels Secondary School",
-  "STEM World School",
-];
-const CLASS_OPTIONS = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
 const isStrongPassword = (password) =>
   /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/.test(
@@ -52,7 +47,7 @@ const getValidationMessage = ({
 }) => {
   if (!String(name || "").trim()) return "Full name is required.";
   if (!school) return "School is required.";
-  if (school === "other" && !String(customSchool || "").trim()) {
+  if (school === SCHOOL_OTHER_VALUE && !String(customSchool || "").trim()) {
     return "Please enter the school name.";
   }
   if (!studentClass) return "Class is required.";
@@ -318,7 +313,7 @@ export default function AddStudentPage() {
                 onChange={(event) => {
                   const value = event.target.value;
                   setSchool(value);
-                  if (value !== "other") {
+                  if (value !== SCHOOL_OTHER_VALUE) {
                     setCustomSchool("");
                   }
                 }}
@@ -330,11 +325,11 @@ export default function AddStudentPage() {
                     {option}
                   </option>
                 ))}
-                <option value="other">Other</option>
+                <option value={SCHOOL_OTHER_VALUE}>Other</option>
               </select>
             </label>
 
-            {school === "other" ? (
+            {school === SCHOOL_OTHER_VALUE ? (
               <label className="add-student-field">
                 <span>Custom School</span>
                 <input

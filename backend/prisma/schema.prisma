@@ -15,13 +15,16 @@ model Admin {
   cashfreeVendorId         String?                 @unique
   cashfreeSettlementStatus TeacherSettlementStatus @default(NOT_CONFIGURED)
   createdAt                DateTime                @default(now())
+  students                 Student[]               @relation("AdminStudents")
   payments                 Payment[]               @relation("AdminPayments")
   gatewayOrders            PaymentGatewayOrder[]   @relation("AdminGatewayOrders")
   feeReminderLogs          FeeReminderLog[]
+  classSchoolGroups        ClassSchoolGroup[]      @relation("AdminClassSchoolGroups")
 }
 
 model Student {
   id                 Int                   @id @default(autoincrement())
+  adminId            Int?
   name               String
   phone              String                @unique
   email              String?               @unique
@@ -34,13 +37,33 @@ model Student {
   isTwoFactorEnabled Boolean               @default(false)
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
+  admin              Admin?                @relation("AdminStudents", fields: [adminId], references: [id], onDelete: SetNull)
   payments           Payment[]
   gatewayOrders      PaymentGatewayOrder[]
   feeReminderLogs    FeeReminderLog[]
 
+  @@index([adminId])
   @@index([class])
   @@index([school])
   @@index([joinDate])
+}
+
+model ClassSchoolGroup {
+  id                   String   @id @default(cuid())
+  adminId              Int
+  className            String
+  schoolName           String
+  normalizedClassName  String
+  normalizedSchoolName String
+  whatsappGroupLink    String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  admin                Admin    @relation("AdminClassSchoolGroups", fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([normalizedClassName])
+  @@index([normalizedSchoolName])
+  @@unique([adminId, normalizedClassName, normalizedSchoolName])
 }
 
 model FeeReminderLog {

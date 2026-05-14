@@ -1330,6 +1330,11 @@ export const getTotalRevenue = async (req, res) => {
       return res.json({ totalRevenue: 0 });
     }
 
+    const selectedMonth =
+      typeof req.query.month === "string" && VALID_PAYMENT_MONTHS.has(req.query.month)
+        ? req.query.month
+        : null;
+
     const fromDate =
       req.query.from && !normalizeDateBoundary(req.query.from)
         ? null
@@ -1347,9 +1352,10 @@ export const getTotalRevenue = async (req, res) => {
     if (fromDate) dateWhere.gte = fromDate;
     if (toDate) dateWhere.lte = toDate;
 
-    const baseWhere = Object.keys(dateWhere).length
-      ? { createdAt: dateWhere }
-      : {};
+    const baseWhere = {
+      ...(Object.keys(dateWhere).length ? { createdAt: dateWhere } : {}),
+      ...(selectedMonth ? { month: selectedMonth } : {}),
+    };
 
     const [grossResult, paidResult] = await Promise.all([
       prisma.payment.aggregate({

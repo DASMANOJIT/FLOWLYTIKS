@@ -7,6 +7,11 @@ import { MotionButton } from "../components/motion/primitives.jsx";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { readApiResponse } from "../../lib/api.js";
 import { clearLegacyAuthStorage, storeAuthSession } from "../../lib/authStorage.js";
+import {
+  CLASS_OPTIONS,
+  SCHOOL_OPTIONS,
+  SCHOOL_OTHER_VALUE,
+} from "../../lib/studentOptions.js";
 import { isValidWhatsAppNumber } from "../../lib/whatsapp.js";
 
 export default function Login() {
@@ -97,7 +102,7 @@ export default function Login() {
   }) => {
     if (!name) return "Full name is required.";
     if (!school) return "School is required.";
-    if (school === "other" && !String(customSchool || "").trim()) {
+    if (school === SCHOOL_OTHER_VALUE && !String(customSchool || "").trim()) {
       return "Please enter your school name.";
     }
     if (!studentClass) return "Class is required.";
@@ -777,20 +782,18 @@ export default function Login() {
               onChange={(e) => {
                 const value = e.target.value;
                 setSignupSchool(value);
-                if (value !== "other") setSignupCustomSchool("");
+                if (value !== SCHOOL_OTHER_VALUE) setSignupCustomSchool("");
               }}
             >
               <option value="">Select School</option>
-              <option>St. Augustine&apos;s Day School - Barrackpore</option>
-              <option>St. Augustine&apos;s Day School - Shyamnagar</option>
-              <option>Modern English Academy</option>
-              <option>St. Claret School</option>
-              <option>Douglas Memorial Higher Secondary School</option>
-              <option>Assembly of Angels Secondary School</option>
-              <option>STEM World School</option>
-              <option value="other">Other</option>
+              {SCHOOL_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+              <option value={SCHOOL_OTHER_VALUE}>Other</option>
             </select>
-            {signupSchool === "other" && (
+            {signupSchool === SCHOOL_OTHER_VALUE && (
               <input
                 type="text"
                 name="customSchool"
@@ -810,9 +813,9 @@ export default function Login() {
               onChange={(e) => setSignupClass(e.target.value)}
             >
               <option value="">Select Class</option>
-              {[3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((c) => (
-                <option key={c} value={c}>
-                  {c}
+              {CLASS_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
                 </option>
               ))}
             </select>

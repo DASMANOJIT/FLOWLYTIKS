@@ -23,6 +23,7 @@ import {
   parseStudentClass,
   resolveSchoolValue,
 } from "../utils/authValidation.js";
+import { resolveDefaultAdminId } from "../services/classSchoolGroupService.js";
 
 const MAX_DEVICES_PER_ACCOUNT = 2;
 const validPurposes = new Set(["signup", "login", "reset", "2fa"]);
@@ -288,6 +289,7 @@ export const signupWithOtp = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+    const defaultAdminId = await resolveDefaultAdminId();
     const student = await prisma.student.create({
       data: {
         name: normalizedName,
@@ -296,6 +298,7 @@ export const signupWithOtp = async (req, res) => {
         password: hashedPassword,
         school: finalSchool,
         class: String(classNum),
+        adminId: defaultAdminId,
         monthlyFee: settings.monthlyFee,
         isVerified: true,
       },

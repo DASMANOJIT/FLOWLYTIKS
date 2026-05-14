@@ -94,8 +94,8 @@ export const validateEnv = () => {
   }
   assertOptionalHttpUrls("FRONTEND_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("BACKEND_URL", { allowLocal: !isProduction });
-  assertOptionalHttpUrls("ALLOWED_ORIGINS", { allowLocal: !isProduction });
-  assertOptionalHttpUrls("CORS_ORIGIN", { allowLocal: !isProduction });
+  assertOptionalHttpUrls("ALLOWED_ORIGINS", { allowLocal: true });
+  assertOptionalHttpUrls("CORS_ORIGIN", { allowLocal: true });
   assertOptionalHttpUrls("PHONEPE_BASE_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("WHATSAPP_GRAPH_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("CASHFREE_RETURN_URL", { allowLocal: !isProduction });
