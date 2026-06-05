@@ -7,6 +7,7 @@ import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import { Trash2, X } from "lucide-react";
 import "./admin.css";
+import { safeReadJson } from "../../lib/safeJson.js";
 import Cal from "../components/calender/calender.jsx";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import GreetingPanel from "../components/dashboard/GreetingPanel.jsx";
@@ -236,6 +237,7 @@ export default function AdminDashboard() {
   const [groupSubmitting, setGroupSubmitting] = useState(false);
   const [groupFeedback, setGroupFeedback] = useState(null);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
+  // use shared safeReadJson for consistent parsing
   const dashboardRequestKeyRef = useRef("");
   const initialLoadRef = useRef(true);
   const {
@@ -285,8 +287,8 @@ export default function AdminDashboard() {
       ]);
 
       const [groupsData, missingData] = await Promise.all([
-        groupsRes.json().catch(() => ({})),
-        missingRes.json().catch(() => ({})),
+        safeReadJson(groupsRes),
+        safeReadJson(missingRes),
       ]);
 
       if (
@@ -318,7 +320,8 @@ export default function AdminDashboard() {
         Array.isArray(missingData?.missing) ? missingData.missing : []
       );
     } catch (error) {
-      console.error("Admin class-school group fetch error:", error);
+      setClassSchoolGroups([]);
+      setMissingGroupLinks([]);
       setGroupFeedback({
         type: "error",
         message:
@@ -421,7 +424,7 @@ export default function AdminDashboard() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(async (res) => {
-        const data = await res.json();
+        const data = await safeReadJson(res);
         if (!res.ok) {
           if (res.status === 401 || res.status === 403) {
             clearAuthSession();
@@ -550,7 +553,7 @@ export default function AdminDashboard() {
         }
       );
 
-      const data = await res.json().catch(() => ({}));
+  const data = await safeReadJson(res);
       if (res.status === 401 || res.status === 403) {
         clearAuthSession();
         window.location.href = "/login";
@@ -619,7 +622,7 @@ export default function AdminDashboard() {
           headers: { Authorization: `Bearer ${token}` },
         }
       );
-      const data = await res.json().catch(() => ({}));
+  const data = await safeReadJson(res);
 
       if (res.status === 401 || res.status === 403) {
         clearAuthSession();
@@ -689,7 +692,7 @@ export default function AdminDashboard() {
       const res = await fetch(`${API_BASE}/api/payments/revenue${queryString ? `?${queryString}` : ""}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await res.json().catch(() => ({}));
+  const data = await safeReadJson(res);
 
       if (res.status === 401 || res.status === 403) {
         clearAuthSession();
@@ -704,8 +707,9 @@ export default function AdminDashboard() {
       setFilteredRevenue(data.grossRevenue ?? data.totalRevenue ?? 0);
       setFilteredPaid(data.paidRevenue ?? data.totalRevenue ?? 0);
     } catch (err) {
-      console.error("Admin revenue filter error:", err);
-      alert("Failed to apply the selected filters.");
+      setFilteredRevenue(0);
+      setFilteredPaid(0);
+      alert(err?.message || "Failed to apply the selected filters.");
     } finally {
       setFilterLoading(false);
     }
@@ -727,6 +731,8 @@ export default function AdminDashboard() {
   };
 
   useEffect(() => {
+    // fetchRevenueSummary is stable for this mount-only effect; avoid adding it to deps to prevent refactor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     fetchRevenueSummary();
   }, []);
 
@@ -792,7 +798,7 @@ export default function AdminDashboard() {
         body: JSON.stringify({ prompt }),
       });
 
-      const data = await res.json().catch(() => ({}));
+  const data = await safeReadJson(res);
       setChatMessages((prev) => [
         ...prev,
         buildAssistantBotMessage(data),
@@ -843,6 +849,7 @@ export default function AdminDashboard() {
 
         <div className={`nav-links ${menuOpen ? "open" : ""}`}>
           <Link href="/students">Students</Link>
+          <Link href="/admin/faculty">Faculty</Link>
           <Link href="/payments">Payments</Link>
           <MotionButton className="logout-btn" onClick={handleLogout}>Logout</MotionButton>
 

@@ -18,6 +18,10 @@ const jsonSuccess = (res, payload = {}, status = 200) =>
   });
 
 const isUniqueConstraintError = (error) => error?.code === "P2002";
+const isMissingGroupSchemaError = (error) =>
+  error?.code === "P2021" ||
+  error?.code === "P2022" ||
+  /ClassSchoolGroup|classSchoolGroup|does not exist/i.test(String(error?.message || ""));
 
 const serializeGroup = (group) => ({
   id: group.id,
@@ -55,6 +59,10 @@ export const listClassSchoolGroups = async (req, res) => {
       groups: groups.map(serializeGroup),
     });
   } catch (error) {
+    if (isMissingGroupSchemaError(error)) {
+      console.warn("listClassSchoolGroups schema unavailable:", error?.message || error);
+      return jsonSuccess(res, { groups: [] });
+    }
     console.error("listClassSchoolGroups error:", error);
     return jsonError(res, 500, "Failed to fetch WhatsApp group links.");
   }
@@ -189,6 +197,10 @@ export const listMissingClassSchoolGroups = async (req, res) => {
       missing,
     });
   } catch (error) {
+    if (isMissingGroupSchemaError(error)) {
+      console.warn("listMissingClassSchoolGroups schema unavailable:", error?.message || error);
+      return jsonSuccess(res, { missing: [] });
+    }
     console.error("listMissingClassSchoolGroups error:", error);
     return jsonError(res, 500, "Failed to fetch missing group links.");
   }

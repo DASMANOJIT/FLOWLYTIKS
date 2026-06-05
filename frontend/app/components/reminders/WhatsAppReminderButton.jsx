@@ -134,6 +134,19 @@ export default function WhatsAppReminderButton({
     setStatusMessage("");
 
     try {
+      const safeReadJson = async (res) => {
+        try {
+          const ct = String(res.headers.get("content-type") || "").toLowerCase();
+          if (ct.includes("application/json")) {
+            return await res.json().catch(() => ({}));
+          }
+          const text = await res.text().catch(() => "");
+          return { success: res.ok, message: text, error: text };
+        } catch (e) {
+          return {};
+        }
+      };
+
       const res = await fetch(`${API_BASE}/api/reminders/whatsapp/log`, {
         method: "POST",
         headers: {
@@ -146,8 +159,7 @@ export default function WhatsAppReminderButton({
           academicYear,
         }),
       });
-
-      const data = await res.json().catch(() => ({}));
+        const data = await safeReadJson(res);
 
       if (res.status === 401 || res.status === 403) {
         if (popupWindow && !popupWindow.closed) {

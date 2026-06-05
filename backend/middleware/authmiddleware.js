@@ -17,7 +17,7 @@ export const protect = async (req, res, next) => {
     }
 
     if (!token) {
-      return res.status(401).json({ message: "Not authorized, no token" });
+      return res.status(401).json({ success: false, message: "Not authorized, no token" });
     }
 
     // Verify token
@@ -37,10 +37,36 @@ export const protect = async (req, res, next) => {
         where: { id: decoded.id },
         select: { id: true, name: true, email: true, phone: true },
       });
+    } else if (decoded.role === "faculty") {
+      user = await prisma.faculty.findUnique({
+        where: { id: decoded.id },
+        select: {
+          id: true,
+          facultyId: true,
+          username: true,
+          fullName: true,
+          email: true,
+          phone: true,
+          gender: true,
+          dob: true,
+          address: true,
+          designation: true,
+          qualification: true,
+          experienceYears: true,
+          joiningDate: true,
+          employmentType: true,
+          salaryType: true,
+          salaryAmount: true,
+          paymentNotes: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
     }
 
     if (!user) {
-      return res.status(401).json({ message: "Not authorized, invalid user" });
+      return res.status(401).json({ success: false, message: "Not authorized, invalid user" });
     }
 
     if (decoded.jti) {
@@ -53,7 +79,7 @@ export const protect = async (req, res, next) => {
       if (!active) {
         return res
           .status(401)
-          .json({ message: "Session expired or logged out. Please login again." });
+          .json({ success: false, message: "Session expired or logged out. Please login again." });
       }
       if (session.closingRequestedAt) {
         await clearSessionClosing(decoded.role, decoded.id, decoded.jti);
@@ -69,7 +95,7 @@ export const protect = async (req, res, next) => {
     next();
   } catch (error) {
     console.error("Auth error:", error?.message || error);
-    return res.status(401).json({ message: "Not authorized, token failed" });
+    return res.status(401).json({ success: false, message: "Not authorized, token failed" });
   }
 };
 
@@ -83,7 +109,7 @@ export const protect = async (req, res, next) => {
 
 export const adminOnly = (req, res, next) => {
   if (!req.user || req.userRole !== "admin") {
-    return res.status(403).json({ message: "Forbidden: Admins only" });
+    return res.status(403).json({ success: false, message: "Forbidden: Admins only" });
   }
   next();
 };

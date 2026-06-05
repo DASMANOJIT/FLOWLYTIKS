@@ -570,13 +570,13 @@ export const markTabClosing = async (req, res) => {
 export const heartbeatSession = async (req, res) => {
   try {
     if (!req.user || !req.userRole || !req.tokenId) {
-      return res.status(204).end();
+      return res.json({ success: true, active: true });
     }
 
     await touchSessionActivity(req.userRole, req.user.id, req.tokenId);
-    return res.status(204).end();
+    return res.json({ success: true, active: true });
   } catch (err) {
     console.error("SESSION HEARTBEAT ERROR:", err?.message || err);
-    return res.status(204).end();
+    return res.json({ success: true, active: false });
   }
 };

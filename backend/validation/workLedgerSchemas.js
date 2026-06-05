@@ -1,0 +1,48 @@
+import { z } from "zod";
+
+export const workLedgerShifts = ["MORNING", "AFTERNOON", "EVENING"];
+
+const emptyToNull = (value) => {
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  return text ? text : null;
+};
+
+const dateOnly = z.preprocess((value) => {
+  const text = emptyToNull(value);
+  if (!text) return value;
+  const date = new Date(`${text}T00:00:00.000Z`);
+  return Number.isNaN(date.getTime()) ? value : date;
+}, z.date({ error: "Date is required." }));
+
+export const workLedgerIdParamSchema = z.object({
+  id: z.uuid("Ledger entry id must be a valid UUID."),
+});
+
+export const workLedgerWeekParamSchema = z.object({
+  weekId: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "Week id must be YYYY-MM-DD."),
+});
+
+export const workLedgerFacultyParamSchema = z.object({
+  facultyId: z.uuid("Faculty id must be a valid UUID."),
+});
+
+export const workLedgerBodySchema = z.object({
+  facultyId: z.uuid("Faculty member is required."),
+  date: dateOnly,
+  shift: z.enum(workLedgerShifts, { error: "Shift is required." }),
+  amount: z.coerce.number().positive("Amount is required."),
+  remarks: z.preprocess(emptyToNull, z.string().max(1000).nullable().optional()),
+});
+
+export const workLedgerListQuerySchema = z.object({
+  startDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  endDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  facultyId: z.union([z.uuid(), z.literal("all")]).optional().default("all"),
+  shift: z.enum(["all", ...workLedgerShifts]).optional().default("all"),
+  search: z.string().trim().max(160).optional().default(""),
+  week: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  month: z.string().trim().regex(/^\d{4}-\d{2}$/).optional(),
+  limit: z.coerce.number().int().positive().max(1000).optional().default(500),
+  exportScope: z.enum(["currentWeek", "currentMonth", "custom"]).optional(),
+});

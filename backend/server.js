@@ -15,6 +15,14 @@ import settingsRoutes from "./routes/settingsroute.js";
 import adminAssistantRoutes from "./routes/adminassistantroute.js";
 import adminRoutes from "./routes/adminroute.js";
 import reminderRoutes from "./routes/reminderroute.js";
+import facultyRoutes from "./routes/facultyroute.js";
+import workLedgerRoutes from "./routes/workledgerroute.js";
+import facultyAuthRoutes from "./routes/facultyauthroute.js";
+import facultyPayrollRoutes from "./routes/facultypayrollroute.js";
+import facultyPayoutRoutes from "./routes/facultypayoutroute.js";
+import facultyPayoutBankRoutes from "./routes/facultypayoutbankroute.js";
+import cashfreePayoutWebhookRoutes from "./routes/cashfreepayoutwebhookroute.js";
+import { warnIfPayoutConfigMissing } from "./services/cashfreePayoutService.js";
 
 validateEnv();
 
@@ -111,6 +119,9 @@ app.use(
       if (req.originalUrl === "/api/payments/cashfree/webhook") {
         req.rawBody = buf.toString("utf8");
       }
+      if (req.originalUrl === "/api/webhooks/cashfree/payouts") {
+        req.rawBody = buf.toString("utf8");
+      }
     },
   })
 );
@@ -188,6 +199,7 @@ const initDatabase = async () => {
 };
 
 initDatabase();
+warnIfPayoutConfigMissing();
 logInfo("server.background_jobs_disabled");
 
 // ================================
@@ -199,6 +211,16 @@ app.use("/api/settings", settingsRoutes);
 app.use("/api/admin-assistant", adminAssistantRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/reminders", reminderRoutes);
+app.use("/api/faculty/payroll", facultyPayrollRoutes);
+app.use("/api/faculty/auth", facultyAuthRoutes);
+app.use("/api/faculty", facultyRoutes);
+app.use("/api/admin/faculty/payouts", facultyPayoutRoutes);
+app.use("/api/faculty-payouts", facultyPayoutRoutes);
+app.use("/api/admin/faculty/bank-accounts", facultyPayoutBankRoutes);
+app.use("/api/faculty/bank-accounts", facultyPayoutBankRoutes);
+app.use("/api/work-ledger", workLedgerRoutes);
+app.use("/api/webhooks", cashfreePayoutWebhookRoutes);
+app.use("/api/faculty-auth", facultyAuthRoutes);
 
 
 // Health check
