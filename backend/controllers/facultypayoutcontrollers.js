@@ -1,9 +1,11 @@
 import * as payoutService from "../services/facultyPayoutService.js";
 import {
+  getCashfreePayoutConfig,
   handleCashfreePayoutWebhookPayload,
   verifyCashfreePayoutWebhookSignature,
 } from "../services/cashfreePayoutService.js";
 import prisma from "../prisma/client.js";
+import { logWarn } from "../utils/appLogger.js";
 
 const statusForHttpError = (error) => {
   const status = Number(error?.statusCode || error?.status || 500);
@@ -153,15 +155,40 @@ export const syncPayoutStatusController = async (req, res) => {
 
 export const handleCashfreePayoutWebhook = async (req, res) => {
   try {
-    if (!verifyCashfreePayoutWebhookSignature(req)) {
+    const payload = req.body || {};
+    const isTestPayload =
+      String(payload?.type || payload?.event || "").toUpperCase().includes("TEST") ||
+      payload?.data?.test === true ||
+      payload?.test === true;
+    const config = getCashfreePayoutConfig();
+
+    if (!isTestPayload && config.webhookSecret && !verifyCashfreePayoutWebhookSignature(req)) {
       return res.status(401).json({ success: false, message: "Invalid payout webhook signature." });
     }
-    const result = await handleCashfreePayoutWebhookPayload(req.body || {});
-    return res.json({ success: true, result });
+    if (!config.webhookSecret) {
+      logWarn("cashfree_payout.webhook_secret_missing", {
+        message: "Payout webhook accepted without signature verification because no webhook secret is configured.",
+      });
+    }
+    if (isTestPayload) {
+      return res.json({ success: true, message: "Cashfree payout webhook received.", result: { test: true } });
+    }
+    const result = await handleCashfreePayoutWebhookPayload(payload);
+    return res.json({ success: true, message: "Cashfree payout webhook received.", result });
   } catch (err) {
     console.error("Cashfree payout webhook error:", err?.message || err);
     return res.status(500).json({ success: false, message: "Failed to process payout webhook." });
   }
+};
+
+export const getCashfreePayoutWebhookHealth = (req, res) => {
+  const config = getCashfreePayoutConfig();
+  return res.json({
+    success: true,
+    message: "Cashfree payout webhook route is active.",
+    environment: config.environment,
+    signatureVerification: Boolean(config.webhookSecret),
+  });
 };
 
 const safeCsvCell = (value) => {

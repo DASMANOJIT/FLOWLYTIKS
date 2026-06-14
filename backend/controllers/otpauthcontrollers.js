@@ -4,7 +4,6 @@ import jwt from "jsonwebtoken";
 import prisma from "../prisma/client.js";
 import {
   addSession,
-  getActiveSessionCount,
 } from "../utils/sessionStore.js";
 import { sendEmailOtp, verifyEmailOtp } from "../services/emailOtpService.js";
 import {
@@ -25,8 +24,11 @@ import {
 } from "../utils/authValidation.js";
 import { resolveDefaultAdminId } from "../services/classSchoolGroupService.js";
 
-const MAX_DEVICES_PER_ACCOUNT = 2;
 const validPurposes = new Set(["signup", "login", "reset", "2fa"]);
+const accessTokenExpiryMinutes = () => {
+  const value = Number.parseInt(String(process.env.ACCESS_TOKEN_EXPIRY_MINUTES || ""), 10);
+  return Number.isFinite(value) && value > 0 ? value : 30;
+};
 
 const authError = (res, status, error, extra = {}) =>
   res.status(status).json({
@@ -100,22 +102,15 @@ const isDbUnavailableError = (err) => {
 };
 
 const issueToken = async ({ role, id }) => {
-  const currentActive = await getActiveSessionCount(role, id);
-  if (currentActive >= MAX_DEVICES_PER_ACCOUNT) {
-    const err = new Error(
-      "Login limit reached (2 devices). Logout from another device first."
-    );
-    err.status = 403;
-    throw err;
-  }
   const tokenId = crypto.randomUUID();
+  const expiryMinutes = accessTokenExpiryMinutes();
   const token = jwt.sign({ id, role }, process.env.JWT_SECRET, {
     algorithm: "HS256",
-    expiresIn: "7d",
+    expiresIn: `${expiryMinutes}m`,
     jwtid: tokenId,
   });
   const decoded = jwt.decode(token);
-  const expMs = decoded?.exp ? decoded.exp * 1000 : Date.now() + 7 * 86400000;
+  const expMs = decoded?.exp ? decoded.exp * 1000 : Date.now() + expiryMinutes * 60000;
   await addSession(role, id, tokenId, expMs);
   return token;
 };

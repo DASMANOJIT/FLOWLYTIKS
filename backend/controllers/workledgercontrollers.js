@@ -2,6 +2,7 @@ import prisma from "../prisma/client.js";
 import { buildRequestLogMeta, logError, logInfo } from "../utils/appLogger.js";
 
 const SHIFT_ORDER = ["MORNING", "AFTERNOON", "EVENING"];
+const DAY_LABELS = ["Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"];
 
 const entrySelect = {
   id: true,
@@ -12,6 +13,10 @@ const entrySelect = {
   remarks: true,
   createdBy: true,
   updatedBy: true,
+  updatedByRole: true,
+  updatedByName: true,
+  updatedByFacultyId: true,
+  updatedByAdminId: true,
   createdAt: true,
   updatedAt: true,
   faculty: {
@@ -64,6 +69,14 @@ const resolveMonthRange = (month) => {
 
 const actorKey = (req) => `${req.userRole}:${req.user?.id}`;
 
+const actorMetadata = (req) => ({
+  updatedBy: actorKey(req),
+  updatedByRole: req.userRole === "admin" ? "ADMIN" : req.userRole === "faculty" ? "FACULTY" : null,
+  updatedByName: req.user?.fullName || req.user?.name || req.user?.email || actorKey(req),
+  updatedByFacultyId: req.userRole === "faculty" && req.user?.id ? String(req.user.id) : null,
+  updatedByAdminId: req.userRole === "admin" && req.user?.id ? Number(req.user.id) : null,
+});
+
 const isAdmin = (req) => req.userRole === "admin";
 
 const isFacultyActor = (req) => req.userRole === "faculty";
@@ -77,24 +90,119 @@ const assertLedgerRole = (req, res) => {
 const canMutateEntry = (req, entry) =>
   isAdmin(req) || (isFacultyActor(req) && String(entry.facultyId) === String(req.user?.id));
 
-const findLockedPayrollCycle = async (tx, date) =>
-  tx.payrollCycle.findFirst({
+const findLockedPayrollCycle = async (tx, date) => {
+  const lockedCycle = await tx.payrollCycle.findFirst({
     where: {
       startDate: { lte: date },
       endDate: { gte: date },
-      ledgerLocked: true,
-      status: { in: ["APPROVED", "PAID", "LOCKED"] },
+      OR: [
+        { ledgerLocked: true },
+        { status: { in: ["APPROVED", "PAID", "LOCKED"] } },
+      ],
     },
     select: { cycleNumber: true, startDate: true, endDate: true, status: true },
   });
+  if (lockedCycle) return lockedCycle;
+
+  const lockedPayout = await tx.facultyPayout.findFirst({
+    where: {
+      status: { in: ["PROCESSING", "SUCCESS", "FAILED"] },
+      payroll: {
+        payrollCycle: {
+          startDate: { lte: date },
+          endDate: { gte: date },
+        },
+      },
+    },
+    select: {
+      id: true,
+      status: true,
+      payroll: {
+        select: {
+          payrollCycle: {
+            select: { cycleNumber: true, startDate: true, endDate: true },
+          },
+        },
+      },
+    },
+  });
+
+  if (!lockedPayout) return null;
+  return {
+    cycleNumber: lockedPayout.payroll?.payrollCycle?.cycleNumber || "Payroll cycle",
+    startDate: lockedPayout.payroll?.payrollCycle?.startDate || date,
+    endDate: lockedPayout.payroll?.payrollCycle?.endDate || date,
+    status: lockedPayout.status,
+  };
+};
+
+const getWeekLockState = async (start, end) => {
+  const startDate = parseDateOnly(start);
+  const endDate = parseDateOnly(end);
+  if (!startDate || !endDate) {
+    return { isLocked: false, lockReason: null };
+  }
+  try {
+    const lockedCycle = await prisma.payrollCycle.findFirst({
+      where: {
+        startDate,
+        endDate,
+        OR: [
+          { ledgerLocked: true },
+          { status: { in: ["APPROVED", "PAID", "LOCKED"] } },
+        ],
+      },
+      select: { id: true },
+    });
+
+    const lockedPayout = lockedCycle
+      ? null
+      : await prisma.facultyPayout.findFirst({
+          where: {
+            status: { in: ["PROCESSING", "SUCCESS", "FAILED"] },
+            payroll: {
+              payrollCycle: {
+                startDate,
+                endDate,
+              },
+            },
+          },
+          select: { id: true },
+        });
+
+    const isLocked = Boolean(lockedCycle || lockedPayout);
+    return {
+      isLocked,
+      lockReason: isLocked
+        ? "This week’s payout has already been processed. Attendance editing is locked."
+        : null,
+    };
+  } catch (error) {
+    logError("work_ledger.lock_check.error", {
+      rangeStart: toDateKey(startDate),
+      rangeEnd: toDateKey(endDate),
+      error: error?.message || String(error),
+    });
+    return { isLocked: false, lockReason: null };
+  }
+};
 
 const assertLedgerUnlocked = async (tx, res, dates) => {
   for (const date of dates) {
     const parsedDate = parseDateOnly(date);
     if (!parsedDate) continue;
-    const lockedCycle = await findLockedPayrollCycle(tx, parsedDate);
+    let lockedCycle = null;
+    try {
+      lockedCycle = await findLockedPayrollCycle(tx, parsedDate);
+    } catch (error) {
+      logError("work_ledger.mutation_lock_check.error", {
+        date: toDateKey(parsedDate),
+        error: error?.message || String(error),
+      });
+      continue;
+    }
     if (lockedCycle) {
-      res.status(423).json({
+      res.status(403).json({
         success: false,
         message: `${lockedCycle.cycleNumber} is ${String(lockedCycle.status).toLowerCase()} and locked. Unlock payroll before editing this week's ledger.`,
       });
@@ -132,8 +240,20 @@ const buildDateRange = (query = {}) => {
   return { start, end };
 };
 
+const normalizeListQuery = (query = {}) => {
+  const limit = Number(query.limit);
+  return {
+    ...query,
+    facultyId: query.facultyId === "all" ? "all" : query.facultyId,
+    shift: SHIFT_ORDER.includes(query.shift) ? query.shift : "all",
+    search: typeof query.search === "string" ? query.search.trim() : "",
+    limit: Number.isFinite(limit) && limit > 0 ? Math.min(Math.floor(limit), 1000) : 500,
+  };
+};
+
 const buildWhere = (query = {}) => {
-  const { start, end } = buildDateRange(query);
+  const normalizedQuery = normalizeListQuery(query);
+  const { start, end } = buildDateRange(normalizedQuery);
   const where = {
     date: {
       gte: start,
@@ -141,21 +261,21 @@ const buildWhere = (query = {}) => {
     },
   };
 
-  if (query.facultyId && query.facultyId !== "all") {
-    where.facultyId = query.facultyId;
+  if (normalizedQuery.facultyId && normalizedQuery.facultyId !== "all") {
+    where.facultyId = normalizedQuery.facultyId;
   }
 
-  if (query.shift && query.shift !== "all") {
-    where.shift = query.shift;
+  if (normalizedQuery.shift && normalizedQuery.shift !== "all") {
+    where.shift = normalizedQuery.shift;
   }
 
-  if (query.search) {
+  if (normalizedQuery.search) {
     where.faculty = {
-      fullName: { contains: query.search, mode: "insensitive" },
+      fullName: { contains: normalizedQuery.search, mode: "insensitive" },
     };
   }
 
-  return { where, start, end };
+  return { where, start, end, limit: normalizedQuery.limit };
 };
 
 const buildSummary = (entries, rangeStart, rangeEnd) => {
@@ -214,6 +334,80 @@ const buildSummary = (entries, rangeStart, rangeEnd) => {
   };
 };
 
+const buildDayGrid = (entries, rangeStart, rangeEnd) => {
+  const start = parseDateOnly(rangeStart) || getFridayWeekStart();
+  const end = parseDateOnly(rangeEnd) || addDays(start, 6);
+  const byCell = new Map();
+  entries.forEach((entry) => {
+    const date = toDateKey(entry.date);
+    const key = `${date}:${entry.shift}`;
+    const current = byCell.get(key) || [];
+    current.push({
+      id: entry.id,
+      facultyId: entry.facultyId,
+      date,
+      shift: entry.shift,
+      facultyCode: entry.faculty?.facultyId || "",
+      facultyName: entry.faculty?.fullName || "Faculty",
+      faculty: {
+        id: entry.facultyId,
+        facultyId: entry.faculty?.facultyId || "",
+        fullName: entry.faculty?.fullName || "Faculty",
+      },
+      isPresent: true,
+      amount: Number(entry.amount || 0),
+      updatedAt: entry.updatedAt?.toISOString?.() || entry.updatedAt || null,
+      updatedByRole: entry.updatedByRole || null,
+      updatedByName: entry.updatedByName || entry.updatedBy || null,
+      remarks: entry.remarks || null,
+    });
+    byCell.set(key, current);
+  });
+
+  const days = [];
+  for (let cursor = new Date(start); cursor <= end; cursor = addDays(cursor, 1)) {
+    const date = toDateKey(cursor);
+    const shifts = {};
+    let dailyTotal = 0;
+    SHIFT_ORDER.forEach((shift) => {
+      const rows = byCell.get(`${date}:${shift}`) || [];
+      dailyTotal += rows.reduce((total, row) => total + Number(row.amount || 0), 0);
+      shifts[shift] = rows;
+    });
+    days.push({
+      date,
+      day: cursor.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" }),
+      shifts,
+      dailyTotal,
+    });
+  }
+  return days;
+};
+
+const buildCalendarRows = (entries, rangeStart, rangeEnd) =>
+  buildDayGrid(entries, rangeStart, rangeEnd).map((day) => {
+    const dayEntries = SHIFT_ORDER.flatMap((shift) => day.shifts[shift] || []);
+    const cells = DAY_LABELS.reduce((current, label) => {
+      const entriesForCell = label === day.day ? dayEntries : [];
+      current[label] = {
+        entries: entriesForCell,
+        totalAmount: entriesForCell.reduce((total, entry) => total + Number(entry.amount || 0), 0),
+        entryCount: entriesForCell.length,
+      };
+      return current;
+    }, {});
+
+    return {
+      date: day.date,
+      displayDate: day.date
+        ? `${day.date.slice(8, 10)}/${day.date.slice(5, 7)}/${day.date.slice(2, 4)}`
+        : "",
+      dayName: day.day,
+      cells,
+      dailyTotal: day.dailyTotal,
+    };
+  });
+
 const handleLedgerError = (res, error) => {
   if (error?.code === "P2025") {
     return res.status(404).json({ success: false, message: "Ledger entry not found." });
@@ -234,10 +428,18 @@ const isMissingColumnOrTableError = (error) =>
   /does not exist|column .* does not exist|relation .* does not exist/i.test(String(error?.message || ""));
 
 const emptyLedgerResponse = (start, end) => {
-  const summary = buildSummary([], start || getFridayWeekStart(), end || addDays(start || getFridayWeekStart(), 6));
+  const safeStart = parseDateOnly(start) || getFridayWeekStart();
+  const safeEnd = parseDateOnly(end) || addDays(safeStart, 6);
+  const summary = buildSummary([], safeStart, safeEnd);
   return {
     success: true,
+    weekStart: toDateKey(safeStart),
+    weekEnd: toDateKey(safeEnd),
+    isLocked: false,
+    lockReason: null,
     entries: [],
+    days: buildDayGrid([], safeStart, safeEnd),
+    calendarRows: buildCalendarRows([], safeStart, safeEnd),
     summary,
     topFaculty: [],
     facultySummary: [],
@@ -257,7 +459,7 @@ export const createWorkLedgerEntry = async (req, res) => {
         data: {
           ...req.body,
           createdBy: actorKey(req),
-          updatedBy: actorKey(req),
+          ...actorMetadata(req),
         },
         select: entrySelect,
       });
@@ -282,7 +484,7 @@ export const createWorkLedgerEntry = async (req, res) => {
 export const getWorkLedgerEntries = async (req, res) => {
   try {
     if (!assertLedgerRole(req, res)) return null;
-    const { where, start, end } = buildWhere(req.query);
+    const { where, start, end, limit } = buildWhere(req.query);
     logInfo("work_ledger.fetch.start", buildRequestLogMeta(req, {
       rangeStart: toDateKey(start),
       rangeEnd: toDateKey(end),
@@ -292,7 +494,7 @@ export const getWorkLedgerEntries = async (req, res) => {
     const entries = await prisma.workLedgerEntry.findMany({
       where,
       orderBy: [{ date: "asc" }, { shift: "asc" }, { createdAt: "asc" }],
-      take: req.query.limit,
+      take: limit,
       select: entrySelect,
     });
 
@@ -306,10 +508,16 @@ export const getWorkLedgerEntries = async (req, res) => {
     // Defensive: ensure we always return a consistent JSON shape even if something unexpected happens
     const safeEntries = Array.isArray(orderedEntries) ? orderedEntries : [];
     const safeSummary = safeEntries.length ? buildSummary(safeEntries, start, end) : buildSummary([], start || new Date(), end || new Date());
+    const lockState = await getWeekLockState(start, end);
 
     return res.json({
       success: true,
+      weekStart: toDateKey(start),
+      weekEnd: toDateKey(end),
+      ...lockState,
       entries: safeEntries,
+      days: buildDayGrid(safeEntries, start, end),
+      calendarRows: buildCalendarRows(safeEntries, start, end),
       summary: safeSummary,
       topFaculty: safeSummary.topFaculty,
       facultySummary: safeSummary.facultySummary,
@@ -365,7 +573,7 @@ export const updateWorkLedgerEntry = async (req, res) => {
         where: { id: req.params.id },
         data: {
           ...req.body,
-          updatedBy: actorKey(req),
+          ...actorMetadata(req),
         },
         select: entrySelect,
       });
@@ -383,6 +591,70 @@ export const updateWorkLedgerEntry = async (req, res) => {
 
     if (!entry) return null;
     return res.json({ success: true, entry: toEntryDto(entry) });
+  } catch (error) {
+    return handleLedgerError(res, error);
+  }
+};
+
+export const updateWorkLedgerAttendanceEntry = async (req, res) => {
+  try {
+    if (!isAdmin(req)) {
+      return res.status(403).json({ success: false, message: "Only admins can edit attendance from work ledger." });
+    }
+    const existing = await prisma.workLedgerEntry.findUnique({
+      where: { id: req.params.attendanceId },
+      select: entrySelect,
+    });
+    if (!existing) {
+      return res.status(404).json({ success: false, message: "Ledger entry not found." });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      if (!(await assertLedgerUnlocked(tx, res, [existing.date]))) return null;
+
+      if (req.body.isPresent === false) {
+        await tx.workLedgerEntryAudit.create({
+          data: {
+            entryId: existing.id,
+            action: "DELETE",
+            changedBy: actorKey(req),
+            previousData: serializableEntry(existing),
+          },
+        });
+        await tx.workLedgerEntry.delete({ where: { id: existing.id } });
+        return { deleted: true, attendance: null };
+      }
+
+      const updated = await tx.workLedgerEntry.update({
+        where: { id: existing.id },
+        data: {
+          amount: Number(req.body.amount || 0),
+          remarks: req.body.remarks ?? null,
+          ...actorMetadata(req),
+        },
+        select: entrySelect,
+      });
+      await tx.workLedgerEntryAudit.create({
+        data: {
+          entryId: updated.id,
+          action: "UPDATE",
+          changedBy: actorKey(req),
+          previousData: serializableEntry(existing),
+          newData: serializableEntry(updated),
+        },
+      });
+      return { deleted: false, attendance: updated };
+    });
+
+    if (!result) return null;
+    if (result.deleted) {
+      return res.json({ success: true, message: "Attendance marked absent successfully.", attendance: null });
+    }
+    return res.json({
+      success: true,
+      message: "Attendance updated successfully.",
+      attendance: toEntryDto(result.attendance),
+    });
   } catch (error) {
     return handleLedgerError(res, error);
   }
@@ -451,16 +723,18 @@ export const exportWorkLedgerCsv = async (req, res) => {
       select: entrySelect,
     });
     const rows = [
-      ["Date", "Shift", "Faculty ID", "Faculty Name", "Amount", "Remarks", "Created By", "Updated By", "Created At", "Updated At"],
+      ["Date", "Shift", "Faculty ID", "Faculty Name", "Status", "Amount", "Remarks", "Created By", "Updated By", "Updated By Role", "Created At", "Updated At"],
       ...entries.map((entry) => [
         toDateKey(entry.date),
         entry.shift,
         entry.faculty?.facultyId || "",
         entry.faculty?.fullName || "",
+        "Present",
         Number(entry.amount || 0),
         entry.remarks || "",
         entry.createdBy,
-        entry.updatedBy || "",
+        entry.updatedByName || entry.updatedBy || "",
+        entry.updatedByRole || "",
         entry.createdAt?.toISOString?.() || "",
         entry.updatedAt?.toISOString?.() || "",
       ]),

@@ -1,5 +1,6 @@
 import prisma from "../prisma/client.js";
 import { toDateKey } from "../services/facultyPayrollService.js";
+import { listFacultyNotificationLogs } from "../services/notificationService.js";
 
 const moneyNumber = (value) => Number(value || 0);
 
@@ -52,6 +53,99 @@ const calculateShiftAmount = (faculty) => {
   }
   return amount;
 };
+
+const ATTENDANCE_LOCK_MESSAGE = "Attendance for this week is locked because payout has already been processed.";
+
+const getActorMetadata = (req) => {
+  if (req.userRole === "faculty") {
+    return {
+      updatedBy: req.user?.id ? String(req.user.id) : "faculty",
+      updatedByRole: "FACULTY",
+      updatedByName: req.user?.fullName || req.user?.name || req.user?.email || "Faculty",
+      updatedByFacultyId: req.user?.id ? String(req.user.id) : null,
+      updatedByAdminId: null,
+    };
+  }
+  if (req.userRole === "admin") {
+    return {
+      updatedBy: req.user?.id ? String(req.user.id) : "admin",
+      updatedByRole: "ADMIN",
+      updatedByName: req.user?.name || req.user?.email || "Admin",
+      updatedByFacultyId: null,
+      updatedByAdminId: req.user?.id ? Number(req.user.id) : null,
+    };
+  }
+  return {
+    updatedBy: "system",
+    updatedByRole: null,
+    updatedByName: null,
+    updatedByFacultyId: null,
+    updatedByAdminId: null,
+  };
+};
+
+const isFacultyWeekPayoutLocked = async (facultyId, weekStart, weekEnd) => {
+  const startDate = new Date(weekStart);
+  startDate.setUTCHours(0, 0, 0, 0);
+  const endDate = new Date(weekEnd);
+  endDate.setUTCHours(0, 0, 0, 0);
+  const lockedCycle = await prisma.payrollCycle.findFirst({
+    where: {
+      startDate,
+      endDate,
+      OR: [
+        { ledgerLocked: true },
+        { status: { in: ["PAID", "LOCKED"] } },
+        {
+          payrolls: {
+            some: {
+              facultyId,
+              status: { in: ["PAID", "LOCKED"] },
+            },
+          },
+        },
+      ],
+    },
+    select: { id: true },
+  });
+  if (lockedCycle) return true;
+
+  const lockedPayout = await prisma.facultyPayout.findFirst({
+    where: {
+      facultyId,
+      status: { in: ["PROCESSING", "SUCCESS", "FAILED"] },
+      payroll: {
+        payrollCycle: {
+          startDate,
+          endDate,
+        },
+      },
+    },
+    select: { id: true },
+  });
+  return Boolean(lockedPayout);
+};
+
+const buildAttendanceCell = (entry, fallbackAmount = 0) =>
+  entry
+    ? {
+        present: true,
+        id: entry.id,
+        amount: moneyNumber(entry.amount),
+        classesTaken: Number(entry.classesTaken || 1),
+        updatedAt: entry.updatedAt?.toISOString?.() || null,
+        updatedBy: entry.updatedBy || null,
+        updatedByRole: entry.updatedByRole || null,
+        updatedByName: entry.updatedByName || null,
+      }
+    : {
+        present: false,
+        amount: moneyNumber(fallbackAmount),
+        updatedAt: null,
+        updatedBy: null,
+        updatedByRole: null,
+        updatedByName: null,
+      };
 
 const facultyTableExists = async (tableName) => {
   const rows = await prisma.$queryRaw`SELECT to_regclass(${tableName})::text AS name`;
@@ -179,8 +273,17 @@ export const getFacultyDashboard = async (req, res) => {
     const facultyId = req.user.id;
     const hasFacultyPayoutTable = await facultyTableExists('public."FacultyPayout"');
 
-    const [faculty, weekEntries, previousWeekEntries, monthEntries, yearEntries, allEntries, payrolls, payouts, notifications] = await Promise.all([
+    const [faculty, bankAccount, weekEntries, previousWeekEntries, monthEntries, yearEntries, allEntries, payrolls, payouts, notifications] = await Promise.all([
       prisma.faculty.findUnique({ where: { id: facultyId }, select: baseFacultySelect }),
+      prisma.facultyBankAccount.findFirst({
+        where: { facultyId },
+        orderBy: { updatedAt: "desc" },
+        select: {
+          payoutMode: true,
+          verificationStatus: true,
+          payoutEligible: true,
+        },
+      }).catch(() => null),
       prisma.workLedgerEntry.findMany({
         where: { facultyId, date: { gte: weekStart, lte: weekEnd } },
         select: { date: true, shift: true, amount: true, classesTaken: true, hoursWorked: true },
@@ -303,6 +406,13 @@ export const getFacultyDashboard = async (req, res) => {
       success: true,
       profile: toProfileDto(faculty),
       faculty: toProfileDto(faculty),
+      bankAccount: bankAccount
+        ? {
+            payoutMode: bankAccount.payoutMode,
+            verificationStatus: bankAccount.verificationStatus,
+            payoutEligible: bankAccount.payoutEligible,
+          }
+        : null,
       summary,
       attendance,
       attendanceGrid: [],
@@ -495,10 +605,33 @@ export const getMyPayoutHistory = async (req, res) => {
 export const getMyNotifications = async (req, res) => {
   try {
     if (!requireFaculty(req, res)) return null;
-    const notifications = await prisma.notification.findMany({
-      where: { facultyId: req.user.id },
-      orderBy: { createdAt: "desc" },
-    });
+    const [inAppNotifications, deliveryLogs] = await Promise.all([
+      prisma.notification.findMany({
+        where: { facultyId: req.user.id },
+        orderBy: { createdAt: "desc" },
+      }),
+      listFacultyNotificationLogs(req.user.id),
+    ]);
+    const notifications = [
+      ...deliveryLogs.map((log) => ({
+        id: log.id,
+        title: log.title,
+        message: log.message,
+        type: log.eventType,
+        isRead: true,
+        createdAt: log.createdAt,
+        channel: log.channel,
+        status: log.status,
+        weekStart: log.relatedWeekStart,
+        weekEnd: log.relatedWeekEnd,
+        whatsappLink: log.whatsappLink,
+      })),
+      ...inAppNotifications.map((notification) => ({
+        ...notification,
+        channel: "IN_APP",
+        status: notification.isRead ? "READ" : "UNREAD",
+      })),
+    ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     return res.json({ success: true, notifications });
   } catch (error) {
     console.error("Faculty portal notification error:", error?.message || error);
@@ -546,7 +679,18 @@ export const getWeekAttendance = async (req, res) => {
 
     const entries = await prisma.workLedgerEntry.findMany({
       where: { date: { gte: start, lte: end }, facultyId: { in: faculties.map((faculty) => faculty.id) } },
-      select: { id: true, facultyId: true, date: true, shift: true, amount: true, classesTaken: true },
+      select: {
+        id: true,
+        facultyId: true,
+        date: true,
+        shift: true,
+        amount: true,
+        classesTaken: true,
+        updatedAt: true,
+        updatedBy: true,
+        updatedByRole: true,
+        updatedByName: true,
+      },
     });
 
     // build a map facultyId -> { dateKey_shift -> entry }
@@ -559,6 +703,10 @@ export const getWeekAttendance = async (req, res) => {
         id: e.id,
         amount: Number(e.amount || 0),
         classesTaken: Number(e.classesTaken || 1),
+        updatedAt: e.updatedAt,
+        updatedBy: e.updatedBy,
+        updatedByRole: e.updatedByRole,
+        updatedByName: e.updatedByName,
       });
       byFaculty.set(e.facultyId, map);
     });
@@ -589,15 +737,17 @@ export const getWeekAttendance = async (req, res) => {
           const e = map.get(key);
           const amount = e ? moneyNumber(e.amount) : 0;
           weeklyTotal += amount;
-          row.shifts[key] = e
-            ? { present: true, id: e.id, amount, classesTaken: e.classesTaken }
-            : { present: false, amount: calculateShiftAmount(f) };
+          row.shifts[key] = buildAttendanceCell(e, 0);
         });
       });
       row.weeklyTotal = moneyNumber(weeklyTotal);
       return row;
     });
-    const primaryFaculty = faculties[0] || null;
+    const primaryFaculty =
+      req.userRole === "faculty"
+        ? faculties.find((faculty) => String(faculty.id) === String(req.user.id)) || faculties[0] || null
+        : faculties[0] || null;
+    const isLocked = primaryFaculty ? await isFacultyWeekPayoutLocked(primaryFaculty.id, start, end) : false;
     const primaryMap = primaryFaculty ? byFaculty.get(primaryFaculty.id) || new Map() : new Map();
     const rows = days.map((date) => {
       const shifts = {};
@@ -606,9 +756,7 @@ export const getWeekAttendance = async (req, res) => {
         const entry = primaryMap.get(`${date}_${shift}`);
         const amount = entry ? moneyNumber(entry.amount) : 0;
         dailyTotal += amount;
-        shifts[shift] = entry
-          ? { present: true, id: entry.id, amount, classesTaken: entry.classesTaken }
-          : { present: false, amount: calculateShiftAmount(primaryFaculty) };
+        shifts[shift] = buildAttendanceCell(entry, 0);
       });
       return {
         date,
@@ -618,7 +766,16 @@ export const getWeekAttendance = async (req, res) => {
       };
     });
 
-    return res.json({ success: true, weekStart: days[0], weekEnd: days[6], days, grid, rows });
+    return res.json({
+      success: true,
+      weekStart: days[0],
+      weekEnd: days[6],
+      days,
+      grid,
+      rows,
+      isLocked,
+      lockReason: isLocked ? "This week’s payout has already been processed. Attendance editing is locked." : null,
+    });
   } catch (error) {
     console.error("Week attendance error:", error?.message || error);
     return res.status(500).json({ success: false, message: "Failed to load weekly attendance." });
@@ -645,6 +802,30 @@ export const upsertWeekAttendance = async (req, res) => {
 
     const dateObj = new Date(date);
     dateObj.setUTCHours(0, 0, 0, 0);
+    const weekStart = fridayWeekStart(dateObj);
+    const weekEnd = addDays(weekStart, 6);
+    weekEnd.setUTCHours(23, 59, 59, 999);
+
+    if (await isFacultyWeekPayoutLocked(String(targetFacultyId), weekStart, weekEnd)) {
+      return res.status(403).json({ success: false, message: ATTENDANCE_LOCK_MESSAGE });
+    }
+
+    const hasAmount = Object.prototype.hasOwnProperty.call(req.body || {}, "amount");
+    let rawAmount = req.body?.amount === "" || req.body?.amount === null || req.body?.amount === undefined
+      ? 0
+      : Number(req.body.amount);
+    if (!hasAmount && present) {
+      const faculty = await prisma.faculty.findUnique({
+        where: { id: String(targetFacultyId) },
+        select: { salaryType: true, salaryAmount: true },
+      });
+      rawAmount = calculateShiftAmount(faculty);
+    }
+    if (!Number.isFinite(rawAmount) || rawAmount < 0) {
+      return res.status(400).json({ success: false, message: "Amount must be a valid non-negative number." });
+    }
+    const amount = Math.round(rawAmount * 100) / 100;
+    const actor = getActorMetadata(req);
 
     const uniqueWhere = {
       facultyId_date_shift: {
@@ -655,16 +836,15 @@ export const upsertWeekAttendance = async (req, res) => {
     };
 
     if (present) {
-      const faculty = await prisma.faculty.findUnique({
-        where: { id: String(targetFacultyId) },
-        select: { salaryType: true, salaryAmount: true },
-      });
-      const amount = calculateShiftAmount(faculty);
       const entry = await prisma.workLedgerEntry.upsert({
         where: uniqueWhere,
         update: {
           amount,
-          updatedBy: req.user?.id ? String(req.user.id) : "system",
+          updatedBy: actor.updatedBy,
+          updatedByRole: actor.updatedByRole,
+          updatedByName: actor.updatedByName,
+          updatedByFacultyId: actor.updatedByFacultyId,
+          updatedByAdminId: actor.updatedByAdminId,
         },
         create: {
           facultyId: String(targetFacultyId),
@@ -673,8 +853,12 @@ export const upsertWeekAttendance = async (req, res) => {
           classesTaken: 1,
           hoursWorked: 1,
           amount,
-          createdBy: req.user?.id ? String(req.user.id) : "system",
-          updatedBy: req.user?.id ? String(req.user.id) : "system",
+          createdBy: actor.updatedBy,
+          updatedBy: actor.updatedBy,
+          updatedByRole: actor.updatedByRole,
+          updatedByName: actor.updatedByName,
+          updatedByFacultyId: actor.updatedByFacultyId,
+          updatedByAdminId: actor.updatedByAdminId,
         },
       });
       return res.json({ success: true, entry: { id: entry.id, date: entry.date, shift: entry.shift } });
@@ -696,13 +880,19 @@ export const deleteWeekAttendanceEntry = async (req, res) => {
     if (!requireFacultyOrAdmin(req, res)) return null;
     const entry = await prisma.workLedgerEntry.findUnique({
       where: { id: req.params.id },
-      select: { id: true, facultyId: true },
+      select: { id: true, facultyId: true, date: true },
     });
     if (!entry) {
       return res.status(404).json({ success: false, message: "Attendance entry not found." });
     }
     if (req.userRole === "faculty" && String(entry.facultyId) !== String(req.user.id)) {
       return res.status(403).json({ success: false, message: "Faculty members can only delete their own attendance." });
+    }
+    const weekStart = fridayWeekStart(entry.date);
+    const weekEnd = addDays(weekStart, 6);
+    weekEnd.setUTCHours(23, 59, 59, 999);
+    if (await isFacultyWeekPayoutLocked(entry.facultyId, weekStart, weekEnd)) {
+      return res.status(403).json({ success: false, message: ATTENDANCE_LOCK_MESSAGE });
     }
     await prisma.workLedgerEntry.delete({ where: { id: entry.id } });
     return res.json({ success: true, message: "Attendance entry cleared." });

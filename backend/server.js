@@ -21,7 +21,11 @@ import facultyAuthRoutes from "./routes/facultyauthroute.js";
 import facultyPayrollRoutes from "./routes/facultypayrollroute.js";
 import facultyPayoutRoutes from "./routes/facultypayoutroute.js";
 import facultyPayoutBankRoutes from "./routes/facultypayoutbankroute.js";
+import facultyReportRoutes from "./routes/facultyreportroute.js";
+import facultyWeeklyPaymentRoutes from "./routes/facultyweeklypaymentroute.js";
 import cashfreePayoutWebhookRoutes from "./routes/cashfreepayoutwebhookroute.js";
+import notificationRoutes from "./routes/notificationroute.js";
+import auditLogRoutes from "./routes/auditlogroute.js";
 import { warnIfPayoutConfigMissing } from "./services/cashfreePayoutService.js";
 
 validateEnv();
@@ -119,7 +123,11 @@ app.use(
       if (req.originalUrl === "/api/payments/cashfree/webhook") {
         req.rawBody = buf.toString("utf8");
       }
-      if (req.originalUrl === "/api/webhooks/cashfree/payouts") {
+      if (
+        req.originalUrl === "/api/webhooks/cashfree/payouts" ||
+        req.originalUrl === "/api/faculty-weekly-payments/cashfree/webhook" ||
+        req.originalUrl === "/api/faculty-payouts/cashfree/webhook"
+      ) {
         req.rawBody = buf.toString("utf8");
       }
     },
@@ -212,6 +220,9 @@ app.use("/api/admin-assistant", adminAssistantRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/reminders", reminderRoutes);
 app.use("/api/faculty/payroll", facultyPayrollRoutes);
+app.use("/api/faculty-payroll", facultyPayrollRoutes);
+app.use("/api/faculty-reports", facultyReportRoutes);
+app.use("/api/faculty-weekly-payments", facultyWeeklyPaymentRoutes);
 app.use("/api/faculty/auth", facultyAuthRoutes);
 app.use("/api/faculty", facultyRoutes);
 app.use("/api/admin/faculty/payouts", facultyPayoutRoutes);
@@ -219,6 +230,8 @@ app.use("/api/faculty-payouts", facultyPayoutRoutes);
 app.use("/api/admin/faculty/bank-accounts", facultyPayoutBankRoutes);
 app.use("/api/faculty/bank-accounts", facultyPayoutBankRoutes);
 app.use("/api/work-ledger", workLedgerRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/audit-logs", auditLogRoutes);
 app.use("/api/webhooks", cashfreePayoutWebhookRoutes);
 app.use("/api/faculty-auth", facultyAuthRoutes);
 
@@ -226,6 +239,13 @@ app.use("/api/faculty-auth", facultyAuthRoutes);
 // Health check
 app.get("/", (req, res) => {
   res.send("Server is running...");
+});
+
+app.use("/api", (req, res) => {
+  return res.status(404).json({
+    success: false,
+    message: "API route not found.",
+  });
 });
 
 process.on("unhandledRejection", (reason) => {
@@ -258,20 +278,21 @@ app.use((err, req, res, next) => {
     message: err?.message || err,
   });
   if (res.headersSent) return next(err);
+  const safeMessages = {
+    400: "Invalid request payload",
+    401: "Authentication required.",
+    403: "You do not have permission to perform this action.",
+    404: "API route not found.",
+    409: "Request conflicts with an existing record.",
+    413: "Request payload is too large.",
+    429: "Too many requests. Please try again later.",
+    503: "Service configuration is not available.",
+  };
+  const safeMessage = safeMessages[status] || "Internal server error";
   return res.status(status).json({
     success: false,
-    error:
-      status === 400
-        ? "Invalid request payload"
-        : status === 403
-        ? "Request origin is not allowed"
-        : "Internal server error",
-    message:
-      status === 400
-        ? "Invalid request payload"
-        : status === 403
-        ? "Request origin is not allowed"
-        : "Internal server error",
+    error: safeMessage,
+    message: safeMessage,
   });
 });
 

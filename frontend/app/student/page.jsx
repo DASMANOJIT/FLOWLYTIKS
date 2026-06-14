@@ -9,6 +9,7 @@ import { MotionButton, MotionCard, MotionSection } from "../components/motion/pr
 import GreetingPanel from "../components/dashboard/GreetingPanel.jsx";
 import { clearAuthSession, getAuthToken } from "../../lib/authStorage.js";
 import { downloadPaymentReceiptPdf } from "../../lib/paymentReceiptPdf.js";
+import useSessionControl from "../../lib/useSessionControl.js";
 
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
@@ -58,6 +59,7 @@ const isLatePaymentRecord = (payment) => {
 };
 
 export default function StudentDashboard() {
+  useSessionControl("student");
   const router = useRouter();
 
   const [student, setStudent] = useState(null);

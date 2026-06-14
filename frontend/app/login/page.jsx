@@ -6,7 +6,11 @@ import Fall from "../animation/fallingword.jsx";
 import { MotionButton } from "../components/motion/primitives.jsx";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { readApiResponse } from "../../lib/api.js";
-import { clearLegacyAuthStorage, storeAuthSession } from "../../lib/authStorage.js";
+import {
+  clearLegacyAuthStorage,
+  storeAuthSession,
+  storeFacultyAuthSession,
+} from "../../lib/authStorage.js";
 import {
   CLASS_OPTIONS,
   SCHOOL_OPTIONS,
@@ -17,6 +21,7 @@ import { isValidWhatsAppNumber } from "../../lib/whatsapp.js";
 export default function Login() {
   const OTP_RESEND_COOLDOWN_SECONDS = 15;
 
+  const [selectedRole, setSelectedRole] = useState("student");
   const [activeForm, setActiveForm] = useState("login");
   const [forgotOtpSent, setForgotOtpSent] = useState(false);
   const [forgotOtpInput, setForgotOtpInput] = useState("");
@@ -38,9 +43,25 @@ export default function Login() {
   const [signupCustomSchool, setSignupCustomSchool] = useState("");
   const [signupClass, setSignupClass] = useState("");
   const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [showAdminPassword, setShowAdminPassword] = useState(false);
+  const [showFacultyPassword, setShowFacultyPassword] = useState(false);
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [showResetPassword, setShowResetPassword] = useState(false);
 
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [adminLoginLoading, setAdminLoginLoading] = useState(false);
+  const [facultyEmail, setFacultyEmail] = useState("");
+  const [facultyPassword, setFacultyPassword] = useState("");
+  const [facultyLoginLoading, setFacultyLoginLoading] = useState(false);
+  const [roleResetOtpSent, setRoleResetOtpSent] = useState(false);
+  const [roleResetLoading, setRoleResetLoading] = useState(false);
+  const [roleResetForm, setRoleResetForm] = useState({
+    email: "",
+    otp: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
 
@@ -74,6 +95,16 @@ export default function Login() {
     setSignupOtpInput("");
     setSignupOtpVerified(false);
     setSignupCooldown(0);
+  };
+
+  const selectRole = (role) => {
+    setSelectedRole(role);
+    setActiveForm("login");
+    setRoleResetOtpSent(false);
+    setRoleResetForm({ email: "", otp: "", newPassword: "", confirmPassword: "" });
+    setTwoFaRequired(false);
+    setTwoFaEmail("");
+    setTwoFaOtp("");
   };
 
   const getSignupFormValues = () => {
@@ -196,6 +227,137 @@ export default function Login() {
   // =====================
   // LOGIN
   // =====================
+  const loginWithAuthEndpoint = async ({ email, password, expectedRole, redirectTo }) => {
+    const res = await fetch(`${API}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const { ok, data, error } = await readApiResponse(
+      res,
+      "Login failed. Please try again."
+    );
+    if (!ok) return { ok: false, error };
+
+    if (expectedRole && data.role !== expectedRole) {
+      return {
+        ok: false,
+        error: `This account is not registered as ${expectedRole === "admin" ? "an administrator" : "a student"}.`,
+      };
+    }
+
+    storeAuthSession({ token: data.token, name: data.name, role: data.role });
+    window.location.href = redirectTo || (data.role === "admin" ? "/admin" : "/student");
+    return { ok: true };
+  };
+
+  const handleAdminLogin = async (e) => {
+    e.preventDefault();
+    if (adminLoginLoading) return;
+
+    const email = adminEmail.trim();
+    const password = adminPassword;
+
+    setAdminLoginLoading(true);
+    try {
+      const result = await loginWithAuthEndpoint({
+        email,
+        password,
+        expectedRole: "admin",
+        redirectTo: "/admin",
+      });
+      if (!result.ok) return alert(result.error);
+    } catch (err) {
+      alert("Cannot connect to backend!");
+      console.error(err);
+    } finally {
+      setAdminLoginLoading(false);
+    }
+  };
+
+  const handleFacultyLogin = async (e) => {
+    e.preventDefault();
+    if (facultyLoginLoading) return;
+
+    const email = facultyEmail.trim();
+    const password = facultyPassword;
+
+    setFacultyLoginLoading(true);
+    try {
+      const res = await fetch(`${API}/api/faculty/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const { ok, data, error } = await readApiResponse(
+        res,
+        "Faculty login failed. Please try again."
+      );
+      if (!ok) return alert(error);
+
+      storeFacultyAuthSession({ token: data.token, name: data.name });
+      window.location.href = "/faculty/dashboard";
+    } catch (err) {
+      alert("Cannot connect to backend!");
+      console.error(err);
+    } finally {
+      setFacultyLoginLoading(false);
+    }
+  };
+
+  const getRoleResetBase = () => {
+    if (selectedRole === "admin") return "/api/admin/auth/forgot-password";
+    if (selectedRole === "faculty") return "/api/faculty/auth/forgot-password";
+    return "";
+  };
+
+  const sendRoleResetOtp = async () => {
+    const base = getRoleResetBase();
+    if (!base) return;
+    setRoleResetLoading(true);
+    try {
+      const res = await fetch(`${API}${base}/send-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: roleResetForm.email }),
+      });
+      const { ok, data, error } = await readApiResponse(res, "Failed to send OTP. Please try again.");
+      if (!ok) return alert(error);
+      setRoleResetOtpSent(true);
+      alert(data.message || "OTP sent successfully.");
+    } catch (err) {
+      alert("Cannot connect to backend!");
+      console.error(err);
+    } finally {
+      setRoleResetLoading(false);
+    }
+  };
+
+  const verifyRoleReset = async (e) => {
+    e.preventDefault();
+    const base = getRoleResetBase();
+    if (!base) return;
+    setRoleResetLoading(true);
+    try {
+      const res = await fetch(`${API}${base}/verify-reset`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(roleResetForm),
+      });
+      const { ok, data, error } = await readApiResponse(res, "Password reset failed. Please try again.");
+      if (!ok) return alert(error);
+      alert(data.message || "Password reset successful. Please login again.");
+      setActiveForm("login");
+      setRoleResetOtpSent(false);
+      setRoleResetForm({ email: "", otp: "", newPassword: "", confirmPassword: "" });
+    } catch (err) {
+      alert("Cannot connect to backend!");
+      console.error(err);
+    } finally {
+      setRoleResetLoading(false);
+    }
+  };
+
   const handlePasswordLogin = async (e) => {
     e.preventDefault();
 
@@ -221,13 +383,13 @@ export default function Login() {
         return;
       }
 
+      if (data.role !== "student") {
+        return alert("Please use Administrator Login for this account.");
+      }
+
       storeAuthSession({ token: data.token, name: data.name, role: data.role });
 
-      if (data.role === "admin") {
-        window.location.href = "/admin";
-      } else {
-        window.location.href = "/student";
-      }
+      window.location.href = "/student";
     } catch (err) {
       alert("Cannot connect to backend!");
       console.error(err);
@@ -575,42 +737,245 @@ export default function Login() {
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1], delay: 0.08 }}
       >
-        <div className={`card-wrapper ${activeForm}`}>
+        <div className={`card-wrapper ${selectedRole === "student" ? activeForm : activeForm === "forgot" ? "forgot" : "login"} role-${selectedRole}`}>
           <div className="auth-switch">
             <MotionButton
               type="button"
-              className={`switch-btn ${activeForm === "login" ? "active" : ""}`}
-              onClick={() => setActiveForm("login")}
+              className={`switch-btn ${selectedRole === "admin" ? "active" : ""}`}
+              onClick={() => selectRole("admin")}
             >
-              Login
+              Administrator Login
             </MotionButton>
             <MotionButton
               type="button"
-              className={`switch-btn ${activeForm === "signup" ? "active" : ""}`}
-              onClick={() => setActiveForm("signup")}
+              className={`switch-btn ${selectedRole === "faculty" ? "active" : ""}`}
+              onClick={() => selectRole("faculty")}
             >
-              Sign Up
+              Faculty Login
             </MotionButton>
             <MotionButton
               type="button"
-              className={`switch-btn ${activeForm === "forgot" ? "active" : ""}`}
-              onClick={() => setActiveForm("forgot")}
+              className={`switch-btn ${selectedRole === "student" ? "active" : ""}`}
+              onClick={() => selectRole("student")}
             >
-              Reset
+              Student Login
             </MotionButton>
           </div>
 
-          {/* LOGIN */}
-          <form
-            className="card-form login-side"
-            onSubmit={(e) => {
-              if (twoFaRequired || loginMode !== "password") {
-                e.preventDefault();
-                return;
-              }
-              handlePasswordLogin(e);
-            }}
-          >
+          {selectedRole === "student" ? (
+            <div className="auth-switch auth-switch--student">
+              <MotionButton
+                type="button"
+                className={`switch-btn ${activeForm === "login" ? "active" : ""}`}
+                onClick={() => setActiveForm("login")}
+              >
+                Login
+              </MotionButton>
+              <MotionButton
+                type="button"
+                className={`switch-btn ${activeForm === "signup" ? "active" : ""}`}
+                onClick={() => setActiveForm("signup")}
+              >
+                Sign Up
+              </MotionButton>
+              <MotionButton
+                type="button"
+                className={`switch-btn ${activeForm === "forgot" ? "active" : ""}`}
+                onClick={() => setActiveForm("forgot")}
+              >
+                Reset
+              </MotionButton>
+            </div>
+          ) : null}
+
+          {selectedRole === "admin" && activeForm === "forgot" ? (
+            <form className="card-form login-side" onSubmit={verifyRoleReset}>
+              <h2>Reset Admin Password</h2>
+              <input
+                placeholder="Admin Email"
+                className="form-input"
+                value={roleResetForm.email}
+                inputMode="email"
+                autoComplete="email"
+                onChange={(e) => setRoleResetForm((current) => ({ ...current, email: e.target.value }))}
+              />
+              <MotionButton type="button" className="form-btn" onClick={sendRoleResetOtp} disabled={roleResetLoading}>
+                {roleResetLoading ? renderLoadingLabel("Sending OTP") : roleResetOtpSent ? "Resend OTP" : "Send OTP"}
+              </MotionButton>
+              {roleResetOtpSent ? (
+                <>
+                  <input
+                    placeholder="Enter OTP"
+                    className="form-input"
+                    value={roleResetForm.otp}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    onChange={(e) => setRoleResetForm((current) => ({ ...current, otp: e.target.value }))}
+                  />
+                  <input
+                    type="password"
+                    placeholder="New Password"
+                    className="form-input"
+                    value={roleResetForm.newPassword}
+                    autoComplete="new-password"
+                    onChange={(e) => setRoleResetForm((current) => ({ ...current, newPassword: e.target.value }))}
+                  />
+                  <input
+                    type="password"
+                    placeholder="Confirm New Password"
+                    className="form-input"
+                    value={roleResetForm.confirmPassword}
+                    autoComplete="new-password"
+                    onChange={(e) => setRoleResetForm((current) => ({ ...current, confirmPassword: e.target.value }))}
+                  />
+                  <MotionButton className="form-btn" disabled={roleResetLoading}>
+                    {roleResetLoading ? renderLoadingLabel("Resetting") : "Reset Password"}
+                  </MotionButton>
+                </>
+              ) : null}
+              <p className="switch-link soft" onClick={() => setActiveForm("login")}>Back to Administrator Login</p>
+            </form>
+          ) : null}
+
+          {selectedRole === "admin" && activeForm !== "forgot" ? (
+            <form className="card-form login-side" onSubmit={handleAdminLogin}>
+              <h2>Administrator Login</h2>
+              <input
+                name="adminEmail"
+                placeholder="Email"
+                className="form-input"
+                value={adminEmail}
+                inputMode="email"
+                autoComplete="email"
+                onChange={(e) => setAdminEmail(e.target.value)}
+              />
+              <div className="password-field">
+                <input
+                  name="adminPassword"
+                  type={showAdminPassword ? "text" : "password"}
+                  placeholder="Password"
+                  className="form-input"
+                  value={adminPassword}
+                  autoComplete="current-password"
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="eye-btn"
+                  onClick={() => setShowAdminPassword((v) => !v)}
+                  aria-label={showAdminPassword ? "Hide password" : "Show password"}
+                >
+                  {showAdminPassword ? "🙈" : "👁"}
+                </button>
+              </div>
+              <MotionButton className="form-btn" disabled={adminLoginLoading}>
+                {adminLoginLoading ? renderLoadingLabel("Logging In") : "Login as Administrator"}
+              </MotionButton>
+              <p className="switch-link soft" onClick={() => setActiveForm("forgot")}>Reset Password</p>
+            </form>
+          ) : null}
+
+          {selectedRole === "faculty" && activeForm === "forgot" ? (
+            <form className="card-form login-side" onSubmit={verifyRoleReset}>
+              <h2>Reset Faculty Password</h2>
+              <input
+                placeholder="Faculty Email"
+                className="form-input"
+                value={roleResetForm.email}
+                inputMode="email"
+                autoComplete="email"
+                onChange={(e) => setRoleResetForm((current) => ({ ...current, email: e.target.value }))}
+              />
+              <MotionButton type="button" className="form-btn" onClick={sendRoleResetOtp} disabled={roleResetLoading}>
+                {roleResetLoading ? renderLoadingLabel("Sending OTP") : roleResetOtpSent ? "Resend OTP" : "Send OTP"}
+              </MotionButton>
+              {roleResetOtpSent ? (
+                <>
+                  <input
+                    placeholder="Enter OTP"
+                    className="form-input"
+                    value={roleResetForm.otp}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    onChange={(e) => setRoleResetForm((current) => ({ ...current, otp: e.target.value }))}
+                  />
+                  <input
+                    type="password"
+                    placeholder="New Password"
+                    className="form-input"
+                    value={roleResetForm.newPassword}
+                    autoComplete="new-password"
+                    onChange={(e) => setRoleResetForm((current) => ({ ...current, newPassword: e.target.value }))}
+                  />
+                  <input
+                    type="password"
+                    placeholder="Confirm New Password"
+                    className="form-input"
+                    value={roleResetForm.confirmPassword}
+                    autoComplete="new-password"
+                    onChange={(e) => setRoleResetForm((current) => ({ ...current, confirmPassword: e.target.value }))}
+                  />
+                  <MotionButton className="form-btn" disabled={roleResetLoading}>
+                    {roleResetLoading ? renderLoadingLabel("Resetting") : "Reset Password"}
+                  </MotionButton>
+                </>
+              ) : null}
+              <p className="switch-link soft" onClick={() => setActiveForm("login")}>Back to Faculty Login</p>
+            </form>
+          ) : null}
+
+          {selectedRole === "faculty" && activeForm !== "forgot" ? (
+            <form className="card-form login-side" onSubmit={handleFacultyLogin}>
+              <h2>Faculty Login</h2>
+              <input
+                name="facultyEmail"
+                placeholder="Email"
+                className="form-input"
+                value={facultyEmail}
+                inputMode="email"
+                autoComplete="email"
+                onChange={(e) => setFacultyEmail(e.target.value)}
+              />
+              <div className="password-field">
+                <input
+                  name="facultyPassword"
+                  type={showFacultyPassword ? "text" : "password"}
+                  placeholder="Password"
+                  className="form-input"
+                  value={facultyPassword}
+                  autoComplete="current-password"
+                  onChange={(e) => setFacultyPassword(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="eye-btn"
+                  onClick={() => setShowFacultyPassword((v) => !v)}
+                  aria-label={showFacultyPassword ? "Hide password" : "Show password"}
+                >
+                  {showFacultyPassword ? "🙈" : "👁"}
+                </button>
+              </div>
+              <MotionButton className="form-btn" disabled={facultyLoginLoading}>
+                {facultyLoginLoading ? renderLoadingLabel("Logging In") : "Login as Faculty"}
+              </MotionButton>
+              <p className="switch-link soft" onClick={() => setActiveForm("forgot")}>Reset Password</p>
+            </form>
+          ) : null}
+
+          {/* STUDENT LOGIN */}
+          {selectedRole === "student" ? (
+            <form
+              className="card-form login-side"
+              onSubmit={(e) => {
+                if (twoFaRequired || loginMode !== "password") {
+                  e.preventDefault();
+                  return;
+                }
+                handlePasswordLogin(e);
+              }}
+            >
             <h2>{twoFaRequired ? "Verify OTP" : loginMode === "otp" ? "Login with OTP" : "Login"}</h2>
 
             {twoFaRequired ? (
@@ -758,11 +1123,19 @@ export default function Login() {
                 >
                   Login with OTP instead
                 </p>
+                <p
+                  className="switch-link soft"
+                  onClick={() => selectRole("faculty")}
+                >
+                  Faculty Login
+                </p>
               </>
             )}
           </form>
+          ) : null}
 
           {/* SIGNUP */}
+          {selectedRole === "student" ? (
           <form className="card-form signup-side" onSubmit={handleRegister}>
             <h2>Sign Up</h2>
             <input
@@ -937,8 +1310,10 @@ export default function Login() {
               Already have an account?
             </p>
           </form>
+          ) : null}
 
           {/* FORGOT */}
+          {selectedRole === "student" ? (
           <form className="card-form forgot-side" onSubmit={handleResetPassword}>
             <h2>Reset Password</h2>
             <input
@@ -1016,6 +1391,7 @@ export default function Login() {
               )}
             </AnimatePresence>
           </form>
+          ) : null}
         </div>
       </motion.div>
     </div>

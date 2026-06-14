@@ -1,38 +1,58 @@
 "use client";
 
 import { useEffect } from "react";
-import { getAuthToken } from "../../../lib/authStorage.js";
+import {
+  clearAuthSession,
+  clearFacultyAuthSession,
+  getAuthToken,
+  getFacultyAuthToken,
+} from "../../../lib/authStorage.js";
 
 const API_BASE = "";
 const HEARTBEAT_INTERVAL_MS = 60 * 1000;
 
 export default function AuthTabLifecycle() {
   useEffect(() => {
-    const sendHeartbeat = () => {
-      const token = getAuthToken();
-      if (!token) return;
+    const getSessions = () =>
+      [
+        { role: "default", token: getAuthToken(), clear: clearAuthSession },
+        { role: "faculty", token: getFacultyAuthToken(), clear: clearFacultyAuthSession },
+      ].filter((session) => session.token);
 
-      fetch(`${API_BASE}/api/auth/heartbeat`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        cache: "no-store",
-      }).catch(() => {});
+    const expireSession = (session) => {
+      session.clear();
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    };
+
+    const sendHeartbeat = () => {
+      for (const session of getSessions()) {
+        fetch(`${API_BASE}/api/auth/heartbeat`, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${session.token}`,
+          },
+          cache: "no-store",
+        })
+          .then((response) => {
+            if (response.status === 401) expireSession(session);
+          })
+          .catch(() => {});
+      }
     };
 
     const handlePageHide = () => {
-      const token = getAuthToken();
-      if (!token) return;
-
-      fetch(`${API_BASE}/api/auth/tab-close`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        keepalive: true,
-        cache: "no-store",
-      }).catch(() => {});
+      for (const session of getSessions()) {
+        fetch(`${API_BASE}/api/auth/session/close`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${session.token}`,
+          },
+          keepalive: true,
+          cache: "no-store",
+        }).catch(() => {});
+      }
     };
 
     sendHeartbeat();

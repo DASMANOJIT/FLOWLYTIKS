@@ -7,16 +7,40 @@ import {
   listMissingClassSchoolGroups,
   updateClassSchoolGroup,
 } from "../controllers/classSchoolGroupControllers.js";
-import { getAdminHealthCheck } from "../controllers/admincontrollers.js";
-import { adminWriteRateLimit } from "../middleware/security.js";
+import {
+  getAdminHealthCheck,
+  sendAdminResetOtp,
+  verifyAdminResetPassword,
+} from "../controllers/admincontrollers.js";
+import {
+  adminWriteRateLimit,
+  otpSendRateLimit,
+  passwordResetRateLimit,
+} from "../middleware/security.js";
 import { validateBody, validateParams } from "../middleware/validation.js";
 import {
   classSchoolGroupBodySchema,
   classSchoolGroupIdParamSchema,
 } from "../validation/classSchoolGroupSchemas.js";
+import {
+  adminResetPasswordBodySchema,
+  adminResetSendOtpBodySchema,
+} from "../validation/authSchemas.js";
 
 const router = express.Router();
 
+router.post(
+  "/auth/forgot-password/send-otp",
+  otpSendRateLimit,
+  validateBody(adminResetSendOtpBodySchema),
+  sendAdminResetOtp
+);
+router.post(
+  "/auth/forgot-password/verify-reset",
+  passwordResetRateLimit,
+  validateBody(adminResetPasswordBodySchema),
+  verifyAdminResetPassword
+);
 router.get("/health-check", protect, adminOnly, getAdminHealthCheck);
 router.get("/class-school-groups", protect, adminOnly, listClassSchoolGroups);
 router.get(

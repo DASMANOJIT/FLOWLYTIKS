@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import prisma from "../prisma/client.js";
 import { logInfo, logWarn } from "../utils/appLogger.js";
+import { notifyPayoutFailed, notifyPayoutSuccess } from "./notificationService.js";
 
 const DEFAULT_TIMEOUT_MS = 15000;
 const SUCCESS_STATUSES = new Set(["SUCCESS", "COMPLETED", "PAID", "TRANSFER_SUCCESS", "TRANSFER_ACKNOWLEDGED"]);
@@ -24,7 +25,7 @@ export const getCashfreePayoutConfig = () => {
   return {
     clientId: text(process.env.CASHFREE_PAYOUT_CLIENT_ID),
     clientSecret: text(process.env.CASHFREE_PAYOUT_CLIENT_SECRET),
-    webhookSecret: text(process.env.CASHFREE_PAYOUT_WEBHOOK_SECRET || process.env.CASHFREE_PAYOUT_CLIENT_SECRET),
+    webhookSecret: text(process.env.CASHFREE_PAYOUT_WEBHOOK_SECRET),
     environment,
     baseUrl: baseUrl.replace(/\/$/, ""),
     enableRealPayouts: boolEnv(process.env.ENABLE_REAL_CASHFREE_PAYOUTS),
@@ -281,7 +282,129 @@ const applyGatewayStatus = async ({ payout, gatewayPayload, source, dedupeKey })
     payload: gatewayPayload,
     dedupeKey,
   });
+  if (payout.status !== updated.status && (paid || failed)) {
+    const notificationPayout = await prisma.facultyPayout.findUnique({
+      where: { id: updated.id },
+      include: {
+        faculty: true,
+        payroll: { include: { payrollCycle: true } },
+      },
+    });
+    const admin = updated.paidBy
+      ? await prisma.admin.findUnique({ where: { id: Number(updated.paidBy) }, select: { id: true, name: true, email: true } }).catch(() => null)
+      : null;
+    if (paid) {
+      notifyPayoutSuccess({ payout: notificationPayout || updated, admin })
+        .catch((error) => logWarn("faculty_payout.success_notification_failed", { payoutId: updated.id, error: error?.message || error }));
+    }
+    if (failed) {
+      notifyPayoutFailed({ payout: notificationPayout || updated, admin })
+        .catch((error) => logWarn("faculty_payout.failed_notification_failed", { payoutId: updated.id, error: error?.message || error }));
+    }
+  }
+  await syncWeeklyPaymentRecordForPayout(updated.id).catch((error) =>
+    logWarn("faculty_payout.weekly_record_sync_failed", {
+      payoutId: updated.id,
+      error: error?.message || error,
+    })
+  );
   return updated;
+};
+
+const syncWeeklyPaymentRecordForPayout = async (payoutId) => {
+  const payout = await prisma.facultyPayout.findUnique({
+    where: { id: payoutId },
+    include: {
+      faculty: { select: { id: true, facultyId: true, fullName: true } },
+      payroll: { include: { payrollCycle: true } },
+    },
+  });
+  const cycle = payout?.payroll?.payrollCycle;
+  if (!payout || !cycle) return;
+
+  const record = await prisma.weeklyFacultyPaymentRecord.findFirst({
+    where: {
+      OR: [
+        { payrollCycleId: cycle.id },
+        { weekStart: cycle.startDate, weekEnd: cycle.endDate },
+      ],
+    },
+  });
+  if (!record) return;
+
+  const rowStatus =
+    payout.status === "SUCCESS"
+      ? "PAID"
+      : ["FAILED", "REVERSED", "CANCELLED"].includes(payout.status)
+      ? "FAILED"
+      : "PROCESSING";
+
+  await prisma.facultyPaymentRecord.upsert({
+    where: {
+      weeklyPaymentRecordId_facultyId: {
+        weeklyPaymentRecordId: record.id,
+        facultyId: payout.facultyId,
+      },
+    },
+    update: {
+      facultyCode: payout.faculty?.facultyId || "",
+      facultyName: payout.faculty?.fullName || "",
+      attendanceEntries: payout.payroll?.totalEntries || 0,
+      amount: Number(payout.amount || 0),
+      paymentMode: "ONLINE",
+      status: rowStatus,
+      cashfreeTransferId: payout.cashfreeTransferId || null,
+      cashfreeReferenceId: payout.cashfreeReferenceId || null,
+      utr: payout.utr || null,
+      transactionId: payout.transactionId || null,
+      failureReason: payout.failureReason || null,
+      paidAt: payout.paidAt || null,
+    },
+    create: {
+      weeklyPaymentRecordId: record.id,
+      facultyId: payout.facultyId,
+      facultyCode: payout.faculty?.facultyId || "",
+      facultyName: payout.faculty?.fullName || "",
+      attendanceEntries: payout.payroll?.totalEntries || 0,
+      amount: Number(payout.amount || 0),
+      paymentMode: "ONLINE",
+      status: rowStatus,
+      cashfreeTransferId: payout.cashfreeTransferId || null,
+      cashfreeReferenceId: payout.cashfreeReferenceId || null,
+      utr: payout.utr || null,
+      transactionId: payout.transactionId || null,
+      failureReason: payout.failureReason || null,
+      paidAt: payout.paidAt || null,
+    },
+  });
+
+  const rows = await prisma.facultyPaymentRecord.findMany({
+    where: { weeklyPaymentRecordId: record.id },
+  });
+  const totalAmount = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const paidAmount = rows
+    .filter((row) => row.status === "PAID")
+    .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const hasProcessing = rows.some((row) => row.status === "PROCESSING");
+  const hasFailed = rows.some((row) => row.status === "FAILED");
+  const allPaid = rows.length > 0 && rows.every((row) => row.status === "PAID");
+  const nextRecordStatus = allPaid ? "PAID" : hasFailed && !hasProcessing ? "FAILED" : "PROCESSING";
+  const paidAt = allPaid
+    ? rows
+        .map((row) => row.paidAt)
+        .filter(Boolean)
+        .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0] || new Date()
+    : null;
+
+  await prisma.weeklyFacultyPaymentRecord.update({
+    where: { id: record.id },
+    data: {
+      status: nextRecordStatus,
+      paidAmount,
+      pendingAmount: Math.max(0, totalAmount - paidAmount),
+      paidAt,
+    },
+  });
 };
 
 export const initiatePayoutTransfer = async (payoutId, { adminId } = {}) => {
@@ -308,8 +431,11 @@ export const initiatePayoutTransfer = async (payoutId, { adminId } = {}) => {
   const transferId = makeTransferId(payout, retryCount);
   const idempotencyKey = makeIdempotencyKey(payout, retryCount);
   const startedAt = new Date();
-  const prepared = await prisma.facultyPayout.update({
-    where: { id: payout.id },
+  const prepareResult = await prisma.facultyPayout.updateMany({
+    where: {
+      id: payout.id,
+      status: { in: ["PENDING", "FAILED", "CANCELLED", "REVERSED"] },
+    },
     data: {
       status: "PROCESSING",
       idempotencyKey,
@@ -319,6 +445,11 @@ export const initiatePayoutTransfer = async (payoutId, { adminId } = {}) => {
       paidBy: adminId ? String(adminId) : payout.paidBy,
     },
   });
+  if (prepareResult.count !== 1) {
+    throw new Error("Payout is already processing or paid. Sync status before retrying.");
+  }
+  const prepared = await prisma.facultyPayout.findUnique({ where: { id: payout.id } });
+  if (!prepared) throw new Error("Payout not found.");
 
   try {
     const payload = buildTransferPayload(prepared, account, transferId);

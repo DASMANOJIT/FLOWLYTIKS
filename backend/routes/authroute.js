@@ -28,6 +28,7 @@ import {
   twoFactorBodySchema,
   verifyOtpBodySchema,
 } from "../validation/authSchemas.js";
+import { auditAction } from "../services/auditLogService.js";
 
 const router = express.Router();
 
@@ -40,9 +41,11 @@ router.post("/2fa/verify", otpVerifyRateLimit, validateBody(twoFactorBodySchema)
 
 router.post("/login", loginRateLimit, validateBody(loginBodySchema), loginUser);
 router.post("/register", signupRateLimit, validateBody(registerBodySchema), registerUser);
-router.post("/reset-password", passwordResetRateLimit, validateBody(resetPasswordBodySchema), resetPassword);
+router.post("/reset-password", passwordResetRateLimit, validateBody(resetPasswordBodySchema), auditAction({ action: "ADMIN_OR_STUDENT_PASSWORD_RESET", entityType: "Auth", metadata: (req) => ({ email: req.body?.email }) }), resetPassword);
+router.get("/heartbeat", protect, heartbeatSession);
 router.post("/heartbeat", protect, heartbeatSession);
+router.post("/session/close", protect, markTabClosing);
 router.post("/tab-close", protect, markTabClosing);
-router.post("/logout", protect, logoutUser);
+router.post("/logout", protect, auditAction({ action: "USER_LOGOUT", entityType: "Auth", entityId: (req) => req.user?.id }), logoutUser);
 
 export default router;

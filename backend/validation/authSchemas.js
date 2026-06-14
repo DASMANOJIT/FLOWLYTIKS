@@ -72,3 +72,19 @@ export const resetPasswordBodySchema = z.object({
   otp: otpSchema,
   newPassword: z.string().min(8, "Password must be at least 8 characters.").max(200),
 });
+
+export const adminResetSendOtpBodySchema = z.object({
+  email: emailSchema,
+});
+
+export const adminResetPasswordBodySchema = z
+  .object({
+    email: emailSchema,
+    otp: otpSchema,
+    newPassword: z.string().min(8, "Password must be at least 8 characters.").max(200),
+    confirmPassword: z.string().min(1, "Confirm password is required.").max(200),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    path: ["confirmPassword"],
+    message: "Passwords must match.",
+  });

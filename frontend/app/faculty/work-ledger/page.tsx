@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiCall } from "../../../lib/api.js";
-import { getAuthToken } from "../../../lib/authStorage.js";
+import { getFacultyAuthToken } from "../../../lib/authStorage.js";
 import FacultyPortalLayout from "../FacultyPortalLayout";
 import "../../admin/faculty/faculty.css";
 
@@ -15,7 +15,7 @@ type LedgerResponse = { entries: Entry[]; summary: { totalClasses: number; total
 
 export default function FacultyWorkLedgerPage() {
   const router = useRouter();
-  const token = useMemo(() => getAuthToken(), []);
+  const token = useMemo(() => getFacultyAuthToken(), []);
   const now = new Date();
   const [month, setMonth] = useState(String(now.getMonth() + 1));
   const [startDate, setStartDate] = useState("");
@@ -25,7 +25,7 @@ export default function FacultyWorkLedgerPage() {
 
   useEffect(() => {
     if (!token) {
-      router.push("/faculty/login");
+      router.push("/login");
       return;
     }
     const params = new URLSearchParams();

@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { getAuthToken, getAuthRole } from "../../../../lib/authStorage.js";
 import { apiCall } from "../../../../lib/api.js";
+import PremiumLoader from "../../../components/ui/PremiumLoader";
 import "../faculty.css";
 
 type SalaryType = "MONTHLY_FIXED" | "PER_CLASS" | "ATTENDANCE_BASED";
@@ -173,7 +174,7 @@ export default function FacultyProfilePage() {
         </header>
 
         {loading ? (
-          <section className="faculty-panel faculty-loading">Loading faculty profile...</section>
+          <section className="faculty-panel faculty-loading"><PremiumLoader label="Loading faculty profile" /></section>
         ) : error ? (
           <section className="faculty-panel faculty-error">{error}</section>
         ) : !faculty ? (

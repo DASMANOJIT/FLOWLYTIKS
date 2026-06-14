@@ -57,16 +57,21 @@ const assertOptionalPositiveInt = (name) => {
   }
 };
 
+const warnOptionalMissing = (names, label = names.join(" or ")) => {
+  const hasAny = names.some((name) => {
+    const value = process.env[name];
+    return value && String(value).trim();
+  });
+  if (!hasAny) {
+    // Optional integrations should fail cleanly when used, not crash startup.
+    // eslint-disable-next-line no-console
+    console.warn("ENV WARNING:", label, "is not configured");
+  }
+};
+
 export const validateEnv = () => {
   required("DATABASE_URL");
   const jwtSecret = required("JWT_SECRET");
-  const cashfreeClientId = requiredAny(["CASHFREE_CLIENT_ID", "CASHFREE_APP_ID"]);
-  const cashfreeClientSecret = requiredAny([
-    "CASHFREE_CLIENT_SECRET",
-    "CASHFREE_SECRET_KEY",
-  ]);
-  const cashfreeEnvironment = required("CASHFREE_ENVIRONMENT");
-  required("CASHFREE_RETURN_URL");
 
   const databaseUrl = String(process.env.DATABASE_URL || "").trim();
   if (!/^postgres(ql)?:\/\//i.test(databaseUrl)) {
@@ -75,23 +80,31 @@ export const validateEnv = () => {
   if (String(jwtSecret).trim().length < 32) {
     throw new Error("JWT_SECRET must be at least 32 characters long.");
   }
-  if (String(cashfreeClientId).trim().length < 8) {
+
+  const cashfreeClientId = process.env.CASHFREE_CLIENT_ID || process.env.CASHFREE_APP_ID;
+  const cashfreeClientSecret = process.env.CASHFREE_CLIENT_SECRET || process.env.CASHFREE_SECRET_KEY;
+  const cashfreeEnvironment = String(process.env.CASHFREE_ENVIRONMENT || "").trim().toLowerCase();
+  if (cashfreeClientId && String(cashfreeClientId).trim().length < 8) {
     throw new Error("CASHFREE_CLIENT_ID/CASHFREE_APP_ID appears invalid.");
   }
-  if (String(cashfreeClientSecret).trim().length < 16) {
+  if (cashfreeClientSecret && String(cashfreeClientSecret).trim().length < 16) {
     throw new Error("CASHFREE_CLIENT_SECRET/CASHFREE_SECRET_KEY appears invalid.");
   }
-  if (!["sandbox", "production"].includes(String(cashfreeEnvironment).trim().toLowerCase())) {
+  if (cashfreeEnvironment && !["sandbox", "production"].includes(cashfreeEnvironment)) {
     throw new Error("CASHFREE_ENVIRONMENT must be either sandbox or production.");
   }
 
-  required("EMAIL_FROM");
-
   const isProduction = process.env.NODE_ENV === "production";
-  if (isProduction) {
-    required("RESEND_API_KEY");
-    required("BACKEND_URL");
-  }
+  warnOptionalMissing(["CASHFREE_CLIENT_ID", "CASHFREE_APP_ID"], "Cashfree student client id");
+  warnOptionalMissing(["CASHFREE_CLIENT_SECRET", "CASHFREE_SECRET_KEY"], "Cashfree student client secret");
+  warnOptionalMissing(["CASHFREE_ENVIRONMENT"], "Cashfree student environment");
+  warnOptionalMissing(["CASHFREE_RETURN_URL"], "Cashfree student return URL");
+  warnOptionalMissing(["BACKEND_URL"], "Backend public URL");
+  warnOptionalMissing(["EMAIL_FROM"], "Email sender");
+  warnOptionalMissing(["RESEND_API_KEY"], "Resend API key");
+  warnOptionalMissing(["CASHFREE_PAYOUT_CLIENT_ID"], "Cashfree payout client id");
+  warnOptionalMissing(["CASHFREE_PAYOUT_CLIENT_SECRET"], "Cashfree payout client secret");
+
   assertOptionalHttpUrls("FRONTEND_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("BACKEND_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("ALLOWED_ORIGINS", { allowLocal: true });
@@ -108,4 +121,7 @@ export const validateEnv = () => {
   assertOptionalPositiveInt("BACKGROUND_JOB_POLL_INTERVAL_MS");
   assertOptionalPositiveInt("BACKGROUND_JOB_BATCH_SIZE");
   assertOptionalPositiveInt("BACKGROUND_JOB_STALE_MINUTES");
+  assertOptionalPositiveInt("MAX_ACTIVE_SESSIONS_PER_USER");
+  assertOptionalPositiveInt("SESSION_IDLE_TIMEOUT_MINUTES");
+  assertOptionalPositiveInt("ACCESS_TOKEN_EXPIRY_MINUTES");
 };

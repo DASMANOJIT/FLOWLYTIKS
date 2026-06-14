@@ -3,6 +3,9 @@
 const AUTH_TOKEN_KEY = "token";
 const AUTH_NAME_KEY = "studentName";
 const AUTH_ROLE_KEY = "authRole";
+const FACULTY_TOKEN_KEY = "facultyToken";
+const FACULTY_NAME_KEY = "facultyName";
+const FACULTY_ROLE_KEY = "facultyRole";
 const ADMIN_CHAT_HISTORY_PREFIX = "flowlytiks_admin_chat_history_";
 const LEGACY_KEYS = [AUTH_TOKEN_KEY, AUTH_NAME_KEY, AUTH_ROLE_KEY];
 
@@ -92,6 +95,33 @@ export const getAuthName = () => {
   clearLegacyAuthStorage();
   const sessionStorageRef = getBrowserStorage("session");
   return sessionStorageRef?.getItem(AUTH_NAME_KEY)?.trim() || "";
+};
+
+export const storeFacultyAuthSession = ({ token, name }) => {
+  const sessionStorageRef = getBrowserStorage("session");
+  if (!sessionStorageRef) return;
+  sessionStorageRef.setItem(FACULTY_TOKEN_KEY, String(token || ""));
+  sessionStorageRef.setItem(FACULTY_ROLE_KEY, "faculty");
+  if (name) sessionStorageRef.setItem(FACULTY_NAME_KEY, String(name));
+  else sessionStorageRef.removeItem(FACULTY_NAME_KEY);
+};
+
+export const getFacultyAuthToken = () => {
+  const sessionStorageRef = getBrowserStorage("session");
+  return sessionStorageRef?.getItem(FACULTY_TOKEN_KEY)?.trim() || "";
+};
+
+export const getFacultyAuthRole = () => {
+  const sessionStorageRef = getBrowserStorage("session");
+  return sessionStorageRef?.getItem(FACULTY_ROLE_KEY)?.trim() || "";
+};
+
+export const clearFacultyAuthSession = () => {
+  const sessionStorageRef = getBrowserStorage("session");
+  if (!sessionStorageRef) return;
+  sessionStorageRef.removeItem(FACULTY_TOKEN_KEY);
+  sessionStorageRef.removeItem(FACULTY_NAME_KEY);
+  sessionStorageRef.removeItem(FACULTY_ROLE_KEY);
 };
 
 const decodeJwtPayload = (token) => {

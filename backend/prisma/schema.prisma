@@ -99,6 +99,7 @@ model Faculty {
   profilePictures  ProfilePicture[]
   bankAccounts     FacultyBankAccount[]
   payouts          FacultyPayout[]
+  paymentRecords   FacultyPaymentRecord[]
 
   @@index([adminId])
   @@index([status])
@@ -133,6 +134,10 @@ model WorkLedgerEntry {
   remarks      String?
   createdBy    String
   updatedBy    String?
+  updatedByRole String?
+  updatedByName String?
+  updatedByFacultyId String?
+  updatedByAdminId Int?
   createdAt    DateTime               @default(now())
   updatedAt    DateTime               @updatedAt
   faculty      Faculty                @relation(fields: [facultyId], references: [id], onDelete: Restrict)
@@ -157,6 +162,58 @@ model Notification {
 
   @@index([facultyId])
   @@index([isRead])
+  @@index([createdAt])
+}
+
+model NotificationLog {
+  id                String    @id @default(cuid())
+  recipientType     String
+  recipientId       String?
+  recipientEmail    String?
+  recipientPhone    String?
+  channel           String
+  eventType         String
+  title             String
+  message           String
+  status            String    @default("PENDING")
+  providerMessageId String?
+  errorMessage      String?
+  whatsappLink      String?
+  relatedWeekStart  DateTime? @db.Date
+  relatedWeekEnd    DateTime? @db.Date
+  relatedPayrollId  String?
+  relatedPayoutId   String?
+  idempotencyKey    String    @unique
+  createdAt         DateTime  @default(now())
+  sentAt            DateTime?
+
+  @@index([recipientType, recipientId])
+  @@index([channel])
+  @@index([eventType])
+  @@index([status])
+  @@index([relatedWeekStart, relatedWeekEnd])
+  @@index([relatedPayrollId])
+  @@index([relatedPayoutId])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorType    String
+  actorId      String?
+  actorName    String?
+  action       String
+  entityType   String
+  entityId     String?
+  description  String?
+  metadataJson Json?
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  @@index([actorType, actorId])
+  @@index([action])
+  @@index([entityType])
   @@index([createdAt])
 }
 
@@ -240,6 +297,59 @@ model FacultyPaymentHistory {
   @@index([facultyId])
   @@index([payrollId])
   @@index([paymentDate])
+}
+
+model WeeklyFacultyPaymentRecord {
+  id              String                 @id @default(uuid())
+  weekStart       DateTime               @db.Date
+  weekEnd         DateTime               @db.Date
+  totalEntries    Int                    @default(0)
+  facultyCount    Int                    @default(0)
+  totalAmount     Decimal                @default(0) @db.Decimal(12, 2)
+  paidAmount      Decimal                @default(0) @db.Decimal(12, 2)
+  pendingAmount   Decimal                @default(0) @db.Decimal(12, 2)
+  paymentMode     String                 @default("ONLINE")
+  status          String                 @default("UNPAID")
+  paidAt          DateTime?
+  paidByAdminId   Int?
+  paidByAdminName String?
+  remarks         String?
+  payrollCycleId  String?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  facultyRecords  FacultyPaymentRecord[]
+
+  @@unique([weekStart, weekEnd])
+  @@index([status])
+  @@index([paymentMode])
+  @@index([paidAt])
+}
+
+model FacultyPaymentRecord {
+  id                    String                     @id @default(uuid())
+  weeklyPaymentRecordId String
+  facultyId             String
+  facultyCode           String?
+  facultyName           String?
+  attendanceEntries     Int                        @default(0)
+  amount                Decimal                    @default(0) @db.Decimal(12, 2)
+  paymentMode           String                     @default("ONLINE")
+  status                String                     @default("UNPAID")
+  cashfreeTransferId    String?
+  cashfreeReferenceId   String?
+  utr                   String?
+  transactionId         String?
+  failureReason         String?
+  paidAt                DateTime?
+  remarks               String?
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+  weeklyPaymentRecord   WeeklyFacultyPaymentRecord @relation(fields: [weeklyPaymentRecordId], references: [id], onDelete: Cascade)
+  faculty               Faculty                    @relation(fields: [facultyId], references: [id], onDelete: Restrict)
+
+  @@unique([weeklyPaymentRecordId, facultyId])
+  @@index([facultyId])
+  @@index([status])
 }
 
 model FacultyPayrollAudit {
@@ -358,15 +468,24 @@ model AuthRateLimitEvent {
 model UserSession {
   id                 String    @id
   role               String
-  userId             Int
+  userId             String
+  deviceId           String?
+  deviceName         String?
+  userAgent          String?
+  ipAddress          String?
+  isActive           Boolean   @default(true)
   expiresAt          DateTime
+  lastSeenAt         DateTime  @default(now())
   revokedAt          DateTime?
+  revokedReason      String?
   closingRequestedAt DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
   @@index([role, userId])
+  @@index([isActive])
   @@index([expiresAt])
+  @@index([lastSeenAt])
   @@index([revokedAt])
   @@index([closingRequestedAt])
 }

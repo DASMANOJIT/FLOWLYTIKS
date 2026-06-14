@@ -37,6 +37,7 @@ import {
   isValidWhatsAppNumber,
 } from "../../lib/whatsapp.js";
 import useSessionChatHistory from "../../lib/useSessionChatHistory.js";
+import useSessionControl from "../../lib/useSessionControl.js";
 // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
 const API_BASE = "";
 const STUDENT_PAGE_SIZE = 8;
@@ -196,6 +197,7 @@ const AdminFeeStatusChart = dynamic(
 );
 
 export default function AdminDashboard() {
+  useSessionControl("admin");
   const [loading, setLoading] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [adminName, setAdminName] = useState("");
@@ -850,6 +852,8 @@ export default function AdminDashboard() {
         <div className={`nav-links ${menuOpen ? "open" : ""}`}>
           <Link href="/students">Students</Link>
           <Link href="/admin/faculty">Faculty</Link>
+          <Link href="/admin/notifications">Notifications</Link>
+          <Link href="/admin/audit-logs">Audit Logs</Link>
           <Link href="/payments">Payments</Link>
           <MotionButton className="logout-btn" onClick={handleLogout}>Logout</MotionButton>
 

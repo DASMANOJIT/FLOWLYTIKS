@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken";
 import {
   clearSessionClosing,
   getSessionState,
+  touchSessionActivity,
 } from "../utils/sessionStore.js";
 import prisma from "../prisma/client.js";
 
@@ -17,7 +18,7 @@ export const protect = async (req, res, next) => {
     }
 
     if (!token) {
-      return res.status(401).json({ success: false, message: "Not authorized, no token" });
+      return res.status(401).json({ success: false, message: "Authentication required." });
     }
 
     // Verify token
@@ -66,7 +67,7 @@ export const protect = async (req, res, next) => {
     }
 
     if (!user) {
-      return res.status(401).json({ success: false, message: "Not authorized, invalid user" });
+      return res.status(401).json({ success: false, message: "Authentication required." });
     }
 
     if (decoded.jti) {
@@ -74,8 +75,15 @@ export const protect = async (req, res, next) => {
       const active =
         session &&
         session.matchesUser &&
+        session.isActive !== false &&
         !session.revokedAt &&
-        session.expiresAt > new Date();
+        session.expiresAt > new Date() &&
+        session.lastSeenAt > new Date(
+          Date.now() -
+            (Number.parseInt(String(process.env.SESSION_IDLE_TIMEOUT_MINUTES || ""), 10) || 60) *
+              60 *
+              1000
+        );
       if (!active) {
         return res
           .status(401)
@@ -84,6 +92,7 @@ export const protect = async (req, res, next) => {
       if (session.closingRequestedAt) {
         await clearSessionClosing(decoded.role, decoded.id, decoded.jti);
       }
+      await touchSessionActivity(decoded.role, decoded.id, decoded.jti);
     }
 
     // Attach user to request
@@ -95,7 +104,7 @@ export const protect = async (req, res, next) => {
     next();
   } catch (error) {
     console.error("Auth error:", error?.message || error);
-    return res.status(401).json({ success: false, message: "Not authorized, token failed" });
+    return res.status(401).json({ success: false, message: "Authentication required." });
   }
 };
 
@@ -109,7 +118,7 @@ export const protect = async (req, res, next) => {
 
 export const adminOnly = (req, res, next) => {
   if (!req.user || req.userRole !== "admin") {
-    return res.status(403).json({ success: false, message: "Forbidden: Admins only" });
+    return res.status(403).json({ success: false, message: "You do not have permission to perform this action." });
   }
   next();
 };

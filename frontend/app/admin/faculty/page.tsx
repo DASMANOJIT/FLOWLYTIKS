@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, BookOpen, Eye, EyeOff, Plus, X } from "lucide-react";
 import { getAuthToken } from "../../../lib/authStorage.js";
 import { apiCall } from "../../../lib/api.js";
+import PremiumLoader from "../../components/ui/PremiumLoader";
 import "./faculty.css";
 
 type SalaryType = "MONTHLY_FIXED" | "PER_CLASS" | "ATTENDANCE_BASED";
@@ -434,8 +435,8 @@ export default function FacultyManagementPage() {
             <BookOpen size={18} />
             Work Ledger
           </Link>
-          <Link className="faculty-button faculty-button--soft" href="/admin/faculty/payroll">
-            Payroll
+          <Link className="faculty-button faculty-button--soft" href="/admin/faculty/records">
+            Records
           </Link>
         </div>
 
@@ -489,7 +490,7 @@ export default function FacultyManagementPage() {
           </div>
 
           {loading ? (
-            <div className="faculty-loading">Loading faculty records...</div>
+            <div className="faculty-loading"><PremiumLoader label="Loading faculty records" /></div>
           ) : error ? (
             <div className="faculty-error">{error}</div>
           ) : faculty.length === 0 ? (

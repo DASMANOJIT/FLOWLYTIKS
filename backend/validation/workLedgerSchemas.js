@@ -31,7 +31,13 @@ export const workLedgerBodySchema = z.object({
   facultyId: z.uuid("Faculty member is required."),
   date: dateOnly,
   shift: z.enum(workLedgerShifts, { error: "Shift is required." }),
-  amount: z.coerce.number().positive("Amount is required."),
+  amount: z.coerce.number().min(0, "Amount cannot be negative."),
+  remarks: z.preprocess(emptyToNull, z.string().max(1000).nullable().optional()),
+});
+
+export const workLedgerAttendancePatchSchema = z.object({
+  isPresent: z.boolean().optional().default(true),
+  amount: z.coerce.number().min(0, "Amount cannot be negative.").optional().default(0),
   remarks: z.preprocess(emptyToNull, z.string().max(1000).nullable().optional()),
 });
 

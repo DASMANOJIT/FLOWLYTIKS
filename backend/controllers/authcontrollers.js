@@ -5,7 +5,6 @@ import prisma from "../prisma/client.js";
 import {
   addSession,
   clearUserSessions,
-  getActiveSessionCount,
   markSessionClosing,
   removeSession,
   touchSessionActivity,
@@ -29,9 +28,13 @@ import {
 } from "../utils/authValidation.js";
 import { buildRequestLogMeta, logInfo, logWarn } from "../utils/appLogger.js";
 import { resolveDefaultAdminId } from "../services/classSchoolGroupService.js";
+import { createAuditLog } from "../services/auditLogService.js";
 
-const MAX_DEVICES_PER_ACCOUNT = 2;
 const INVALID_CREDENTIALS_MESSAGE = "Invalid credentials.";
+const accessTokenExpiryMinutes = () => {
+  const value = Number.parseInt(String(process.env.ACCESS_TOKEN_EXPIRY_MINUTES || ""), 10);
+  return Number.isFinite(value) && value > 0 ? value : 30;
+};
 
 const maskEmailForLog = (email) => {
   const value = String(email || "").trim().toLowerCase();
@@ -130,23 +133,15 @@ const getStudentRegistrationValidationError = ({
 };
 
 const issueToken = async ({ role, id }) => {
-  const currentActive = await getActiveSessionCount(role, id);
-  if (currentActive >= MAX_DEVICES_PER_ACCOUNT) {
-    const err = new Error(
-      "Login limit reached (2 devices). Logout from another device first."
-    );
-    err.status = 403;
-    throw err;
-  }
-
   const tokenId = crypto.randomUUID();
+  const expiryMinutes = accessTokenExpiryMinutes();
   const token = jwt.sign({ id, role }, process.env.JWT_SECRET, {
     algorithm: "HS256",
-    expiresIn: "7d",
+    expiresIn: `${expiryMinutes}m`,
     jwtid: tokenId,
   });
   const decoded = jwt.decode(token);
-  const expMs = decoded?.exp ? decoded.exp * 1000 : Date.now() + 7 * 86400000;
+  const expMs = decoded?.exp ? decoded.exp * 1000 : Date.now() + expiryMinutes * 60000;
   await addSession(role, id, tokenId, expMs);
   return token;
 };
@@ -289,6 +284,16 @@ export const loginUser = async (req, res) => {
         return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
       }
       const token = await issueToken({ role: "student", id: student.id });
+      createAuditLog({
+        req,
+        actorType: "STUDENT",
+        actorId: student.id,
+        actorName: student.name,
+        action: "STUDENT_LOGIN",
+        entityType: "Auth",
+        entityId: student.id,
+        metadata: { method: "otp" },
+      });
       logInfo("auth.login_success", {
         ...requestMeta,
         role: "student",
@@ -318,6 +323,16 @@ export const loginUser = async (req, res) => {
           return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
         }
         const token = await issueToken({ role: "admin", id: admin.id });
+        createAuditLog({
+          req,
+          actorType: "ADMIN",
+          actorId: admin.id,
+          actorName: admin.name,
+          action: "ADMIN_LOGIN",
+          entityType: "Auth",
+          entityId: admin.id,
+          metadata: { method: "password" },
+        });
         logInfo("auth.login_success", {
           ...requestMeta,
           role: "admin",
@@ -387,6 +402,16 @@ export const loginUser = async (req, res) => {
       }
 
       const token = await issueToken({ role: "student", id: student.id });
+      createAuditLog({
+        req,
+        actorType: "STUDENT",
+        actorId: student.id,
+        actorName: student.name,
+        action: "STUDENT_LOGIN",
+        entityType: "Auth",
+        entityId: student.id,
+        metadata: { method: "password" },
+      });
       logInfo("auth.login_success", {
         ...requestMeta,
         role: "student",
@@ -570,13 +595,13 @@ export const markTabClosing = async (req, res) => {
 export const heartbeatSession = async (req, res) => {
   try {
     if (!req.user || !req.userRole || !req.tokenId) {
-      return res.json({ success: true, active: true });
+      return res.status(401).json({ success: false, message: "Session expired. Please login again." });
     }
 
     await touchSessionActivity(req.userRole, req.user.id, req.tokenId);
-    return res.json({ success: true, active: true });
+    return res.json({ success: true, active: true, message: "Session active." });
   } catch (err) {
     console.error("SESSION HEARTBEAT ERROR:", err?.message || err);
-    return res.json({ success: true, active: false });
+    return res.status(401).json({ success: false, message: "Session expired. Please login again." });
   }
 };

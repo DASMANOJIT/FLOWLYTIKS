@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import prisma from "../prisma/client.js";
 import { logInfo, logError, buildRequestLogMeta } from "../utils/appLogger.js";
 import { successResponse, errorResponse } from "../utils/apiResponse.js";
+import { clearUserSessions } from "../utils/sessionStore.js";
 
 const FACULTY_SELECT = {
   id: true,
@@ -370,7 +371,8 @@ export const changeMyFacultyPassword = async (req, res) => {
       where: { id: req.user.id },
       data: { passwordHash },
     });
-    return res.json({ success: true, message: "Password changed successfully." });
+    await clearUserSessions("faculty", req.user.id);
+    return res.json({ success: true, message: "Password changed successfully. Please login again." });
   } catch (error) {
     return handleFacultyError(res, error);
   }
@@ -395,12 +397,19 @@ export const getFacultyById = async (req, res) => {
 
 export const updateFaculty = async (req, res) => {
   try {
+    const { password, confirmPassword, ...facultyData } = req.body;
+    const updateData = {
+      ...facultyData,
+      phone: normalizePhone(facultyData.phone),
+    };
+
+    if (password) {
+      updateData.passwordHash = await bcrypt.hash(password, 10);
+    }
+
     const faculty = await prisma.faculty.update({
       where: { id: req.params.id },
-      data: {
-        ...req.body,
-        phone: normalizePhone(req.body.phone),
-      },
+      data: updateData,
       select: FACULTY_SELECT,
     });
 

@@ -239,6 +239,14 @@ export const paymentInitiationRateLimit = createRateLimiter({
   keyGenerator: (req) => getAuthenticatedRequester(req),
 });
 
+export const exportRateLimit = createRateLimiter({
+  namespace: "reports:export",
+  windowMs: 60 * 1000,
+  max: 20,
+  message: "Too many export requests. Please wait a moment and try again.",
+  keyGenerator: (req) => getAuthenticatedRequester(req),
+});
+
 export const purgeAuthRateLimitEvents = async () => {
   const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
   try {

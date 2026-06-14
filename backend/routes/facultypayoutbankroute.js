@@ -16,14 +16,15 @@ import {
   updateMyBankAccount,
   verifyBankAccount,
 } from "../controllers/facultypayoutbankcontrollers.js";
+import { auditAction } from "../services/auditLogService.js";
 
 const router = express.Router();
 
-router.post("/", protect, adminOnly, adminWriteRateLimit, validateBody(facultyBankCreateSchema), createBankAccount);
-router.put("/:id", protect, adminOnly, adminWriteRateLimit, validateParams(bankIdParamSchema), validateBody(facultyBankUpdateSchema), updateBankAccount);
-router.patch("/me", protect, adminWriteRateLimit, validateBody(facultySelfBankUpdateSchema), updateMyBankAccount);
+router.post("/", protect, adminOnly, adminWriteRateLimit, validateBody(facultyBankCreateSchema), auditAction({ action: "FACULTY_PAYOUT_DETAILS_CREATED_BY_ADMIN", entityType: "FacultyBankAccount", metadata: (req) => req.body }), createBankAccount);
+router.put("/:id", protect, adminOnly, adminWriteRateLimit, validateParams(bankIdParamSchema), validateBody(facultyBankUpdateSchema), auditAction({ action: "FACULTY_PAYOUT_DETAILS_UPDATED_BY_ADMIN", entityType: "FacultyBankAccount", entityId: (req) => req.params.id, metadata: (req) => req.body }), updateBankAccount);
+router.patch("/me", protect, adminWriteRateLimit, validateBody(facultySelfBankUpdateSchema), auditAction({ action: "FACULTY_PAYOUT_DETAILS_UPDATED", entityType: "FacultyBankAccount", metadata: (req) => req.body }), updateMyBankAccount);
 router.get("/me", protect, getBankAccountByFaculty);
 router.get("/faculty/:facultyId", protect, validateParams(facultyIdParamSchema), getBankAccountByFaculty);
-router.post("/:id/verify", protect, adminOnly, validateParams(bankIdParamSchema), verifyBankAccount);
+router.post("/:id/verify", protect, adminOnly, adminWriteRateLimit, validateParams(bankIdParamSchema), auditAction({ action: "FACULTY_PAYOUT_DETAILS_VERIFIED_OR_REJECTED", entityType: "FacultyBankAccount", entityId: (req) => req.params.id, metadata: (req) => req.body }), verifyBankAccount);
 
 export default router;

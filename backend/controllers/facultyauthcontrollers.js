@@ -3,14 +3,18 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import prisma from "../prisma/client.js";
 import { logInfo, logWarn } from "../utils/appLogger.js";
+import { sendEmailOtp, verifyEmailOtp } from "../services/emailOtpService.js";
 import {
   isWhatsAppConfigured,
   sendWhatsAppTextMessage,
 } from "../services/whatsappservice.js";
+import { createAuditLog } from "../services/auditLogService.js";
+import { addSession, clearUserSessions } from "../utils/sessionStore.js";
 
 const OTP_EXPIRY_MS = 5 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 15 * 1000;
 const MAX_ATTEMPTS = 5;
+const FACULTY_EMAIL_RESET_PURPOSE = "faculty_reset";
 
 const normalizePhone = (value) => String(value || "").replace(/\D/g, "");
 
@@ -20,11 +24,24 @@ const authResponse = (res, status, payload) =>
     ...payload,
   });
 
-const issueFacultyToken = (faculty) =>
-  jwt.sign({ id: faculty.id, role: "faculty" }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || "7d",
+const accessTokenExpiryMinutes = () => {
+  const value = Number.parseInt(String(process.env.ACCESS_TOKEN_EXPIRY_MINUTES || ""), 10);
+  return Number.isFinite(value) && value > 0 ? value : 30;
+};
+
+const issueFacultyToken = async (faculty) => {
+  const tokenId = crypto.randomUUID();
+  const expiryMinutes = accessTokenExpiryMinutes();
+  const token = jwt.sign({ id: faculty.id, role: "faculty" }, process.env.JWT_SECRET, {
+    expiresIn: `${expiryMinutes}m`,
     algorithm: "HS256",
+    jwtid: tokenId,
   });
+  const decoded = jwt.decode(token);
+  const expMs = decoded?.exp ? decoded.exp * 1000 : Date.now() + expiryMinutes * 60000;
+  await addSession("faculty", faculty.id, tokenId, expMs);
+  return token;
+};
 
 const generateOtp = () => String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
 
@@ -55,25 +72,38 @@ export const loginFaculty = async (req, res) => {
       ? await bcrypt.compare(req.body.password, faculty.passwordHash)
       : false;
     if (!faculty || !isMatch) {
-      logWarn("faculty.login_failed", { phone: maskPhone(phone) });
-      return authResponse(res, 401, { message: "Invalid email/phone or password." });
+      logWarn("faculty.login_failed", { phone: maskPhone(phone), email: email ? "provided" : "missing" });
+      return authResponse(res, 401, { message: "Invalid email or password." });
     }
     if (faculty.status !== "ACTIVE") {
       return authResponse(res, 403, { message: "Faculty account is inactive." });
     }
 
-    const token = issueFacultyToken(faculty);
+    const token = await issueFacultyToken(faculty);
+    createAuditLog({
+      req,
+      actorType: "FACULTY",
+      actorId: faculty.id,
+      actorName: faculty.fullName,
+      action: "FACULTY_LOGIN",
+      entityType: "Auth",
+      entityId: faculty.id,
+      metadata: { method: "password" },
+    });
     logInfo("faculty.login_success", { facultyId: faculty.id });
     return authResponse(res, 200, {
+      message: "Faculty login successful.",
       token,
       role: "faculty",
       name: faculty.fullName,
       faculty: {
         id: faculty.id,
         facultyId: faculty.facultyId,
+        name: faculty.fullName,
         fullName: faculty.fullName,
         email: faculty.email || null,
         phone: faculty.phone || null,
+        status: faculty.status,
       },
     });
   } catch (error) {
@@ -84,6 +114,20 @@ export const loginFaculty = async (req, res) => {
 
 export const sendFacultyPasswordOtp = async (req, res) => {
   try {
+    const email = req.body.email ? String(req.body.email).trim().toLowerCase() : null;
+    if (email) {
+      const faculty = await prisma.faculty.findFirst({
+        where: { email: { equals: email, mode: "insensitive" } },
+        select: { id: true },
+      });
+      if (!faculty) {
+        return authResponse(res, 404, { message: "Faculty account not found." });
+      }
+
+      await sendEmailOtp({ email, purpose: FACULTY_EMAIL_RESET_PURPOSE });
+      return authResponse(res, 200, { message: "OTP sent successfully." });
+    }
+
     const phone = normalizePhone(req.body.phone);
     const faculty = await prisma.faculty.findUnique({
       where: { phone },
@@ -151,6 +195,38 @@ export const sendFacultyPasswordOtp = async (req, res) => {
   }
 };
 
+export const verifyFacultyEmailResetPassword = async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const { otp, newPassword } = req.body;
+    const faculty = await prisma.faculty.findFirst({
+      where: { email: { equals: email, mode: "insensitive" } },
+      select: { id: true },
+    });
+    if (!faculty) {
+      return authResponse(res, 404, { message: "Faculty account not found." });
+    }
+
+    await verifyEmailOtp({ email, purpose: FACULTY_EMAIL_RESET_PURPOSE, code: otp });
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await prisma.faculty.update({
+      where: { id: faculty.id },
+      data: { passwordHash },
+    });
+    await clearUserSessions("faculty", faculty.id);
+    return authResponse(res, 200, { message: "Password reset successful. Please login again." });
+  } catch (error) {
+    if (error?.status) {
+      return authResponse(res, error.status, {
+        message: error.message,
+        ...(error.retryAfter ? { retryAfter: error.retryAfter } : {}),
+      });
+    }
+    console.error("Faculty email password reset error:", error?.message || error);
+    return authResponse(res, 500, { message: "Password reset failed. Please try again." });
+  }
+};
+
 export const verifyFacultyPasswordOtp = async (req, res) => {
   try {
     const phone = normalizePhone(req.body.phone);
@@ -214,13 +290,16 @@ export const resetFacultyPassword = async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(req.body.password, 10);
-    await prisma.$transaction([
-      prisma.faculty.update({
+    const faculty = await prisma.$transaction(async (tx) => {
+      const updatedFaculty = await tx.faculty.update({
         where: { phone },
         data: { passwordHash },
-      }),
-      prisma.facultyPasswordOtp.delete({ where: { id: record.id } }),
-    ]);
+        select: { id: true },
+      });
+      await tx.facultyPasswordOtp.delete({ where: { id: record.id } });
+      return updatedFaculty;
+    });
+    await clearUserSessions("faculty", faculty.id);
     return authResponse(res, 200, { message: "Password reset successfully." });
   } catch (error) {
     console.error("Faculty password reset error:", error?.message || error);

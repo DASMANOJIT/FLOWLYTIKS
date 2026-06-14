@@ -11,8 +11,6 @@ import {
   ChevronRight,
   Download,
   FileSpreadsheet,
-  MessageSquare,
-  Plus,
   Save,
   Trash2,
   X,
@@ -20,6 +18,7 @@ import {
 import * as XLSX from "xlsx";
 import { getAuthRole, getAuthToken, getAuthUserId } from "../../../../lib/authStorage.js";
 import { apiCall } from "../../../../lib/api.js";
+import PremiumLoader from "../../../components/ui/PremiumLoader";
 import "../faculty.css";
 
 type Shift = "MORNING" | "AFTERNOON" | "EVENING";
@@ -34,12 +33,16 @@ type FacultyOption = {
 type LedgerEntry = {
   id: string;
   facultyId: string;
+  facultyCode?: string;
+  facultyName?: string;
   date: string;
   shift: Shift;
   amount: number;
   remarks: string | null;
   createdBy: string;
   updatedBy: string | null;
+  updatedByRole?: string | null;
+  updatedByName?: string | null;
   createdAt: string;
   updatedAt: string;
   faculty: FacultyOption & { designation?: string | null };
@@ -88,13 +91,20 @@ type FacultyListResponse = {
 
 type LedgerListResponse = {
   entries?: LedgerEntry[];
+  days?: WorkLedgerDay[];
+  calendarRows?: WorkLedgerCalendarRow[];
   summary?: LedgerSummary;
+  isLocked?: boolean;
+  lockReason?: string | null;
 };
 
 type AttendanceCell = {
   present: boolean;
   id?: string;
   amount: number;
+  updatedAt?: string | null;
+  updatedByName?: string | null;
+  updatedByRole?: string | null;
 };
 
 type AttendanceGridRow = {
@@ -109,6 +119,58 @@ type AttendanceGridRow = {
 type AttendanceGridResponse = {
   days?: string[];
   grid?: AttendanceGridRow[];
+};
+
+type WorkLedgerDay = {
+  date: string;
+  day: string;
+  shifts: Record<Shift, LedgerEntry[]>;
+  dailyTotal: number;
+};
+
+type WorkLedgerCalendarCell = {
+  entries: LedgerEntry[];
+  totalAmount: number;
+  entryCount: number;
+};
+
+type WorkLedgerCalendarRow = {
+  date: string;
+  displayDate?: string;
+  dayName: string;
+  cells: Record<string, WorkLedgerCalendarCell>;
+  dailyTotal: number;
+};
+
+type SelectedDayCell = {
+  date: string;
+  day: string;
+  entries: LedgerEntry[];
+} | null;
+
+type WeeklyPaymentStatus = {
+  weekStart: string;
+  weekEnd: string;
+  totalEntries: number;
+  facultyCount: number;
+  totalAmount: number;
+  paidAmount: number;
+  pendingAmount: number;
+  paymentMode: string | null;
+  status: string;
+  paidAt: string | null;
+  paidByAdminName?: string;
+  remarks?: string;
+  canPay: boolean;
+  facultyBreakdown: Array<{
+    facultyId: string;
+    facultyCode?: string;
+    facultyName?: string;
+    attendanceEntries: number;
+    amount: number;
+    status?: string;
+  }>;
+  record?: { id: string } | null;
 };
 
 const shifts: Array<{ value: Shift; label: string }> = [
@@ -150,6 +212,64 @@ const formatDisplayDate = (dateKey: string) =>
     year: "numeric",
   });
 
+const formatUpdatedAt = (value?: string | null) => {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).format(date);
+};
+
+const buildLocalLedgerDays = (rows: LedgerEntry[], dateKeys: string[]): WorkLedgerDay[] =>
+  dateKeys.map((dateKey) => {
+    const shiftsByKey = {
+      MORNING: [] as LedgerEntry[],
+      AFTERNOON: [] as LedgerEntry[],
+      EVENING: [] as LedgerEntry[],
+    };
+    rows.forEach((entry) => {
+      if (entry.date === dateKey) {
+        shiftsByKey[entry.shift].push(entry);
+      }
+    });
+    return {
+      date: dateKey,
+      day: parseDateKey(dateKey).toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" }),
+      shifts: shiftsByKey,
+      dailyTotal: shifts.reduce((total, shift) => total + shiftsByKey[shift.value].reduce((sum, entry) => sum + Number(entry.amount || 0), 0), 0),
+    };
+  });
+
+const buildLocalCalendarRows = (rows: LedgerEntry[], dateKeys: string[]): WorkLedgerCalendarRow[] =>
+  buildLocalLedgerDays(rows, dateKeys).map((day) => {
+    const dayEntries = shifts.flatMap((shift) => day.shifts[shift.value] || []);
+    return {
+      date: day.date,
+      displayDate: `${day.date.slice(8, 10)}/${day.date.slice(5, 7)}/${day.date.slice(2, 4)}`,
+      dayName: day.day,
+      dailyTotal: day.dailyTotal,
+      cells: Object.fromEntries(
+        dayLabels.map((label) => {
+          const entriesForCell = label === day.day ? dayEntries : [];
+          return [
+            label,
+            {
+              entries: entriesForCell,
+              totalAmount: entriesForCell.reduce((total, entry) => total + Number(entry.amount || 0), 0),
+              entryCount: entriesForCell.length,
+            },
+          ];
+        })
+      ) as Record<string, WorkLedgerCalendarCell>,
+    };
+  });
+
 const monthKey = (date = new Date()) => date.toISOString().slice(0, 7);
 
 const emptySummary: LedgerSummary = {
@@ -167,6 +287,10 @@ export default function FacultyWorkLedgerPage() {
   const router = useRouter();
   const [weekStart, setWeekStart] = useState(() => getFridayWeekStart());
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
+  const [ledgerDays, setLedgerDays] = useState<WorkLedgerDay[]>([]);
+  const [calendarRows, setCalendarRows] = useState<WorkLedgerCalendarRow[]>([]);
+  const [isWeekLocked, setIsWeekLocked] = useState(false);
+  const [lockReason, setLockReason] = useState<string | null>(null);
   const [attendanceGrid, setAttendanceGrid] = useState<AttendanceGridRow[]>([]);
   const [attendanceDays, setAttendanceDays] = useState<string[]>([]);
   const [faculty, setFaculty] = useState<FacultyOption[]>([]);
@@ -182,6 +306,16 @@ export default function FacultyWorkLedgerPage() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState<Toast>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [detailsCell, setDetailsCell] = useState<SelectedDayCell>(null);
+  const [detailsDrafts, setDetailsDrafts] = useState<Record<string, { present: boolean; amount: string; remarks: string }>>({});
+  const [detailsMessage, setDetailsMessage] = useState<Toast>(null);
+  const [paymentStatus, setPaymentStatus] = useState<WeeklyPaymentStatus | null>(null);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [paymentActionLoading, setPaymentActionLoading] = useState(false);
+  const [cashPaidAt, setCashPaidAt] = useState(() => toDateKey(new Date()));
+  const [cashRemarks, setCashRemarks] = useState("");
+  const [cashConfirmed, setCashConfirmed] = useState(false);
   const [editingEntry, setEditingEntry] = useState<LedgerEntry | null>(null);
   const [form, setForm] = useState<EntryForm>({
     facultyId: "",
@@ -259,22 +393,17 @@ export default function FacultyWorkLedgerPage() {
         null,
         token
       );
-      setEntries(Array.isArray(data.entries) ? data.entries : []);
+      const nextEntries = Array.isArray(data.entries) ? data.entries : [];
+      const nextDays = Array.isArray(data.days) ? data.days : buildLocalLedgerDays(nextEntries, weekDates);
+      setEntries(nextEntries);
+      setLedgerDays(nextDays);
+      setCalendarRows(Array.isArray(data.calendarRows) ? data.calendarRows : buildLocalCalendarRows(nextEntries, weekDates));
       setSummary(data.summary || emptySummary);
+      setIsWeekLocked(Boolean(data.isLocked));
+      setLockReason(data.lockReason || null);
       if (mode === "week") {
-        try {
-          const gridData = await callApi<AttendanceGridResponse>(
-            `/faculty/attendance?weekStart=${toDateKey(weekStart)}`,
-            "GET",
-            null,
-            token
-          );
-          setAttendanceGrid(Array.isArray(gridData.grid) ? gridData.grid : []);
-          setAttendanceDays(Array.isArray(gridData.days) ? gridData.days : weekDates);
-        } catch {
-          setAttendanceGrid([]);
-          setAttendanceDays(weekDates);
-        }
+        setAttendanceGrid([]);
+        setAttendanceDays(weekDates);
       } else {
         setAttendanceGrid([]);
         setAttendanceDays([]);
@@ -285,6 +414,27 @@ export default function FacultyWorkLedgerPage() {
       setLoading(false);
     }
   }, [mode, queryString, token, weekDates, weekStart]);
+
+  const loadPaymentStatus = useCallback(async () => {
+    if (!token || !isAdmin || mode !== "week") {
+      setPaymentStatus(null);
+      return;
+    }
+    setPaymentLoading(true);
+    try {
+      const data = await callApi<WeeklyPaymentStatus>(
+        `/faculty-weekly-payments/status?weekStart=${toDateKey(weekStart)}&weekEnd=${weekEnd}`,
+        "GET",
+        null,
+        token
+      );
+      setPaymentStatus(data);
+    } catch {
+      setPaymentStatus(null);
+    } finally {
+      setPaymentLoading(false);
+    }
+  }, [isAdmin, mode, token, weekEnd, weekStart]);
 
   useEffect(() => {
     // Read auth info only on client after mount to avoid hydration mismatch
@@ -307,16 +457,55 @@ export default function FacultyWorkLedgerPage() {
     loadEntries();
   }, [hasMounted, token, loadEntries]);
 
-  const entriesByCell = useMemo(() => {
-    const map = new Map<string, LedgerEntry[]>();
-    for (const entry of entries) {
-      const key = `${entry.date}:${entry.shift}`;
-      const current = map.get(key) || [];
-      current.push(entry);
-      map.set(key, current);
+  useEffect(() => {
+    if (!hasMounted || !token) return;
+    loadPaymentStatus();
+  }, [hasMounted, token, loadPaymentStatus]);
+
+  const refreshLedgerAndPayment = async () => {
+    await Promise.all([loadEntries(), loadPaymentStatus()]);
+  };
+
+  const payOnline = async () => {
+    if (!token || !paymentStatus) return;
+    setPaymentActionLoading(true);
+    try {
+      await callApi(
+        "/faculty-weekly-payments/pay-online",
+        "POST",
+        { weekStart: paymentStatus.weekStart, weekEnd: paymentStatus.weekEnd },
+        token
+      );
+      setPaymentModalOpen(false);
+      showToast({ type: "success", message: "Online faculty payouts initiated for this week." });
+      await refreshLedgerAndPayment();
+    } catch (error) {
+      showToast({ type: "error", message: error instanceof Error ? error.message : "Failed to initiate online payout." });
+    } finally {
+      setPaymentActionLoading(false);
     }
-    return map;
-  }, [entries]);
+  };
+
+  const payCash = async () => {
+    if (!token || !paymentStatus || !cashConfirmed) return;
+    setPaymentActionLoading(true);
+    try {
+      await callApi(
+        "/faculty-weekly-payments/pay-cash",
+        "POST",
+        { weekStart: paymentStatus.weekStart, weekEnd: paymentStatus.weekEnd, paidAt: cashPaidAt, remarks: cashRemarks },
+        token
+      );
+      setPaymentModalOpen(false);
+      setCashConfirmed(false);
+      showToast({ type: "success", message: "Faculty week marked paid in cash." });
+      await refreshLedgerAndPayment();
+    } catch (error) {
+      showToast({ type: "error", message: error instanceof Error ? error.message : "Failed to record cash payment." });
+    } finally {
+      setPaymentActionLoading(false);
+    }
+  };
 
   const facultyOptions = useMemo(() => {
     const map = new Map<string, FacultyOption>();
@@ -425,6 +614,72 @@ export default function FacultyWorkLedgerPage() {
     }
   };
 
+  const openDetailsModal = (row: WorkLedgerCalendarRow, dayLabel: string) => {
+    const cellEntries = row.cells?.[dayLabel]?.entries || [];
+    setDetailsCell({ date: row.date, day: row.dayName || dayLabel, entries: cellEntries });
+    setDetailsDrafts(
+      Object.fromEntries(
+        cellEntries.map((entry) => [
+          entry.id,
+          {
+            present: true,
+            amount: String(entry.amount ?? 0),
+            remarks: entry.remarks || "",
+          },
+        ])
+      )
+    );
+    setDetailsMessage(null);
+  };
+
+  const updateDetailsDraft = (entryId: string, patch: Partial<{ present: boolean; amount: string; remarks: string }>) => {
+    setDetailsDrafts((current) => ({
+      ...current,
+      [entryId]: {
+        present: current[entryId]?.present ?? true,
+        amount: current[entryId]?.amount ?? "0",
+        remarks: current[entryId]?.remarks ?? "",
+        ...patch,
+      },
+    }));
+  };
+
+  const saveDetailsEntry = async (entry: LedgerEntry) => {
+    if (!token || !detailsCell) return;
+    const draft = detailsDrafts[entry.id] || { present: true, amount: String(entry.amount || 0), remarks: entry.remarks || "" };
+    const amount = Math.max(0, Number(draft.amount || 0) || 0);
+    setSubmitting(true);
+    setDetailsMessage(null);
+    try {
+      await callApi(
+        `/work-ledger/attendance/${entry.id}`,
+        "PATCH",
+        {
+          isPresent: draft.present,
+          amount: draft.present ? amount : 0,
+          remarks: draft.remarks,
+        },
+        token
+      );
+      setDetailsMessage({ type: "success", message: "Attendance updated successfully." });
+      await loadEntries();
+      setDetailsCell((current) =>
+        current
+          ? {
+              ...current,
+              entries: draft.present
+                ? current.entries.map((item) => item.id === entry.id ? { ...item, amount, remarks: draft.remarks } : item)
+                : current.entries.filter((item) => item.id !== entry.id),
+            }
+          : current
+      );
+    } catch (error) {
+      setDetailsMessage({ type: "error", message: error instanceof Error ? error.message : "Failed to update attendance." });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const toggleAttendanceCell = async (
     row: AttendanceGridRow,
     date: string,
@@ -459,16 +714,15 @@ export default function FacultyWorkLedgerPage() {
     setWeekStart(getFridayWeekStart());
   };
 
-  const setTodayFilter = () => {
-    const today = toDateKey(new Date());
-    setMode("custom");
-    setStartDate(today);
-    setEndDate(today);
-  };
-
-  const setCurrentMonth = () => {
-    setMode("month");
-    setMonthFilter(monthKey());
+  const resetFilters = () => {
+    setSearch("");
+    setFacultyFilter("all");
+    setShiftFilter("all");
+    setMonthFilter("");
+    setStartDate("");
+    setEndDate("");
+    setMode("week");
+    setWeekStart(getFridayWeekStart());
   };
 
   const exportCsv = async () => {
@@ -504,10 +758,12 @@ export default function FacultyWorkLedgerPage() {
       Shift: entry.shift,
       "Faculty ID": entry.faculty?.facultyId || "",
       "Faculty Name": entry.faculty?.fullName || "",
+      Status: "Present",
       Amount: entry.amount,
       Remarks: entry.remarks || "",
       "Created By": entry.createdBy,
-      "Updated By": entry.updatedBy || "",
+      "Updated By": entry.updatedByName || entry.updatedBy || "",
+      "Updated By Role": entry.updatedByRole || "",
       "Created At": entry.createdAt,
       "Updated At": entry.updatedAt,
     }));
@@ -516,11 +772,6 @@ export default function FacultyWorkLedgerPage() {
     XLSX.utils.book_append_sheet(workbook, worksheet, "Work Ledger");
     XLSX.writeFile(workbook, `faculty-work-ledger-${Date.now()}.xlsx`);
   };
-
-  const displayedDates =
-    mode === "week"
-      ? weekDates
-      : Array.from(new Set(entries.map((entry) => entry.date))).sort();
 
   return (
     <main className="faculty-page">
@@ -629,22 +880,14 @@ export default function FacultyWorkLedgerPage() {
                 }}
               />
             </div>
-            <div className="faculty-field">
-              <label>Quick Filters</label>
-              <div className="ledger-quick-filters">
-                <button className="faculty-button faculty-button--ghost" onClick={setTodayFilter}>
-                  Today
-                </button>
-                <button className="faculty-button faculty-button--ghost" onClick={setCurrentWeek}>
-                  Current Week
-                </button>
-                <button className="faculty-button faculty-button--ghost" onClick={setCurrentMonth}>
-                  Current Month
-                </button>
-              </div>
+            <div className="faculty-field faculty-field--actions">
+              <label>Filters</label>
+              <button className="faculty-button faculty-button--ghost" onClick={resetFilters}>
+                Reset Filters
+              </button>
             </div>
             {hasMounted && isAdmin ? (
-              <div className="faculty-field">
+              <div className="faculty-field faculty-field--actions">
                 <label>Export</label>
                 <div className="ledger-export-actions">
                   <button className="faculty-button faculty-button--soft" onClick={exportCsv}>
@@ -661,158 +904,302 @@ export default function FacultyWorkLedgerPage() {
           </div>
         </section>
 
-        <div className="ledger-layout">
-          <section className="faculty-panel ledger-grid-panel">
+        {isAdmin && mode === "week" ? (
+          <section className="faculty-panel weekly-payment-panel">
+            <div className="faculty-section-heading">
+              <div>
+                <h2>Weekly Payment</h2>
+                <p>Selected Week: {formatDisplayDate(toDateKey(weekStart))} to {formatDisplayDate(weekEnd)}</p>
+              </div>
+              <span className={`faculty-status faculty-status--${paymentStatus?.status || "UNPAID"}`}>
+                {paymentLoading ? "Loading" : paymentStatus?.status || "Unpaid"}
+              </span>
+            </div>
+            <div className="ledger-summary">
+              <SummaryCard label="Attendance Entries" value={paymentStatus?.totalEntries ?? summary.totalEntries} />
+              <SummaryCard label="Faculty Participated" value={paymentStatus?.facultyCount ?? summary.totalFacultyParticipated} />
+              <SummaryCard label="Total Payable" value={money(paymentStatus?.totalAmount ?? summary.currentWeekTotal)} />
+              <SummaryCard label="Payment Mode" value={paymentStatus?.paymentMode || "-"} />
+            </div>
+            {paymentStatus?.status === "PAID" ? (
+              <div className="faculty-toast--success">
+                Paid on {paymentStatus.paidAt ? formatUpdatedAt(paymentStatus.paidAt) : "-"} via {paymentStatus.paymentMode || "-"}.
+                {paymentStatus.record?.id ? (
+                  <Link href="/admin/faculty/records" className="faculty-inline-link"> View Record</Link>
+                ) : null}
+              </div>
+            ) : paymentStatus?.status === "PROCESSING" ? (
+              <div className="faculty-toast--success">Online payout is processing. Attendance editing is locked.</div>
+            ) : null}
+            <button
+              className="faculty-button faculty-button--primary"
+              disabled={paymentLoading || !paymentStatus?.canPay}
+              onClick={() => setPaymentModalOpen(true)}
+            >
+              Pay This Week
+            </button>
+          </section>
+        ) : null}
+
+        <section className="faculty-panel ledger-grid-panel">
             {loading ? (
-              <div className="faculty-loading">Loading work ledger...</div>
+              <div className="faculty-loading"><PremiumLoader label="Loading work ledger" /></div>
             ) : error ? (
               <div className="faculty-error">{error}</div>
-            ) : mode === "week" ? (
+            ) : (
               <div className="ledger-grid-scroll">
-                <table className="ledger-grid ledger-attendance-grid">
+                <div className="ledger-shift-legend">
+                  {shifts.map((shift) => (
+                    <span key={shift.value} className={`shift-chip shift-chip-${shift.value.toLowerCase()}`}>
+                      {shift.label} Shift
+                    </span>
+                  ))}
+                </div>
+                {isWeekLocked ? <div className="faculty-toast--error">{lockReason || "This week is locked for attendance editing."}</div> : null}
+                <table className="ledger-grid ledger-attendance-grid work-ledger-calendar-grid">
                   <thead>
                     <tr>
-                      <th className="ledger-date-col" rowSpan={2}>
-                        Faculty
-                      </th>
-                      {(attendanceDays.length ? attendanceDays : weekDates).map((dateKey, index) => (
-                        <th key={dateKey} colSpan={3}>
-                          {dayLabels[index]}
-                          <span>{formatDisplayDate(dateKey)}</span>
-                        </th>
+                      <th className="ledger-date-col">Date / Day</th>
+                      {dayLabels.map((day) => (
+                        <th key={day}>{day}</th>
                       ))}
-                      <th rowSpan={2}>Weekly Total</th>
-                    </tr>
-                    <tr>
-                      {(attendanceDays.length ? attendanceDays : weekDates).flatMap((dateKey) =>
-                        shifts.map((shift) => <th key={`${dateKey}-${shift.value}`}>{shift.label}</th>)
-                      )}
+                      <th>Daily Total</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {attendanceGrid.length ? (
-                      attendanceGrid.map((row) => (
-                        <tr key={row.id}>
+                    {calendarRows.length ? (
+                      calendarRows.map((row) => (
+                        <tr key={row.date}>
                           <td className="ledger-date-col">
-                            <strong>{row.fullName}</strong>
-                            <small>{row.facultyId}</small>
+                            <strong>{formatDisplayDate(row.date)}</strong>
+                            <small>{row.dayName}</small>
                           </td>
-                          {(attendanceDays.length ? attendanceDays : weekDates).flatMap((dateKey) =>
-                            shifts.map((shift) => {
-                              const key = `${dateKey}_${shift.value}`;
-                              const cell = row.shifts[key] || { present: false, amount: 0 };
-                              return (
-                                <td key={`${row.id}-${key}`} className="ledger-cell ledger-attendance-cell">
-                                  <button
-                                    className={`faculty-shift-btn ${cell.present ? "present" : "absent"}`}
-                                    disabled={!row.canEdit}
-                                    title={row.canEdit ? "Update attendance" : "Read-only"}
-                                    onClick={() => toggleAttendanceCell(row, dateKey, shift.value, !cell.present)}
-                                  >
-                                    {cell.present ? "Present" : "Absent"}
-                                    <small>{cell.present ? money(cell.amount || 0) : money(0)}</small>
-                                  </button>
-                                </td>
-                              );
-                            })
-                          )}
-                          <td>{money(row.weeklyTotal || 0)}</td>
+                          {dayLabels.map((day) => {
+                            const cell = row.cells?.[day] || { entries: [], totalAmount: 0, entryCount: 0 };
+                            const visibleEntries = cell.entries.slice(0, 3);
+                            const hiddenCount = Math.max(0, cell.entries.length - visibleEntries.length);
+                            return (
+                              <td
+                                key={`${row.date}-${day}`}
+                                className={`ledger-cell ledger-attendance-cell work-ledger-calendar-cell ${cell.entries.length ? "work-ledger-cell-clickable" : ""}`}
+                                onClick={() => openDetailsModal(row, day)}
+                              >
+                                {visibleEntries.length ? (
+                                  <div className="ledger-chip-list">
+                                    {visibleEntries.map((entry) => (
+                                      <button
+                                        key={entry.id}
+                                        className={`shift-chip shift-chip-${entry.shift.toLowerCase()}`}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          openDetailsModal(row, day);
+                                        }}
+                                        title="View attendance details"
+                                      >
+                                        {entry.facultyName || entry.faculty?.fullName || "Faculty"}
+                                      </button>
+                                    ))}
+                                    {hiddenCount ? <span className="work-ledger-more-chip">+{hiddenCount}</span> : null}
+                                  </div>
+                                ) : (
+                                  <span className="ledger-empty-cell">-</span>
+                                )}
+                              </td>
+                            );
+                          })}
+                          <td>{money(row.dailyTotal || 0)}</td>
                         </tr>
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={23}>No active faculty records found for this week.</td>
+                        <td colSpan={9}>No attendance records found for this week.</td>
                       </tr>
                     )}
                   </tbody>
                   <tfoot>
                     <tr>
-                      <td colSpan={22}>Overall Weekly Total</td>
+                      <td colSpan={8}>Overall Weekly Total</td>
                       <td>{money(summary.currentWeekTotal)}</td>
                     </tr>
                   </tfoot>
                 </table>
               </div>
-            ) : displayedDates.length === 0 ? (
-              <div className="faculty-empty">No ledger entries found for the selected filters.</div>
-            ) : (
-              <div className="ledger-grid-scroll">
-                <table className="ledger-grid">
-                  <thead>
-                    <tr>
-                      <th className="ledger-date-col" rowSpan={2}>
-                        Date
-                      </th>
-                      {dayLabels.map((day) => (
-                        <th key={day} colSpan={3}>
-                          {day}
-                        </th>
-                      ))}
-                    </tr>
-                    <tr>
-                      {dayLabels.flatMap((day) =>
-                        shifts.map((shift) => <th key={`${day}-${shift.value}`}>{shift.label}</th>)
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {displayedDates.map((dateKey) => {
-                      const dayIndex = (parseDateKey(dateKey).getUTCDay() + 2) % 7;
-                      return (
-                        <tr key={dateKey}>
-                          <td className="ledger-date-col">{formatDisplayDate(dateKey)}</td>
-                          {dayLabels.flatMap((day, index) =>
-                            shifts.map((shift) => {
-                              const activeDay = index === dayIndex;
-                              const cellEntries = activeDay
-                                ? entriesByCell.get(`${dateKey}:${shift.value}`) || []
-                                : [];
-                              return (
-                                <td
-                                  key={`${dateKey}-${day}-${shift.value}`}
-                                  className={`ledger-cell ${activeDay ? "" : "ledger-cell--muted"}`}
-                                  onClick={() => activeDay && openCreateModal(dateKey, shift.value)}
-                                >
-                                  {cellEntries.map((entry) => (
-                                    <button
-                                      key={entry.id}
-                                      className={`ledger-entry-chip ${canEditEntry(entry) ? "" : "ledger-entry-chip--locked"}`}
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        openEditModal(entry);
-                                      }}
-                                      title={entry.remarks || "Ledger entry"}
-                                    >
-                                      <span>{entry.faculty?.fullName || "Faculty"}</span>
-                                      <small>{money(entry.amount)}</small>
-                                      {entry.remarks ? <MessageSquare size={13} /> : null}
-                                    </button>
-                                  ))}
-                                  {activeDay && !cellEntries.length ? <Plus size={14} color="#94a3b8" /> : null}
-                                </td>
-                              );
-                            })
-                          )}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
             )}
-          </section>
-
-          <aside className="faculty-panel ledger-sidebar">
-            <div className="ledger-top-list">
-              <h2>Top 5 Faculty by Amount</h2>
-              <RankList items={summary.topFaculty} emptyText="No faculty totals yet." totalKey="totalAmount" />
-            </div>
-            <hr />
-            <h2>Faculty Summary</h2>
-            <RankList items={summary.facultyTotals} emptyText="No summary available." totalKey="weeklyTotal" />
-          </aside>
-        </div>
+        </section>
       </div>
+
+      {paymentModalOpen && paymentStatus ? (
+        <div className="faculty-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="faculty-modal payroll-detail-modal">
+            <div className="faculty-modal-header">
+              <h2>Pay Faculty Week</h2>
+              <button className="faculty-icon-button" onClick={() => setPaymentModalOpen(false)} disabled={paymentActionLoading}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="faculty-detail-list">
+              <div><span>Week Period</span><strong>{formatDisplayDate(paymentStatus.weekStart)} to {formatDisplayDate(paymentStatus.weekEnd)}</strong></div>
+              <div><span>Faculty Count</span><strong>{paymentStatus.facultyCount}</strong></div>
+              <div><span>Attendance Entries</span><strong>{paymentStatus.totalEntries}</strong></div>
+              <div><span>Total Amount</span><strong>{money(paymentStatus.totalAmount)}</strong></div>
+            </div>
+            <div className="faculty-table-wrap">
+              <table className="faculty-table">
+                <thead>
+                  <tr>
+                    <th>Faculty ID</th>
+                    <th>Faculty Name</th>
+                    <th>Entries</th>
+                    <th>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paymentStatus.facultyBreakdown.map((row) => (
+                    <tr key={row.facultyId}>
+                      <td>{row.facultyCode || row.facultyId}</td>
+                      <td>{row.facultyName || "-"}</td>
+                      <td>{row.attendanceEntries}</td>
+                      <td>{money(row.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <section className="faculty-panel payroll-receipt-panel">
+              <h3>Cash Payment</h3>
+              <div className="faculty-form-grid">
+                <div className="faculty-field">
+                  <label>Cash Paid Date</label>
+                  <input type="date" value={cashPaidAt} onChange={(event) => setCashPaidAt(event.target.value)} />
+                </div>
+                <div className="faculty-field faculty-field--wide">
+                  <label>Remarks</label>
+                  <input value={cashRemarks} onChange={(event) => setCashRemarks(event.target.value)} placeholder="Paid manually in cash" />
+                </div>
+              </div>
+              <label className="faculty-checkbox-row">
+                <input type="checkbox" checked={cashConfirmed} onChange={(event) => setCashConfirmed(event.target.checked)} />
+                <span>I confirm this faculty week has been paid in cash.</span>
+              </label>
+            </section>
+            <div className="faculty-modal-footer">
+              <button className="faculty-button faculty-button--ghost" onClick={() => setPaymentModalOpen(false)} disabled={paymentActionLoading}>
+                Cancel
+              </button>
+              <button className="faculty-button faculty-button--soft" onClick={payOnline} disabled={paymentActionLoading}>
+                {paymentActionLoading ? "Processing..." : "Pay Online"}
+              </button>
+              <button className="faculty-button faculty-button--primary" onClick={payCash} disabled={paymentActionLoading || !cashConfirmed}>
+                {paymentActionLoading ? "Saving..." : "Mark as Cash Paid"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {detailsCell ? (
+        <div className="faculty-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="faculty-modal">
+            <div className="faculty-modal-header">
+              <h2>
+                Attendance Details — {detailsCell.day}, {formatDisplayDate(detailsCell.date)}
+              </h2>
+              <button className="faculty-icon-button" onClick={() => setDetailsCell(null)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="faculty-form">
+              {isWeekLocked ? <div className="faculty-toast--error">{lockReason || "This week’s payout has already been processed. Attendance editing is locked."}</div> : null}
+              {detailsMessage ? <div className={`faculty-toast--${detailsMessage.type}`}>{detailsMessage.message}</div> : null}
+              {detailsCell.entries.length ? (
+                <div className="work-ledger-detail-stack">
+                  {shifts.map((shift) => {
+                    const shiftEntries = detailsCell.entries.filter((entry) => entry.shift === shift.value);
+                    if (!shiftEntries.length) return null;
+                    return (
+                      <section key={shift.value} className="work-ledger-detail-section">
+                        <h3>
+                          <span className={`shift-chip shift-chip-${shift.value.toLowerCase()}`}>{shift.label} Shift</span>
+                        </h3>
+                        <div className="faculty-table-wrap">
+                          <table className="faculty-table">
+                            <thead>
+                              <tr>
+                                <th>Faculty</th>
+                                <th>Status</th>
+                                <th>Amount</th>
+                                <th>Updated At</th>
+                                <th>Updated By</th>
+                                <th>Remarks</th>
+                                <th>Action</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {shiftEntries.map((entry) => {
+                                const draft = detailsDrafts[entry.id] || { present: true, amount: String(entry.amount || 0), remarks: entry.remarks || "" };
+                                return (
+                                  <tr key={entry.id}>
+                                    <td>
+                                      <strong>{entry.facultyName || entry.faculty?.fullName || "Faculty"}</strong>
+                                      <small>{entry.facultyCode || entry.faculty?.facultyId || "-"}</small>
+                                    </td>
+                                    <td>
+                                      <select
+                                        value={draft.present ? "PRESENT" : "ABSENT"}
+                                        disabled={isWeekLocked || submitting}
+                                        onChange={(event) => updateDetailsDraft(entry.id, { present: event.target.value === "PRESENT" })}
+                                      >
+                                        <option value="PRESENT">Present</option>
+                                        <option value="ABSENT">Absent</option>
+                                      </select>
+                                    </td>
+                                    <td>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        step="0.01"
+                                        value={draft.amount}
+                                        disabled={isWeekLocked || submitting || !draft.present}
+                                        onChange={(event) => updateDetailsDraft(entry.id, { amount: event.target.value })}
+                                      />
+                                    </td>
+                                    <td>{formatUpdatedAt(entry.updatedAt)}</td>
+                                    <td>{entry.updatedByName || entry.updatedBy || "-"}</td>
+                                    <td>
+                                      <input
+                                        value={draft.remarks}
+                                        disabled={isWeekLocked || submitting}
+                                        onChange={(event) => updateDetailsDraft(entry.id, { remarks: event.target.value })}
+                                      />
+                                    </td>
+                                    <td>
+                                      <button className="faculty-button faculty-button--primary" disabled={isWeekLocked || submitting} onClick={() => saveDetailsEntry(entry)}>
+                                        {submitting ? "Saving..." : "Save"}
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </section>
+                    );
+                  })}
+                  <div className="work-ledger-day-total">Day Total: {money(detailsCell.entries.reduce((total, entry) => total + Number(entry.amount || 0), 0))}</div>
+                </div>
+              ) : (
+                <div className="faculty-empty">No attendance entries for this day.</div>
+              )}
+            </div>
+            <div className="faculty-modal-footer">
+              <button className="faculty-button faculty-button--ghost" onClick={() => setDetailsCell(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {modalOpen ? (
         <div className="faculty-modal-backdrop" role="dialog" aria-modal="true">
@@ -906,31 +1293,6 @@ function SummaryCard({ label, value }: { label: string; value: string | number }
     <div className="ledger-summary-card">
       <span>{label}</span>
       <strong>{value}</strong>
-    </div>
-  );
-}
-
-function RankList({
-  items,
-  emptyText,
-  totalKey,
-}: {
-  items: FacultyTotal[];
-  emptyText: string;
-  totalKey: "weeklyTotal" | "totalAmount";
-}) {
-  if (!items.length) return <div className="faculty-empty">{emptyText}</div>;
-  return (
-    <div className="ledger-rank-list">
-      {items.map((item, index) => (
-        <div className="ledger-rank-item" key={`${item.facultyId}-${index}`}>
-          <div>
-            <strong>{item.facultyName}</strong>
-            <span>{item.entries} entries</span>
-          </div>
-          <strong>{money(item[totalKey])}</strong>
-        </div>
-      ))}
     </div>
   );
 }

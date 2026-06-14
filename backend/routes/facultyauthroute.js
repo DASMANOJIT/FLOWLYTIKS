@@ -3,6 +3,7 @@ import {
   loginFaculty,
   resetFacultyPassword,
   sendFacultyPasswordOtp,
+  verifyFacultyEmailResetPassword,
   verifyFacultyPasswordOtp,
 } from "../controllers/facultyauthcontrollers.js";
 import {
@@ -14,10 +15,12 @@ import {
 import { validateBody } from "../middleware/validation.js";
 import {
   facultyForgotPasswordBodySchema,
+  facultyEmailResetPasswordBodySchema,
   facultyLoginBodySchema,
   facultyResetPasswordBodySchema,
   facultyVerifyOtpBodySchema,
 } from "../validation/facultySchemas.js";
+import { auditAction } from "../services/auditLogService.js";
 
 const router = express.Router();
 
@@ -35,9 +38,17 @@ router.post(
   verifyFacultyPasswordOtp
 );
 router.post(
+  "/forgot-password/verify-reset",
+  passwordResetRateLimit,
+  validateBody(facultyEmailResetPasswordBodySchema),
+  auditAction({ action: "FACULTY_PASSWORD_RESET", entityType: "Faculty", metadata: (req) => ({ email: req.body?.email }) }),
+  verifyFacultyEmailResetPassword
+);
+router.post(
   "/forgot-password/reset",
   passwordResetRateLimit,
   validateBody(facultyResetPasswordBodySchema),
+  auditAction({ action: "FACULTY_PASSWORD_RESET", entityType: "Faculty", metadata: (req) => ({ phone: req.body?.phone }) }),
   resetFacultyPassword
 );
 

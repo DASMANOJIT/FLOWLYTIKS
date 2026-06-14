@@ -7,6 +7,7 @@ import {
   retryFailedPayout,
   syncPayoutStatus,
 } from "./cashfreePayoutService.js";
+import { notifyPayoutFailed, notifyPayoutSuccess } from "./notificationService.js";
 
 const actorKey = (value) => (value ? String(value) : "system");
 const moneyNumber = (value) => Number(value || 0);
@@ -206,6 +207,15 @@ export const markPayoutPaid = async (payoutId, { transactionId, paidBy }) => {
       },
     }),
   ]);
+  const notificationPayout = await prisma.facultyPayout.findUnique({
+    where: { id: payoutId },
+    include: { faculty: true, payroll: { include: { payrollCycle: true } } },
+  });
+  const admin = paidBy
+    ? await prisma.admin.findUnique({ where: { id: Number(paidBy) }, select: { id: true, name: true, email: true } }).catch(() => null)
+    : null;
+  notifyPayoutSuccess({ payout: notificationPayout, admin })
+    .catch((error) => console.error("Payout paid notification error:", error?.message || error));
   return { success: true };
 };
 
@@ -224,6 +234,15 @@ export const markPayoutFailed = async (payoutId, { failureReason, modifiedBy }) 
       type: "PAYOUT_FAILED",
     },
   });
+  const notificationPayout = await prisma.facultyPayout.findUnique({
+    where: { id: payoutId },
+    include: { faculty: true, payroll: { include: { payrollCycle: true } } },
+  });
+  const admin = modifiedBy
+    ? await prisma.admin.findUnique({ where: { id: Number(modifiedBy) }, select: { id: true, name: true, email: true } }).catch(() => null)
+    : null;
+  notifyPayoutFailed({ payout: notificationPayout, admin })
+    .catch((error) => console.error("Payout failed notification error:", error?.message || error));
   return { success: true };
 };
 

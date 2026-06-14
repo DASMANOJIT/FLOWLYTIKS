@@ -25,6 +25,16 @@ export const payrollProcessBodySchema = z.object({
   message: "Payroll cycle id is required.",
 });
 
+export const payrollInitiatePayoutBodySchema = z.object({
+  cycleId: z.uuid("Payroll cycle id must be valid.").optional(),
+  payrollCycleId: z.uuid("Payroll cycle id must be valid.").optional(),
+  weekStart: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  weekEnd: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+}).refine((data) => data.cycleId || data.payrollCycleId || (data.weekStart && data.weekEnd), {
+  path: ["payrollCycleId"],
+  message: "Payroll cycle id or week period is required.",
+});
+
 export const payrollCycleParamSchema = z.object({
   id: z.uuid("Payroll cycle id must be valid."),
 });
@@ -39,6 +49,15 @@ export const payrollListQuerySchema = z.object({
   cycleId: z.uuid().optional(),
   weekStart: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   weekEnd: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+export const payrollWeekDetailsQuerySchema = z.object({
+  cycleId: z.uuid().optional(),
+  weekStart: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  weekEnd: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+}).refine((data) => data.cycleId || (data.weekStart && data.weekEnd), {
+  path: ["cycleId"],
+  message: "Provide cycleId or weekStart and weekEnd.",
 });
 
 export const payrollReportQuerySchema = z.object({

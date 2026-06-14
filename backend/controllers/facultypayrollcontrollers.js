@@ -1,6 +1,15 @@
 import PDFDocument from "pdfkit";
 import prisma from "../prisma/client.js";
 import {
+  createPayoutsForApprovedPayrolls,
+  initiateBulkPayouts,
+} from "../services/facultyPayoutService.js";
+import {
+  notifyLedgerLocked,
+  notifyPayrollGenerated,
+  notifyPayoutInitiated,
+} from "../services/notificationService.js";
+import {
   actorKey,
   dateOnly,
   normalizeMoney,
@@ -30,6 +39,13 @@ const getFridayWeekStart = (value = new Date()) => {
 const money = (value) => normalizeMoney(Number(value || 0));
 
 const statusToPaymentStatus = (status) => (status === "PAID" ? "PAID" : "PENDING");
+
+const payoutStatuses = {
+  paid: ["SUCCESS"],
+  processing: ["PROCESSING"],
+  failed: ["FAILED", "CANCELLED", "REVERSED"],
+  active: ["PENDING", "PROCESSING", "SUCCESS"],
+};
 
 const humanStatus = (status) =>
   String(status || "")
@@ -69,8 +85,95 @@ const toPayrollDto = (payroll, ledgerDetails = null) => ({
   deduction: 0,
   netAmount: money(payroll.totalAmount),
   paymentStatus: statusToPaymentStatus(payroll.status),
+  payoutEligible: Boolean(payroll.faculty?.bankAccounts?.[0]?.payoutEligible),
+  payoutDetailsStatus: payroll.faculty?.bankAccounts?.[0]?.verificationStatus || "MISSING",
+  beneficiaryStatus: payroll.faculty?.bankAccounts?.[0]?.cashfreeBeneficiaryStatus || "MISSING",
+  payouts: Array.isArray(payroll.payouts)
+    ? payroll.payouts.map((payout) => ({
+        id: payout.id,
+        status: payout.status,
+        amount: money(payout.amount),
+        paidAmount: money(payout.paidAmount || 0),
+        unpaidAmount: money(payout.unpaidAmount ?? payout.amount),
+        referenceId: payout.referenceId || "",
+        transactionId: payout.transactionId || "",
+        utr: payout.utr || "",
+        cashfreeTransferId: payout.cashfreeTransferId || "",
+        cashfreeReferenceId: payout.cashfreeReferenceId || "",
+        failureReason: payout.failureReason || "",
+        paidAt: payout.paidAt,
+        payoutDate: payout.payoutDate,
+      }))
+    : [],
   ledgerDetails,
 });
+
+const getCycleStatusStats = (payrolls = []) => {
+  const totalAmount = payrolls.reduce((sum, payroll) => sum + money(payroll.totalAmount), 0);
+  const totalEntries = payrolls.reduce((sum, payroll) => sum + Number(payroll.totalEntries || 0), 0);
+  const paidAmount = payrolls.reduce((sum, payroll) => {
+    const payouts = Array.isArray(payroll.payouts) ? payroll.payouts : [];
+    return sum + payouts
+      .filter((payout) => payoutStatuses.paid.includes(payout.status))
+      .reduce((inner, payout) => inner + money(payout.paidAmount || payout.amount), 0);
+  }, 0);
+  const hasProcessing = payrolls.some((payroll) =>
+    payroll.status === "APPROVED" ||
+    payroll.payouts?.some((payout) => payoutStatuses.processing.includes(payout.status))
+  );
+  const hasFailed = payrolls.some((payroll) => payroll.payouts?.some((payout) => payoutStatuses.failed.includes(payout.status)));
+  const allPaid = payrolls.length > 0 && payrolls.every((payroll) => payroll.status === "PAID" || payroll.payouts?.some((payout) => payout.status === "SUCCESS"));
+  const pendingAmount = Math.max(0, money(totalAmount - paidAmount));
+  let status = "UNPAID";
+  if (allPaid) status = "PAID";
+  else if (paidAmount > 0 && pendingAmount > 0) status = "PARTIALLY_PAID";
+  else if (hasFailed) status = "FAILED";
+  else if (hasProcessing) status = "PROCESSING";
+  else if (payrolls.some((payroll) => ["DRAFT", "PENDING_APPROVAL", "APPROVED", "LOCKED"].includes(payroll.status))) status = "PENDING";
+
+  return {
+    totalAmount: money(totalAmount),
+    totalEntries,
+    facultyCount: payrolls.length,
+    paidAmount: money(paidAmount),
+    pendingAmount: money(pendingAmount),
+    status,
+  };
+};
+
+const toWeeklyRowDto = (cycle) => {
+  const stats = getCycleStatusStats(cycle.payrolls || []);
+  const payouts = (cycle.payrolls || []).flatMap((payroll) => payroll.payouts || []);
+  const status = cycle.status === "PAID" ? "PAID" : stats.status;
+  return {
+    id: cycle.id,
+    cycleNumber: cycle.cycleNumber,
+    weekStart: toDateKey(cycle.startDate),
+    weekEnd: toDateKey(cycle.endDate),
+    attendanceEntries: stats.totalEntries,
+    facultyCount: stats.facultyCount,
+    totalPayable: stats.totalAmount,
+    paidAmount: stats.paidAmount,
+    pendingAmount: stats.pendingAmount,
+    status,
+    ledgerLocked: Boolean(cycle.ledgerLocked),
+    receiptAvailable: payouts.some((payout) => payout.status === "SUCCESS" || payout.transactionId || payout.utr),
+    receiptUtr: payouts.map((payout) => payout.utr || payout.transactionId).filter(Boolean).join(", ") || null,
+    utr: payouts.map((payout) => payout.utr || payout.transactionId).filter(Boolean).join(", "),
+    paidAt: cycle.paidAt || payouts.find((payout) => payout.paidAt)?.paidAt || null,
+    canPay: stats.totalAmount > 0 && stats.pendingAmount > 0 && !["PAID", "PROCESSING"].includes(status),
+    payoutReady: (cycle.payrolls || []).every((payroll) => {
+      const bank = payroll.faculty?.bankAccounts?.[0];
+      return bank?.verificationStatus === "VERIFIED" && bank?.payoutEligible;
+    }),
+    payoutBlockedReason: (cycle.payrolls || []).some((payroll) => {
+      const bank = payroll.faculty?.bankAccounts?.[0];
+      return !bank || bank.verificationStatus !== "VERIFIED" || !bank.payoutEligible;
+    })
+      ? "Payout details not verified for selected faculty."
+      : "",
+  };
+};
 
 const toCycleDto = (cycle) => {
   const payrolls = Array.isArray(cycle.payrolls) ? cycle.payrolls : [];
@@ -137,9 +240,64 @@ const buildLedgerGroups = (faculty, ledgerEntries) => {
     group.totalAmount += money(entry.amount);
   }
 
-  return [...groups.values()].map((group) => ({
-    ...group,
-    totalAmount: money(group.totalAmount),
+  return [...groups.values()]
+    .filter((group) => group.totalEntries > 0)
+    .map((group) => ({
+      ...group,
+      totalAmount: money(group.totalAmount),
+    }));
+};
+
+const getAttendanceWeekStart = (value) => getFridayWeekStart(value);
+
+const buildAttendanceWeekKey = (start, end) => `${toDateKey(start)}:${toDateKey(end)}`;
+
+const buildAttendanceWeekRows = (ledgerEntries = []) => {
+  const weekMap = new Map();
+
+  for (const entry of ledgerEntries) {
+    const weekStart = getAttendanceWeekStart(entry.date);
+    const weekEnd = addDays(weekStart, 6);
+    const key = buildAttendanceWeekKey(weekStart, weekEnd);
+    const current = weekMap.get(key) || {
+      id: key,
+      cycleNumber: "Attendance Week",
+      weekStart: toDateKey(weekStart),
+      weekEnd: toDateKey(weekEnd),
+      attendanceEntries: 0,
+      facultyIds: new Set(),
+      totalPayable: 0,
+      paidAmount: 0,
+      pendingAmount: 0,
+      status: "UNPAID",
+      ledgerLocked: false,
+      receiptAvailable: false,
+      receiptUtr: null,
+      utr: "",
+      paidAt: null,
+      canPay: false,
+      payoutReady: true,
+      payoutBlockedReason: "",
+    };
+
+    const amount = money(entry.amount);
+    current.attendanceEntries += 1;
+    current.facultyIds.add(entry.facultyId);
+    current.totalPayable = money(current.totalPayable + amount);
+    current.pendingAmount = current.totalPayable;
+    const bank = entry.faculty?.bankAccounts?.[0];
+    if (!bank || bank.verificationStatus !== "VERIFIED" || !bank.payoutEligible) {
+      current.payoutReady = false;
+      current.payoutBlockedReason = "Payout details not verified for selected faculty.";
+    }
+    weekMap.set(key, current);
+  }
+
+  return [...weekMap.values()].map((row) => ({
+    ...row,
+    facultyCount: row.facultyIds.size,
+    facultyIds: undefined,
+    canPay: row.totalPayable > 0 && row.pendingAmount > 0 && row.payoutReady,
   }));
 };
 
@@ -149,24 +307,37 @@ const buildCycleNumber = async (tx) => {
   return `Payroll Week #${String(count + 1).padStart(3, "0")}`;
 };
 
+const payrollIncludeFull = {
+  orderBy: { createdAt: "asc" },
+  include: {
+    faculty: {
+      select: {
+        id: true,
+        facultyId: true,
+        fullName: true,
+        designation: true,
+        bankAccounts: {
+          orderBy: { updatedAt: "desc" },
+          take: 1,
+          select: {
+            verificationStatus: true,
+            payoutEligible: true,
+            cashfreeBeneficiaryId: true,
+            cashfreeBeneficiaryStatus: true,
+          },
+        },
+      },
+    },
+    payouts: true,
+  },
+};
+
 const getCycleWithPayrolls = (where) =>
   prisma.payrollCycle.findFirst({
     where,
     orderBy: { createdAt: "desc" },
     include: {
-      payrolls: {
-        orderBy: { createdAt: "asc" },
-        include: {
-          faculty: {
-            select: {
-              id: true,
-              facultyId: true,
-              fullName: true,
-              designation: true,
-            },
-          },
-        },
-      },
+      payrolls: payrollIncludeFull,
     },
   });
 
@@ -241,6 +412,11 @@ export const generateFacultyPayroll = async (req, res) => {
         },
         select: { facultyId: true, amount: true },
       });
+      if (!ledgerEntries.length) {
+        const error = new Error("No attendance records found for this week.");
+        error.statusCode = 400;
+        throw error;
+      }
       const grouped = buildLedgerGroups(faculty, ledgerEntries);
 
       const cycle = existingCycle
@@ -278,16 +454,16 @@ export const generateFacultyPayroll = async (req, res) => {
 
       return tx.payrollCycle.findUnique({
         where: { id: cycle.id },
-        include: {
-          payrolls: {
-            orderBy: { createdAt: "asc" },
-            include: { faculty: { select: { id: true, facultyId: true, fullName: true, designation: true } } },
-          },
-        },
+        include: { payrolls: payrollIncludeFull },
       });
     });
 
     const dto = toCycleDto(result);
+    notifyPayrollGenerated({
+      admin: req.user,
+      cycle: result,
+      payrolls: result.payrolls || [],
+    }).catch((error) => console.error("Payroll notification error:", error?.message || error));
     return res.status(201).json({
       success: true,
       totalFaculty: dto.payrolls.length,
@@ -338,11 +514,7 @@ export const approveFacultyPayroll = async (req, res) => {
           approvedAt,
           updatedBy: actorKey(req),
         },
-        include: {
-          payrolls: {
-            include: { faculty: { select: { id: true, facultyId: true, fullName: true, designation: true } } },
-          },
-        },
+        include: { payrolls: payrollIncludeFull },
       });
     });
 
@@ -400,11 +572,7 @@ export const processFacultyPayroll = async (req, res) => {
           paidAt,
           updatedBy: actorKey(req),
         },
-        include: {
-          payrolls: {
-            include: { faculty: { select: { id: true, facultyId: true, fullName: true, designation: true } } },
-          },
-        },
+        include: { payrolls: payrollIncludeFull },
       });
     });
 
@@ -435,11 +603,7 @@ export const rejectFacultyPayroll = async (req, res) => {
       return tx.payrollCycle.update({
         where: { id: payrollCycleId },
         data: { status: "REJECTED", ledgerLocked: false, updatedBy: actorKey(req) },
-        include: {
-          payrolls: {
-            include: { faculty: { select: { id: true, facultyId: true, fullName: true, designation: true } } },
-          },
-        },
+        include: { payrolls: payrollIncludeFull },
       });
     });
     return res.json({ success: true, message: "Payroll rejected.", batch: toCycleDto(cycle) });
@@ -455,11 +619,7 @@ export const unlockFacultyPayrollLedger = async (req, res) => {
     const cycle = await prisma.payrollCycle.update({
       where: { id: payrollCycleId },
       data: { ledgerLocked: false, updatedBy: actorKey(req) },
-      include: {
-        payrolls: {
-          include: { faculty: { select: { id: true, facultyId: true, fullName: true, designation: true } } },
-        },
-      },
+      include: { payrolls: payrollIncludeFull },
     });
     return res.json({ success: true, message: "Payroll ledger unlocked for edits.", batch: toCycleDto(cycle) });
   } catch (error) {
@@ -569,6 +729,7 @@ export const getFacultyPayroll = async (req, res) => {
       currentWeekRows,
       currentMonthRows,
       recentCycles,
+      ledgerWeekEntries,
     ] = await Promise.all([
       prisma.faculty.count({ where: { status: "ACTIVE" } }),
       prisma.facultyEarningsPayroll.count({ where: { status: { in: ["DRAFT", "PENDING_APPROVAL"] } } }),
@@ -584,13 +745,43 @@ export const getFacultyPayroll = async (req, res) => {
       }),
       prisma.payrollCycle.findMany({
         orderBy: { createdAt: "desc" },
-        take: 8,
-        include: { payrolls: true },
+        take: 50,
+        include: { payrolls: payrollIncludeFull },
+      }),
+      prisma.workLedgerEntry.findMany({
+        orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+        take: 5000,
+        select: {
+          facultyId: true,
+          date: true,
+          amount: true,
+          faculty: {
+            select: {
+              bankAccounts: {
+                orderBy: { updatedAt: "desc" },
+                take: 1,
+                select: {
+                  verificationStatus: true,
+                  payoutEligible: true,
+                },
+              },
+            },
+          },
+        },
       }),
     ]);
 
     const currentWeekTotal = money(currentWeekRows.reduce((sum, row) => sum + money(row.totalAmount), 0));
     const currentMonthTotal = money(currentMonthRows.reduce((sum, row) => sum + money(row.totalAmount), 0));
+    const cycleRows = recentCycles.map(toWeeklyRowDto);
+    const weekRowsByKey = new Map(cycleRows.map((row) => [`${row.weekStart}:${row.weekEnd}`, row]));
+    for (const row of buildAttendanceWeekRows(ledgerWeekEntries)) {
+      const key = `${row.weekStart}:${row.weekEnd}`;
+      if (!weekRowsByKey.has(key)) {
+        weekRowsByKey.set(key, row);
+      }
+    }
+    const weeklyRows = [...weekRowsByKey.values()].sort((left, right) => right.weekStart.localeCompare(left.weekStart));
 
     return res.json({
       success: true,
@@ -607,6 +798,271 @@ export const getFacultyPayroll = async (req, res) => {
         monthlyPayrollExpense: currentMonthTotal,
       },
       recentBatches: recentCycles.map(toCycleDto),
+      weeklyRows,
+      weeks: weeklyRows,
+    });
+  } catch (error) {
+    return handlePayrollError(res, error);
+  }
+};
+
+export const getPayrollWeekDetails = async (req, res) => {
+  try {
+    if (!requireAdmin(req, res)) return null;
+    const where = {};
+    if (req.query.cycleId) where.id = req.query.cycleId;
+    if (req.query.weekStart && req.query.weekEnd) {
+      where.startDate = safeDate(req.query.weekStart);
+      where.endDate = safeDate(req.query.weekEnd);
+    }
+    const cycle = await getCycleWithPayrolls(where);
+    if (!cycle) {
+      if (req.query.weekStart && req.query.weekEnd) {
+        const weekStart = safeDate(req.query.weekStart);
+        const weekEnd = safeDate(req.query.weekEnd);
+        const ledgerEntries = await prisma.workLedgerEntry.findMany({
+          where: { date: { gte: weekStart, lte: weekEnd } },
+          orderBy: [{ date: "asc" }, { shift: "asc" }],
+          include: {
+            faculty: {
+              select: {
+                id: true,
+                facultyId: true,
+                fullName: true,
+                designation: true,
+                bankAccounts: {
+                  orderBy: { updatedAt: "desc" },
+                  take: 1,
+                  select: {
+                    verificationStatus: true,
+                    payoutEligible: true,
+                    cashfreeBeneficiaryStatus: true,
+                  },
+                },
+              },
+            },
+          },
+        });
+        const byFaculty = new Map();
+        ledgerEntries.forEach((entry) => {
+          const current = byFaculty.get(entry.facultyId) || {
+            id: `attendance:${entry.facultyId}:${toDateKey(weekStart)}`,
+            facultyId: entry.facultyId,
+            totalEntries: 0,
+            totalAmount: 0,
+            status: "DRAFT",
+            faculty: entry.faculty,
+            payouts: [],
+          };
+          current.totalEntries += 1;
+          current.totalAmount = money(current.totalAmount + money(entry.amount));
+          byFaculty.set(entry.facultyId, current);
+        });
+        const payrolls = [...byFaculty.values()].map((row) => toPayrollDto(row));
+        const week = buildAttendanceWeekRows(ledgerEntries)[0] || null;
+        return res.json({
+          success: true,
+          batch: {
+            id: week?.id || "",
+            batchNumber: "Attendance Week",
+            weekStart: toDateKey(weekStart),
+            weekEnd: toDateKey(weekEnd),
+            totalAmount: week?.totalPayable || 0,
+            status: "DRAFT",
+            ledgerLocked: false,
+            payrolls,
+          },
+          week,
+          payrolls,
+        });
+      }
+      return res.json({ success: true, batch: null, week: null, payrolls: [] });
+    }
+    const batch = toCycleDto(cycle);
+    return res.json({
+      success: true,
+      batch,
+      week: toWeeklyRowDto(cycle),
+      payrolls: batch.payrolls,
+    });
+  } catch (error) {
+    return handlePayrollError(res, error);
+  }
+};
+
+export const getPayrollReceipt = async (req, res) => {
+  try {
+    if (!requireAdmin(req, res)) return null;
+    const cycle = await getCycleWithPayrolls(
+      req.query.cycleId
+        ? { id: req.query.cycleId }
+        : { startDate: safeDate(req.query.weekStart), endDate: safeDate(req.query.weekEnd) }
+    );
+    if (!cycle) {
+      return res.status(404).json({ success: false, message: "Payroll cycle not found." });
+    }
+    const batch = toCycleDto(cycle);
+    return res.json({
+      success: true,
+      receipt: {
+        week: toWeeklyRowDto(cycle),
+        weekStart: batch.weekStart,
+        weekEnd: batch.weekEnd,
+        totalAmount: batch.totalAmount,
+        paidAt: cycle.paidAt,
+        paidBy: cycle.paidBy,
+        transfers: batch.payrolls.flatMap((payroll) =>
+          (payroll.payouts || []).map((payout) => ({
+            facultyId: payroll.faculty?.facultyId || "",
+            facultyName: payroll.faculty?.fullName || "",
+            amount: payout.amount,
+            status: payout.status,
+            transactionId: payout.transactionId,
+            utr: payout.utr,
+            cashfreeTransferId: payout.cashfreeTransferId,
+            cashfreeReferenceId: payout.cashfreeReferenceId,
+            paidAt: payout.paidAt || payout.payoutDate,
+          }))
+        ),
+      },
+    });
+  } catch (error) {
+    return handlePayrollError(res, error);
+  }
+};
+
+export const initiateFacultyPayrollPayout = async (req, res) => {
+  try {
+    if (!requireAdmin(req, res)) return null;
+    let payrollCycleId = req.body.payrollCycleId || req.body.cycleId;
+    let cycle = payrollCycleId
+      ? await getCycleWithPayrolls({ id: payrollCycleId })
+      : await getCycleWithPayrolls({
+          startDate: safeDate(req.body.weekStart),
+          endDate: safeDate(req.body.weekEnd),
+        });
+
+    if (!cycle && req.body.weekStart && req.body.weekEnd) {
+      const weekStart = safeDate(req.body.weekStart);
+      const weekEnd = safeDate(req.body.weekEnd);
+      const generated = await prisma.$transaction(async (tx) => {
+        const faculty = await tx.faculty.findMany({
+          where: { status: "ACTIVE" },
+          orderBy: { fullName: "asc" },
+          select: { id: true, facultyId: true, fullName: true, designation: true },
+        });
+        const ledgerEntries = await tx.workLedgerEntry.findMany({
+          where: {
+            date: { gte: weekStart, lte: weekEnd },
+            facultyId: { in: faculty.map((item) => item.id) },
+          },
+          select: { facultyId: true, amount: true },
+        });
+        if (!ledgerEntries.length) {
+          const error = new Error("No attendance records found for this week.");
+          error.statusCode = 400;
+          throw error;
+        }
+        const payrollCycle = await tx.payrollCycle.create({
+          data: {
+            cycleNumber: await buildCycleNumber(tx),
+            startDate: weekStart,
+            endDate: weekEnd,
+            status: "DRAFT",
+            createdBy: actorKey(req),
+            updatedBy: actorKey(req),
+          },
+        });
+        await tx.facultyEarningsPayroll.createMany({
+          data: buildLedgerGroups(faculty, ledgerEntries).map((group) => ({
+            facultyId: group.faculty.id,
+            payrollCycleId: payrollCycle.id,
+            totalEntries: group.totalEntries,
+            totalAmount: group.totalAmount,
+            status: "DRAFT",
+            createdBy: actorKey(req),
+            updatedBy: actorKey(req),
+          })),
+        });
+        return payrollCycle;
+      });
+      payrollCycleId = generated.id;
+      cycle = await getCycleWithPayrolls({ id: payrollCycleId });
+    } else if (cycle) {
+      payrollCycleId = cycle.id;
+    }
+
+    if (!cycle) {
+      return res.status(404).json({ success: false, message: "Payroll cycle not found." });
+    }
+    if (cycle.payrolls.length === 0 || money(cycle.payrolls.reduce((sum, row) => sum + money(row.totalAmount), 0)) <= 0) {
+      return res.status(400).json({ success: false, message: "No payable payroll amount found for this week." });
+    }
+    if (cycle.payrolls.some((payroll) => payroll.status === "PAID" || payroll.payouts?.some((payout) => payoutStatuses.paid.includes(payout.status)))) {
+      return res.status(400).json({ success: false, message: "This payroll week already has paid payout records." });
+    }
+
+    const notReady = cycle.payrolls.filter((payroll) => {
+      const bank = payroll.faculty?.bankAccounts?.[0];
+      return !bank || bank.verificationStatus !== "VERIFIED" || !bank.payoutEligible;
+    });
+    if (notReady.length) {
+      return res.status(400).json({
+        success: false,
+        message: "Payout details not verified for selected faculty.",
+        notReady: notReady.map((payroll) => ({
+          facultyId: payroll.faculty?.facultyId || "",
+          facultyName: payroll.faculty?.fullName || "",
+          payoutDetailsStatus: payroll.faculty?.bankAccounts?.[0]?.verificationStatus || "MISSING",
+          payoutEligible: Boolean(payroll.faculty?.bankAccounts?.[0]?.payoutEligible),
+        })),
+      });
+    }
+
+    let approvedCycle = cycle;
+    if (cycle.status !== "APPROVED") {
+      const approvedAt = new Date();
+      approvedCycle = await prisma.$transaction(async (tx) => {
+        await tx.facultyEarningsPayroll.updateMany({
+          where: { payrollCycleId },
+          data: { status: "APPROVED", approvedBy: actorKey(req), approvedAt, updatedBy: actorKey(req) },
+        });
+        return tx.payrollCycle.update({
+          where: { id: payrollCycleId },
+          data: { status: "APPROVED", ledgerLocked: true, approvedBy: actorKey(req), approvedAt, updatedBy: actorKey(req) },
+          include: { payrolls: payrollIncludeFull },
+        });
+      });
+    }
+
+    const existingActivePayouts = approvedCycle.payrolls.flatMap((payroll) =>
+      (payroll.payouts || []).filter((payout) => payoutStatuses.active.includes(payout.status))
+    );
+    const createdPayouts = existingActivePayouts.length
+      ? existingActivePayouts
+      : await createPayoutsForApprovedPayrolls({ payrollCycleId, createdBy: req.user?.id });
+    const results = await initiateBulkPayouts(createdPayouts.map((payout) => payout.id), { paidBy: req.user?.id });
+
+    const refreshed = await getCycleWithPayrolls({ id: payrollCycleId });
+    const payoutRows = await prisma.facultyPayout.findMany({
+      where: { id: { in: createdPayouts.map((payout) => payout.id) } },
+      include: {
+        faculty: true,
+        payroll: { include: { payrollCycle: true } },
+      },
+    });
+    notifyPayoutInitiated({ admin: req.user, payouts: payoutRows })
+      .catch((error) => console.error("Payout initiated notification error:", error?.message || error));
+    if (refreshed) {
+      notifyLedgerLocked({ admin: req.user, cycle: refreshed, payrolls: refreshed.payrolls || [] })
+        .catch((error) => console.error("Ledger locked notification error:", error?.message || error));
+    }
+    return res.json({
+      success: true,
+      message: "Faculty payouts initiated individually for the selected week.",
+      results,
+      batch: refreshed ? toCycleDto(refreshed) : toCycleDto(approvedCycle),
+      week: refreshed ? toWeeklyRowDto(refreshed) : toWeeklyRowDto(approvedCycle),
     });
   } catch (error) {
     return handlePayrollError(res, error);
