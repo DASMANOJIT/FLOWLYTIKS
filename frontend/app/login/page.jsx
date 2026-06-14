@@ -5,7 +5,7 @@ import "./login.css";
 import Fall from "../animation/fallingword.jsx";
 import { MotionButton } from "../components/motion/primitives.jsx";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
-import { readApiResponse } from "../../lib/api.js";
+import { getApiBaseUrl, readApiResponse } from "../../lib/api.js";
 import { clearLegacyAuthStorage, storeAuthSession } from "../../lib/authStorage.js";
 import {
   CLASS_OPTIONS,
@@ -56,8 +56,7 @@ export default function Login() {
   const [twoFaOtp, setTwoFaOtp] = useState("");
   const [twoFaLoading, setTwoFaLoading] = useState(false);
 
-  // Use same-origin `/api/*` (Next.js rewrites proxy to backend).
-  const API = "";
+  const API = getApiBaseUrl();
 
   const isStrongPassword = (password) =>
     /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/.test(

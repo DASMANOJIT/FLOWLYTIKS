@@ -8,9 +8,9 @@ import PremiumLoader from "../../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection } from "../../components/motion/primitives.jsx";
 import { clearAuthSession, getAuthRole, getAuthToken } from "../../../lib/authStorage.js";
 import { downloadPaymentReceiptPdf } from "../../../lib/paymentReceiptPdf.js";
+import { getApiBaseUrl } from "../../../lib/api.js";
 
-// Use same-origin `/api/*` (Next.js rewrites proxy to backend).
-const API_BASE = "";
+const API_BASE = getApiBaseUrl();
 
 export default function StudentProfile() {
   const { id } = useParams();

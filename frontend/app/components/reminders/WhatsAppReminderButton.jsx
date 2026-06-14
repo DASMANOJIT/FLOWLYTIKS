@@ -13,8 +13,9 @@ import {
   formatCooldownTime,
   normalizeReminderState,
 } from "../../../lib/reminderCooldown.js";
+import { getApiBaseUrl } from "../../../lib/api.js";
 
-const API_BASE = "";
+const API_BASE = getApiBaseUrl();
 
 const DEFAULT_SUCCESS_MESSAGE =
   "Reminder opened. Available again in 24 hours if unpaid.";

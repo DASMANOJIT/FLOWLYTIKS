@@ -10,7 +10,7 @@ import {
   MotionCard,
   MotionSection,
 } from "../../components/motion/primitives.jsx";
-import { readApiResponse } from "../../../lib/api.js";
+import { getApiBaseUrl, readApiResponse } from "../../../lib/api.js";
 import {
   clearAuthSession,
   getAuthRole,
@@ -23,7 +23,7 @@ import {
 } from "../../../lib/studentOptions.js";
 import { isValidWhatsAppNumber } from "../../../lib/whatsapp.js";
 
-const API_BASE = "";
+const API_BASE = getApiBaseUrl();
 const OTP_RESEND_COOLDOWN_SECONDS = 15;
 
 const isStrongPassword = (password) =>

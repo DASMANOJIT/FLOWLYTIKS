@@ -8,9 +8,11 @@ import Link from "next/link";
 import "./pay.css";
 import PremiumLoader from "../../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard } from "../../components/motion/primitives.jsx";
-import { readApiResponse } from "../../../lib/api.js";
+import { getApiBaseUrl, readApiResponse } from "../../../lib/api.js";
 import { clearAuthSession, getAuthRole, getAuthToken } from "../../../lib/authStorage.js";
 import { openCashfreeCheckout } from "../../../lib/cashfree.js";
+
+const API_BASE = getApiBaseUrl();
 
 export default function PayPage() {
   const { id: studentId } = useParams();
@@ -46,7 +48,7 @@ export default function PayPage() {
         }
 
         const res = await fetch(
-          `/api/students/me`,
+          `${API_BASE}/api/students/me`,
           {
             headers: {
               "Content-Type": "application/json",
@@ -89,7 +91,7 @@ export default function PayPage() {
       setIsPaying(true);
 
       const res = await fetch(
-        `/api/payments/cashfree/create-order`,
+        `${API_BASE}/api/payments/cashfree/create-order`,
         {
           method: "POST",
           headers: {

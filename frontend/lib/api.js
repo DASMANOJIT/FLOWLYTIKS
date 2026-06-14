@@ -1,7 +1,46 @@
 import axios from "axios";
-// Use same-origin `/api/*` and let Next.js rewrite/proxy to the backend.
-// Can be overridden if needed (e.g. direct backend calls), but the default is stable for production.
-const API = process.env.NEXT_PUBLIC_API_URL || "/api";
+
+const normalizeBaseUrl = (value) => String(value || "").trim().replace(/\/+$/, "");
+
+let hasLoggedApiBase = false;
+
+export function getApiBaseUrl() {
+  return normalizeBaseUrl(process.env.NEXT_PUBLIC_API_URL);
+}
+
+export function buildApiUrl(path = "") {
+  const value = String(path || "");
+  if (/^https?:\/\//i.test(value)) return value;
+
+  const apiBaseUrl = getApiBaseUrl();
+  const normalizedPath = value.startsWith("/") ? value : `/${value}`;
+
+  if (!apiBaseUrl) return normalizedPath;
+  return `${apiBaseUrl}${normalizedPath}`;
+}
+
+export async function apiFetch(path, options = {}) {
+  if (process.env.NODE_ENV !== "production" && !hasLoggedApiBase) {
+    hasLoggedApiBase = true;
+    console.log("API base URL:", getApiBaseUrl() || "relative /api");
+  }
+
+  const headers = options.headers || {};
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+
+  return fetch(buildApiUrl(path), {
+    ...options,
+    credentials: options.credentials || "include",
+    headers: isFormData
+      ? headers
+      : {
+          "Content-Type": "application/json",
+          ...headers,
+        },
+  });
+}
+
+const API = buildApiUrl("/api");
 
 const isProbablyHtml = (value) => /<!doctype html|<html/i.test(String(value || ""));
 
@@ -58,7 +97,7 @@ export async function apiCall(endpoint, method = "GET", body = null, token = nul
   const options = { method, headers };
   if (body) options.body = JSON.stringify(body);
 
-  const res = await fetch(`${BASE_URL}${endpoint}`, options);
+  const res = await apiFetch(`${BASE_URL}${endpoint}`, options);
   const { ok, data, error } = await readApiResponse(res, "API request failed.");
   if (!ok) {
     throw new Error(error);

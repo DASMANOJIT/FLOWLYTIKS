@@ -54,7 +54,8 @@ const buildCsp = () => {
 const resolveBackendBaseUrl = () => {
   const configured =
     normalizeBaseUrl(process.env.BACKEND_URL) ||
-    normalizeBaseUrl(process.env.NEXT_PUBLIC_BACKEND_URL);
+    normalizeBaseUrl(process.env.NEXT_PUBLIC_BACKEND_URL) ||
+    normalizeBaseUrl(process.env.NEXT_PUBLIC_API_URL);
 
   if (configured) {
     return configured;
@@ -63,7 +64,7 @@ const resolveBackendBaseUrl = () => {
   const isRenderBuild = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
   if (process.env.NODE_ENV === "production" && isRenderBuild) {
     throw new Error(
-      "BACKEND_URL (or NEXT_PUBLIC_BACKEND_URL) must be set for production frontend rewrites."
+      "BACKEND_URL, NEXT_PUBLIC_BACKEND_URL, or NEXT_PUBLIC_API_URL must be set for production frontend rewrites."
     );
   }
 

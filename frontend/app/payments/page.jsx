@@ -7,9 +7,9 @@ import Link from "next/link";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard } from "../components/motion/primitives.jsx";
 import { clearAuthSession, getAuthRole, getAuthToken } from "../../lib/authStorage.js";
+import { getApiBaseUrl } from "../../lib/api.js";
 
-// Use same-origin `/api/*` (Next.js rewrites proxy to backend).
-const API_BASE = "";
+const API_BASE = getApiBaseUrl();
 
 export default function PaymentsPage() {
   const [students, setStudents] = useState([]);

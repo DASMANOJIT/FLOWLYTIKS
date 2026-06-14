@@ -2,8 +2,9 @@
 
 import { useEffect } from "react";
 import { getAuthToken } from "../../../lib/authStorage.js";
+import { getApiBaseUrl } from "../../../lib/api.js";
 
-const API_BASE = "";
+const API_BASE = getApiBaseUrl();
 const HEARTBEAT_INTERVAL_MS = 60 * 1000;
 
 export default function AuthTabLifecycle() {

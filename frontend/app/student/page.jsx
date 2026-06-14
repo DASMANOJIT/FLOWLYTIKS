@@ -9,9 +9,9 @@ import { MotionButton, MotionCard, MotionSection } from "../components/motion/pr
 import GreetingPanel from "../components/dashboard/GreetingPanel.jsx";
 import { clearAuthSession, getAuthToken } from "../../lib/authStorage.js";
 import { downloadPaymentReceiptPdf } from "../../lib/paymentReceiptPdf.js";
+import { getApiBaseUrl } from "../../lib/api.js";
 
-// Use same-origin `/api/*` (Next.js rewrites proxy to backend).
-const API_BASE = "";
+const API_BASE = getApiBaseUrl();
 
 const PAYMENT_MONTH_TO_INDEX = {
   January: 0,

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
 import { MotionButton, MotionCard, premiumEase } from "../components/motion/primitives.jsx";
-import { readApiResponse } from "../../lib/api.js";
+import { getApiBaseUrl, readApiResponse } from "../../lib/api.js";
 import { getAuthToken } from "../../lib/authStorage.js";
 
 const statusVisualConfig = {
@@ -270,7 +270,7 @@ export default function PaymentSuccessContent() {
   const gatewayOrderId = searchParams.get("gatewayOrderId");
   const cashfreeOrderId =
     searchParams.get("cashfreeOrderId") || searchParams.get("order_id");
-  const apiBase = "";
+  const apiBase = getApiBaseUrl();
 
   const [status, setStatus] = useState(
     transactionId || gatewayOrderId || cashfreeOrderId

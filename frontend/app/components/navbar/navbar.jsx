@@ -6,9 +6,9 @@ import { AnimatePresence, motion } from "framer-motion";
 import "./navbar.css";
 import { MotionButton } from "../motion/primitives.jsx";
 import { clearAuthSession, getAuthToken } from "../../../lib/authStorage.js";
+import { getApiBaseUrl } from "../../../lib/api.js";
 
-// Use same-origin `/api/*` (Next.js rewrites proxy to backend).
-const API = "";
+const API = getApiBaseUrl();
 
 export default function StudentNavbar() {
   const [studentName, setStudentName] = useState(""); // dynamic

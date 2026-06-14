@@ -18,8 +18,9 @@ import {
   formatWhatsAppDisplay,
   isValidWhatsAppNumber,
 } from "../../lib/whatsapp.js";
-// Use same-origin `/api/*` (Next.js rewrites proxy to backend).
-const API_BASE = "";
+import { getApiBaseUrl } from "../../lib/api.js";
+
+const API_BASE = getApiBaseUrl();
 const PAGE_SIZE = 12;
 const ACADEMIC_MONTHS = [
   "March",

@@ -36,8 +36,9 @@ import {
   isValidWhatsAppNumber,
 } from "../../lib/whatsapp.js";
 import useSessionChatHistory from "../../lib/useSessionChatHistory.js";
-// Use same-origin `/api/*` (Next.js rewrites proxy to backend).
-const API_BASE = "";
+import { getApiBaseUrl } from "../../lib/api.js";
+
+const API_BASE = getApiBaseUrl();
 const STUDENT_PAGE_SIZE = 8;
 const createGroupFormState = ({
   id = "",
