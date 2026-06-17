@@ -20,6 +20,7 @@ model Admin {
   gatewayOrders            PaymentGatewayOrder[]   @relation("AdminGatewayOrders")
   feeReminderLogs          FeeReminderLog[]
   classSchoolGroups        ClassSchoolGroup[]      @relation("AdminClassSchoolGroups")
+  faculties                Faculty[]
 }
 
 model Student {
@@ -112,19 +113,404 @@ model AuthRateLimitEvent {
 }
 
 model UserSession {
-  id        String   @id
-  role      String
-  userId    Int
-  expiresAt DateTime
-  revokedAt DateTime?
+  id               String   @id @default(cuid())
+  role             String
+  userId           String
+  sessionTokenHash String?  @unique
+  deviceId         String?
+  deviceName       String?
+  userAgent        String?
+  ipAddress        String?
+  isActive         Boolean  @default(true)
+  lastSeenAt       DateTime @default(now())
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  revokedReason    String?
   closingRequestedAt DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   @@index([role, userId])
+  @@index([role, userId, isActive, lastSeenAt])
   @@index([expiresAt])
   @@index([revokedAt])
   @@index([closingRequestedAt])
+}
+
+model Faculty {
+  id                String                  @id @default(cuid())
+  adminId           Int?
+  facultyId         String                  @unique
+  username          String                  @unique
+  passwordHash      String
+  fullName          String
+  email             String?
+  phone             String                  @unique
+  gender            String?
+  dob               DateTime?
+  address           String?
+  designation       String?
+  qualification     String?
+  experienceYears   Int?
+  joiningDate       DateTime
+  employmentType    String?
+  salaryType        SalaryType
+  salaryAmount      Decimal?                @db.Decimal(12, 2)
+  paymentNotes      String?
+  status            FacultyStatus           @default(ACTIVE)
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  admin             Admin?                  @relation(fields: [adminId], references: [id], onDelete: SetNull)
+  bankAccounts      FacultyBankAccount[]
+  workLedgerEntries WorkLedgerEntry[]
+  payrolls          FacultyEarningsPayroll[]
+  payouts           FacultyPayout[]
+  paymentRecords    FacultyPaymentRecord[]
+  extraIncentiveEntries FacultyExtraIncentiveEntry[]
+  extraIncentivePayments FacultyExtraIncentivePayment[]
+  notifications     Notification[]
+  profilePictures   ProfilePicture[]
+
+  @@index([adminId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model WorkLedgerEntry {
+  id                 String              @id @default(cuid())
+  facultyId          String
+  date               DateTime            @db.Date
+  shift              WorkLedgerShift
+  amount             Decimal             @db.Decimal(12, 2)
+  remarks            String?
+  createdBy          String
+  updatedBy          String?
+  classesTaken       Int                 @default(1)
+  hoursWorked        Decimal?            @db.Decimal(5, 2)
+  subject            String?
+  updatedByAdminId   Int?
+  updatedByFacultyId String?
+  updatedByName      String?
+  updatedByRole      String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  faculty            Faculty             @relation(fields: [facultyId], references: [id], onDelete: Restrict)
+  audits             WorkLedgerEntryAudit[]
+
+  @@index([facultyId])
+  @@index([date])
+  @@index([shift])
+  @@index([createdBy])
+  @@unique([facultyId, date, shift])
+}
+
+model WorkLedgerEntryAudit {
+  id           String             @id @default(cuid())
+  entryId      String?
+  action       LedgerAuditAction
+  changedBy    String
+  previousData Json?
+  newData      Json?
+  createdAt    DateTime           @default(now())
+  entry        WorkLedgerEntry?    @relation(fields: [entryId], references: [id], onDelete: SetNull)
+
+  @@index([entryId])
+  @@index([changedBy])
+  @@index([createdAt])
+}
+
+model PayrollCycle {
+  id           String                  @id @default(cuid())
+  cycleNumber  String                  @unique
+  startDate    DateTime                @db.Date
+  endDate      DateTime                @db.Date
+  status       FacultyEarningsPayrollStatus @default(DRAFT)
+  ledgerLocked Boolean                 @default(false)
+  createdBy    String?
+  updatedBy    String?
+  approvedBy   String?
+  approvedAt   DateTime?
+  paidBy       String?
+  paidAt       DateTime?
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+  payrolls     FacultyEarningsPayroll[]
+
+  @@index([status])
+  @@index([ledgerLocked])
+  @@index([startDate, endDate])
+  @@unique([startDate, endDate])
+  @@map("payroll_cycles")
+}
+
+model FacultyEarningsPayroll {
+  id             String                       @id @default(cuid())
+  facultyId      String
+  payrollCycleId String
+  totalEntries   Int                          @default(0)
+  totalAmount    Decimal                      @default(0) @db.Decimal(12, 2)
+  status         FacultyEarningsPayrollStatus @default(DRAFT)
+  approvedBy     String?
+  approvedAt     DateTime?
+  paidBy         String?
+  paidAt         DateTime?
+  remarks        String?
+  createdBy      String?
+  updatedBy      String?
+  createdAt      DateTime                     @default(now())
+  updatedAt      DateTime                     @updatedAt
+  faculty        Faculty                      @relation(fields: [facultyId], references: [id], onDelete: Restrict)
+  payrollCycle   PayrollCycle                 @relation(fields: [payrollCycleId], references: [id], onDelete: Cascade)
+  payouts        FacultyPayout[]
+
+  @@index([facultyId])
+  @@index([payrollCycleId])
+  @@index([status])
+  @@index([approvedAt])
+  @@index([paidAt])
+  @@unique([facultyId, payrollCycleId])
+  @@map("faculty_payrolls")
+}
+
+model FacultyBankAccount {
+  id                          String                 @id @default(cuid())
+  facultyId                   String
+  payoutMode                  String                 @default("NONE")
+  accountHolderName           String?
+  accountNumber               String?
+  ifscCode                    String?
+  bankName                    String?
+  branchName                  String?
+  upiId                       String?
+  panNumber                   String?
+  payoutContactName           String?
+  payoutContactPhone          String?
+  payoutContactEmail          String?
+  verificationStatus          BankVerificationStatus @default(PENDING)
+  payoutEligible              Boolean                @default(false)
+  payoutBlockedReason         String?
+  payoutRemarks               String?
+  payoutDetailsUpdatedBy      String?
+  payoutDetailsUpdatedAt      DateTime?
+  cashfreeBeneficiaryId       String?
+  cashfreeBeneficiaryStatus   String?
+  cashfreeBeneficiaryCreatedAt DateTime?
+  cashfreeBeneficiaryUpdatedAt DateTime?
+  createdAt                   DateTime               @default(now())
+  updatedAt                   DateTime               @updatedAt
+  faculty                     Faculty                @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+
+  @@index([facultyId])
+  @@index([verificationStatus])
+}
+
+model FacultyPayout {
+  id                  String                  @id @default(cuid())
+  facultyId           String
+  payrollId           String?
+  amount              Decimal                 @db.Decimal(12, 2)
+  status              FacultyPayoutStatus     @default(PENDING)
+  referenceId         String?
+  transactionId       String?
+  gatewayReference    String?
+  cashfreeTransferId  String?
+  cashfreeReferenceId String?
+  utr                 String?
+  paymentMethod       String?
+  payoutMode          String?
+  payoutAmount        Decimal?                @db.Decimal(12, 2)
+  paidAmount          Decimal?                @db.Decimal(12, 2)
+  unpaidAmount        Decimal?                @db.Decimal(12, 2)
+  failureReason       String?
+  adminPayoutRemark   String?
+  cashfreeStatus      String?
+  idempotencyKey      String?                 @unique
+  retryCount          Int                     @default(0)
+  lastRetryAt         DateTime?
+  payoutRequestedAt   DateTime?
+  payoutProcessedAt   DateTime?
+  payoutCompletedAt   DateTime?
+  payoutFailedAt      DateTime?
+  processingTimeMs    Int?
+  createdBy           String?
+  approvedBy          String?
+  paidBy              String?
+  createdAt           DateTime                @default(now())
+  paidAt              DateTime?
+  payoutDate          DateTime?
+  updatedAt           DateTime                @updatedAt
+  faculty             Faculty                 @relation(fields: [facultyId], references: [id], onDelete: Restrict)
+  payroll             FacultyEarningsPayroll? @relation(fields: [payrollId], references: [id], onDelete: SetNull)
+  events              FacultyPayoutEvent[]
+
+  @@index([facultyId])
+  @@index([payrollId])
+  @@index([status])
+  @@index([cashfreeReferenceId])
+  @@index([cashfreeTransferId])
+}
+
+model FacultyPayoutEvent {
+  id                  String         @id @default(cuid())
+  payoutId            String
+  eventType           String
+  oldStatus           String?
+  newStatus           String?
+  cashfreeReferenceId String?
+  cashfreeTransferId  String?
+  utr                 String?
+  message             String?
+  rawPayloadJson      Json?
+  dedupeKey           String?        @unique
+  createdAt           DateTime       @default(now())
+  payout              FacultyPayout  @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+
+  @@index([payoutId])
+  @@index([eventType])
+  @@index([createdAt])
+}
+
+model WeeklyFacultyPaymentRecord {
+  id             String                 @id @default(cuid())
+  weekStart      DateTime               @db.Date
+  weekEnd        DateTime               @db.Date
+  totalEntries   Int                    @default(0)
+  facultyCount   Int                    @default(0)
+  totalAmount    Decimal                @default(0) @db.Decimal(12, 2)
+  paidAmount     Decimal                @default(0) @db.Decimal(12, 2)
+  pendingAmount  Decimal                @default(0) @db.Decimal(12, 2)
+  paymentMode    String                 @default("ONLINE")
+  status         String                 @default("UNPAID")
+  paidAt         DateTime?
+  paidByAdminId  Int?
+  paidByAdminName String?
+  remarks        String?
+  payrollCycleId String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  facultyRecords FacultyPaymentRecord[]
+
+  @@index([status])
+  @@index([paymentMode])
+  @@index([paidAt])
+  @@unique([weekStart, weekEnd])
+}
+
+model FacultyPaymentRecord {
+  id                    String                     @id @default(cuid())
+  weeklyPaymentRecordId String
+  facultyId             String
+  facultyCode           String?
+  facultyName           String?
+  attendanceEntries     Int                        @default(0)
+  amount                Decimal                    @default(0) @db.Decimal(12, 2)
+  paymentMode           String                     @default("ONLINE")
+  status                String                     @default("UNPAID")
+  cashfreeTransferId    String?
+  cashfreeReferenceId   String?
+  utr                   String?
+  transactionId         String?
+  failureReason         String?
+  paidAt                DateTime?
+  remarks               String?
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+  weeklyPaymentRecord   WeeklyFacultyPaymentRecord @relation(fields: [weeklyPaymentRecordId], references: [id], onDelete: Cascade)
+  faculty               Faculty                    @relation(fields: [facultyId], references: [id], onDelete: Restrict)
+
+  @@index([facultyId])
+  @@index([status])
+  @@unique([weeklyPaymentRecordId, facultyId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  facultyId String
+  title     String
+  message   String
+  type      String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  faculty   Faculty  @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+
+  @@index([facultyId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+model ExtraIncentiveType {
+  id        String                       @id @default(cuid())
+  name      String
+  rate      Decimal                      @db.Decimal(12, 2)
+  isActive  Boolean                      @default(true)
+  createdAt DateTime                     @default(now())
+  updatedAt DateTime                     @updatedAt
+  entries   FacultyExtraIncentiveEntry[]
+
+  @@index([isActive])
+  @@index([createdAt])
+}
+
+model FacultyExtraIncentiveEntry {
+  id              String                         @id @default(cuid())
+  facultyId       String
+  incentiveTypeId String
+  quantityChange  Int
+  rateSnapshot    Decimal                        @db.Decimal(12, 2)
+  amountSnapshot  Decimal                        @db.Decimal(12, 2)
+  status          String                         @default("PENDING")
+  paymentRecordId String?
+  createdByType   String
+  createdById     String?
+  note            String?
+  createdAt       DateTime                       @default(now())
+  updatedAt       DateTime                       @updatedAt
+  faculty         Faculty                        @relation(fields: [facultyId], references: [id], onDelete: Restrict)
+  incentiveType   ExtraIncentiveType             @relation(fields: [incentiveTypeId], references: [id], onDelete: Restrict)
+  paymentRecord   FacultyExtraIncentivePayment?  @relation(fields: [paymentRecordId], references: [id], onDelete: SetNull)
+
+  @@index([facultyId])
+  @@index([incentiveTypeId])
+  @@index([status])
+  @@index([paymentRecordId])
+  @@index([createdAt])
+}
+
+model FacultyExtraIncentivePayment {
+  id             String                       @id @default(cuid())
+  facultyId      String
+  totalAmount    Decimal                      @db.Decimal(12, 2)
+  status         String                       @default("PAID")
+  paymentMethod  String                       @default("CASH")
+  facultyPayoutId String?
+  cashfreeTransferId String?
+  cashfreeReferenceId String?
+  utr            String?
+  transactionId  String?
+  failureReason  String?
+  paidByAdminId  Int
+  paidByAdminName String?
+  paidAt         DateTime                     @default(now())
+  summaryJson    Json?
+  createdAt      DateTime                     @default(now())
+  updatedAt      DateTime                     @updatedAt
+  faculty        Faculty                      @relation(fields: [facultyId], references: [id], onDelete: Restrict)
+  entries        FacultyExtraIncentiveEntry[]
+
+  @@index([facultyId])
+  @@index([status])
+  @@index([paidAt])
+}
+
+model ProfilePicture {
+  id        String   @id @default(cuid())
+  facultyId String
+  imageUrl  String
+  createdAt DateTime @default(now())
+  faculty   Faculty  @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+
+  @@index([facultyId])
+  @@index([createdAt])
 }
 
 model Payment {
@@ -304,4 +690,51 @@ enum BackgroundJobType {
   ASSISTANT_BULK_MARK_PAID
   PAYMENT_RECONCILIATION
   REPORT_GENERATION
+}
+
+enum SalaryType {
+  MONTHLY_FIXED
+  PER_CLASS
+  ATTENDANCE_BASED
+}
+
+enum FacultyStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum WorkLedgerShift {
+  MORNING
+  AFTERNOON
+  EVENING
+}
+
+enum LedgerAuditAction {
+  CREATE
+  UPDATE
+  DELETE
+}
+
+enum FacultyEarningsPayrollStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  PAID
+  REJECTED
+  LOCKED
+}
+
+enum BankVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum FacultyPayoutStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  CANCELLED
+  REVERSED
 }

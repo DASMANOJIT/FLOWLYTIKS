@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { getAuthToken } from "../../../lib/authStorage.js";
+import { clearAuthSession, getAuthToken } from "../../../lib/authStorage.js";
 import { getApiBaseUrl } from "../../../lib/api.js";
 
 const API_BASE = getApiBaseUrl();
@@ -14,19 +14,29 @@ export default function AuthTabLifecycle() {
       if (!token) return;
 
       fetch(`${API_BASE}/api/auth/heartbeat`, {
-        method: "POST",
+        method: "GET",
         headers: {
           Authorization: `Bearer ${token}`,
         },
         cache: "no-store",
-      }).catch(() => {});
+      })
+        .then((res) => {
+          if (res.status === 401 || res.status === 403) {
+            clearAuthSession();
+            window.location.href = "/login";
+          }
+        })
+        .catch(() => {});
     };
 
     const handlePageHide = () => {
       const token = getAuthToken();
       if (!token) return;
+      const pathname = window.location?.pathname || "";
+      if (pathname === "/login" || pathname === "/") return;
+      if (pathname.startsWith("/pay/") || pathname.startsWith("/payment-success")) return;
 
-      fetch(`${API_BASE}/api/auth/tab-close`, {
+      fetch(`${API_BASE}/api/auth/session/close`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,

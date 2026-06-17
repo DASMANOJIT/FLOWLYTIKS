@@ -41,7 +41,9 @@ router.post("/2fa/verify", otpVerifyRateLimit, validateBody(twoFactorBodySchema)
 router.post("/login", loginRateLimit, validateBody(loginBodySchema), loginUser);
 router.post("/register", signupRateLimit, validateBody(registerBodySchema), registerUser);
 router.post("/reset-password", passwordResetRateLimit, validateBody(resetPasswordBodySchema), resetPassword);
+router.get("/heartbeat", protect, heartbeatSession);
 router.post("/heartbeat", protect, heartbeatSession);
+router.post("/session/close", protect, markTabClosing);
 router.post("/tab-close", protect, markTabClosing);
 router.post("/logout", protect, logoutUser);
 

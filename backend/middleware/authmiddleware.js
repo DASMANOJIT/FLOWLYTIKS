@@ -1,9 +1,16 @@
 import jwt from "jsonwebtoken";
 import {
-  clearSessionClosing,
   getSessionState,
+  removeSession,
+  touchSessionActivity,
 } from "../utils/sessionStore.js";
 import prisma from "../prisma/client.js";
+
+const authJson = (res, status, message) =>
+  res.status(status).json({
+    success: false,
+    message,
+  });
 
 export const protect = async (req, res, next) => {
   try {
@@ -17,7 +24,7 @@ export const protect = async (req, res, next) => {
     }
 
     if (!token) {
-      return res.status(401).json({ message: "Not authorized, no token" });
+      return authJson(res, 401, "Authentication required.");
     }
 
     // Verify token
@@ -37,28 +44,36 @@ export const protect = async (req, res, next) => {
         where: { id: decoded.id },
         select: { id: true, name: true, email: true, phone: true },
       });
+    } else if (decoded.role === "faculty") {
+      user = await prisma.faculty.findUnique({
+        where: { id: decoded.id },
+        select: { id: true, fullName: true, email: true, phone: true, facultyId: true },
+      });
     }
 
     if (!user) {
-      return res.status(401).json({ message: "Not authorized, invalid user" });
+      return authJson(res, 401, "Session expired. Please login again.");
     }
 
-    if (decoded.jti) {
-      const session = await getSessionState(decoded.role, decoded.id, decoded.jti);
-      const active =
-        session &&
-        session.matchesUser &&
-        !session.revokedAt &&
-        session.expiresAt > new Date();
-      if (!active) {
-        return res
-          .status(401)
-          .json({ message: "Session expired or logged out. Please login again." });
-      }
-      if (session.closingRequestedAt) {
-        await clearSessionClosing(decoded.role, decoded.id, decoded.jti);
-      }
+    if (!decoded.jti) {
+      return authJson(res, 401, "Session expired. Please login again.");
     }
+
+    const session = await getSessionState(decoded.role, decoded.id, decoded.jti);
+    const active =
+      session &&
+      session.matchesUser &&
+      session.isActive !== false &&
+      !session.revokedAt &&
+      session.expiresAt > new Date() &&
+      !session.idleExpired;
+    if (!active) {
+      if (session?.matchesUser && !session.revokedAt) {
+        await removeSession(decoded.role, decoded.id, decoded.jti, "EXPIRED");
+      }
+      return authJson(res, 401, "Session expired. Please login again.");
+    }
+    await touchSessionActivity(decoded.role, decoded.id, decoded.jti);
 
     // Attach user to request
     req.user = user;
@@ -69,7 +84,7 @@ export const protect = async (req, res, next) => {
     next();
   } catch (error) {
     console.error("Auth error:", error?.message || error);
-    return res.status(401).json({ message: "Not authorized, token failed" });
+    return authJson(res, 401, "Session expired. Please login again.");
   }
 };
 
@@ -83,7 +98,7 @@ export const protect = async (req, res, next) => {
 
 export const adminOnly = (req, res, next) => {
   if (!req.user || req.userRole !== "admin") {
-    return res.status(403).json({ message: "Forbidden: Admins only" });
+    return authJson(res, 403, "You do not have permission to perform this action.");
   }
   next();
 };

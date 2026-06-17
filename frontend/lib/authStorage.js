@@ -88,6 +88,23 @@ export const getAuthRole = () => {
   return sessionStorageRef?.getItem(AUTH_ROLE_KEY)?.trim() || "";
 };
 
+export const storeFacultyAuthSession = ({ token, name }) => {
+  storeAuthSession({ token, name, role: "faculty" });
+};
+
+export const getFacultyAuthToken = () => {
+  const role = getAuthRole();
+  return role === "faculty" ? getAuthToken() : "";
+};
+
+export const getFacultyAuthRole = () => getAuthRole();
+
+export const clearFacultyAuthSession = () => {
+  if (getAuthRole() === "faculty") {
+    clearAuthSession();
+  }
+};
+
 export const getAuthName = () => {
   clearLegacyAuthStorage();
   const sessionStorageRef = getBrowserStorage("session");

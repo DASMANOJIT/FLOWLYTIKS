@@ -6,6 +6,7 @@ import prisma from "./prisma/client.js";
 import { validateEnv } from "./config/env.js";
 import { logError, logInfo } from "./utils/appLogger.js";
 import { verifyRequiredSchemaColumns } from "./utils/schemaGuard.js";
+import { getFacultyPayoutEmailConfigStatus } from "./services/emailNotificationService.js";
 
 // Import routes
 import authRoutes from "./routes/authroute.js";
@@ -15,8 +16,25 @@ import settingsRoutes from "./routes/settingsroute.js";
 import adminAssistantRoutes from "./routes/adminassistantroute.js";
 import adminRoutes from "./routes/adminroute.js";
 import reminderRoutes from "./routes/reminderroute.js";
+import facultyRoutes from "./routes/facultyroute.js";
+import workLedgerRoutes from "./routes/workledgerroute.js";
+import facultyAuthRoutes from "./routes/facultyauthroute.js";
+import facultyPayrollRoutes from "./routes/facultypayrollroute.js";
+import facultyPayoutRoutes from "./routes/facultypayoutroute.js";
+import facultyPayoutBankRoutes from "./routes/facultypayoutbankroute.js";
+import facultyReportRoutes from "./routes/facultyreportroute.js";
+import facultyWeeklyPaymentRoutes from "./routes/facultyweeklypaymentroute.js";
+import facultyExtraIncentiveRoutes from "./routes/facultyextraincentiveroute.js";
+import notificationRoutes from "./routes/notificationroute.js";
+import auditLogRoutes from "./routes/auditlogroute.js";
 
 validateEnv();
+const facultyEmailConfigStatus = getFacultyPayoutEmailConfigStatus();
+logInfo("notification.email.config", {
+  "notification.email.enabled": facultyEmailConfigStatus.enabled,
+  "notification.email.from.configured": facultyEmailConfigStatus.resendFromConfigured,
+  "notification.email.resend.configured": facultyEmailConfigStatus.resendApiConfigured,
+});
 
 // Initialize app
 const app = express();
@@ -108,7 +126,13 @@ app.use(
   express.json({
     limit: "16kb",
     verify(req, res, buf) {
-      if (req.originalUrl === "/api/payments/cashfree/webhook") {
+      if (
+        req.originalUrl === "/api/payments/cashfree/webhook" ||
+        req.originalUrl === "/api/faculty-weekly-payments/cashfree/webhook" ||
+        req.originalUrl === "/api/faculty-payout/cashfree/webhook" ||
+        req.originalUrl === "/api/faculty-payouts/cashfree/webhook" ||
+        req.originalUrl === "/api/admin/faculty/payouts/cashfree/webhook"
+      ) {
         req.rawBody = buf.toString("utf8");
       }
     },
@@ -198,7 +222,31 @@ app.use("/api/students", studentRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/admin-assistant", adminAssistantRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/faculty-auth", facultyAuthRoutes);
+app.use("/api/faculty/payroll", facultyPayrollRoutes);
+app.use("/api/faculty", facultyRoutes);
+app.use("/api/work-ledger", workLedgerRoutes);
+app.use("/api/faculty-payout", facultyPayoutRoutes);
+app.use("/api/faculty-payouts", facultyPayoutRoutes);
+app.use("/api/admin/faculty/payouts", facultyPayoutRoutes);
+app.use("/api/faculty-payout-bank", facultyPayoutBankRoutes);
+app.use("/api/faculty/bank-accounts", facultyPayoutBankRoutes);
+app.use("/api/admin/faculty/bank-accounts", facultyPayoutBankRoutes);
+app.use("/api/faculty-payroll", facultyPayrollRoutes);
+app.use("/api/faculty-reports", facultyReportRoutes);
+app.use("/api/faculty-weekly-payments", facultyWeeklyPaymentRoutes);
+app.use("/api/faculty-extra-incentives", facultyExtraIncentiveRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/audit-logs", auditLogRoutes);
 app.use("/api/reminders", reminderRoutes);
+
+app.use("/api", (req, res) => {
+  return res.status(404).json({
+    success: false,
+    error: "API route not found.",
+    message: "API route not found.",
+  });
+});
 
 
 // Health check

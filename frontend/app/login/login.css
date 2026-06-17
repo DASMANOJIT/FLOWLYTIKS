@@ -105,6 +105,25 @@
   height: 570px;
 }
 
+.card-wrapper.role-admin,
+.card-wrapper.role-faculty {
+  height: 430px;
+}
+
+.card-wrapper.role-admin.forgot,
+.card-wrapper.role-faculty.forgot {
+  height: 650px;
+}
+
+.card-wrapper.role-student.login,
+.card-wrapper.role-student.forgot {
+  height: 630px;
+}
+
+.card-wrapper.role-student.signup {
+  height: 990px;
+}
+
 .auth-switch {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -156,6 +175,11 @@
   overflow-y: auto;
   transition: transform 0.75s ease, opacity 0.45s ease;
   backface-visibility: hidden;
+}
+
+.card-wrapper.role-student .card-form {
+  top: 116px;
+  max-height: calc(100% - 120px);
 }
 
 .card-form::-webkit-scrollbar {
@@ -318,6 +342,13 @@
   pointer-events: none;
 }
 
+.card-wrapper.role-admin .card-form,
+.card-wrapper.role-faculty .card-form {
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+}
+
 @keyframes riseFade {
   from {
     opacity: 0;
@@ -363,7 +394,14 @@
   .card-wrapper,
   .card-wrapper.login,
   .card-wrapper.signup,
-  .card-wrapper.forgot {
+  .card-wrapper.forgot,
+  .card-wrapper.role-admin,
+  .card-wrapper.role-faculty,
+  .card-wrapper.role-admin.forgot,
+  .card-wrapper.role-faculty.forgot,
+  .card-wrapper.role-student.login,
+  .card-wrapper.role-student.signup,
+  .card-wrapper.role-student.forgot {
     height: auto;
     min-height: 0;
     perspective: none;
@@ -391,6 +429,11 @@
     border-radius: 18px;
   }
 
+  .card-wrapper.role-student .card-form {
+    top: 0;
+    max-height: none;
+  }
+
   .card-form h2 {
     font-size: 30px;
   }
@@ -407,6 +450,11 @@
   .card-wrapper.login .login-side,
   .card-wrapper.signup .signup-side,
   .card-wrapper.forgot .forgot-side {
+    display: flex;
+  }
+
+  .card-wrapper.role-admin .card-form,
+  .card-wrapper.role-faculty .card-form {
     display: flex;
   }
 

@@ -5,10 +5,10 @@ import prisma from "../prisma/client.js";
 import {
   addSession,
   clearUserSessions,
-  getActiveSessionCount,
   markSessionClosing,
   removeSession,
   touchSessionActivity,
+  getAccessTokenExpiryMinutes,
 } from "../utils/sessionStore.js";
 import { sendEmailOtp, verifyEmailOtp } from "../services/emailOtpService.js";
 import {
@@ -30,7 +30,6 @@ import {
 import { buildRequestLogMeta, logInfo, logWarn } from "../utils/appLogger.js";
 import { resolveDefaultAdminId } from "../services/classSchoolGroupService.js";
 
-const MAX_DEVICES_PER_ACCOUNT = 2;
 const INVALID_CREDENTIALS_MESSAGE = "Invalid credentials.";
 
 const maskEmailForLog = (email) => {
@@ -129,25 +128,17 @@ const getStudentRegistrationValidationError = ({
   return null;
 };
 
-const issueToken = async ({ role, id }) => {
-  const currentActive = await getActiveSessionCount(role, id);
-  if (currentActive >= MAX_DEVICES_PER_ACCOUNT) {
-    const err = new Error(
-      "Login limit reached (2 devices). Logout from another device first."
-    );
-    err.status = 403;
-    throw err;
-  }
-
+const issueToken = async ({ role, id, req }) => {
   const tokenId = crypto.randomUUID();
+  const expiryMinutes = getAccessTokenExpiryMinutes();
   const token = jwt.sign({ id, role }, process.env.JWT_SECRET, {
     algorithm: "HS256",
-    expiresIn: "7d",
+    expiresIn: `${expiryMinutes}m`,
     jwtid: tokenId,
   });
   const decoded = jwt.decode(token);
-  const expMs = decoded?.exp ? decoded.exp * 1000 : Date.now() + 7 * 86400000;
-  await addSession(role, id, tokenId, expMs);
+  const expMs = decoded?.exp ? decoded.exp * 1000 : Date.now() + expiryMinutes * 60000;
+  await addSession(role, id, tokenId, expMs, req);
   return token;
 };
 
@@ -288,7 +279,7 @@ export const loginUser = async (req, res) => {
         logWarn("auth.login_otp_failed", requestMeta);
         return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
       }
-      const token = await issueToken({ role: "student", id: student.id });
+      const token = await issueToken({ role: "student", id: student.id, req });
       logInfo("auth.login_success", {
         ...requestMeta,
         role: "student",
@@ -317,7 +308,7 @@ export const loginUser = async (req, res) => {
           });
           return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
         }
-        const token = await issueToken({ role: "admin", id: admin.id });
+        const token = await issueToken({ role: "admin", id: admin.id, req });
         logInfo("auth.login_success", {
           ...requestMeta,
           role: "admin",
@@ -386,7 +377,7 @@ export const loginUser = async (req, res) => {
         });
       }
 
-      const token = await issueToken({ role: "student", id: student.id });
+      const token = await issueToken({ role: "student", id: student.id, req });
       logInfo("auth.login_success", {
         ...requestMeta,
         role: "student",
@@ -434,7 +425,7 @@ export const verifyTwoFactor = async (req, res) => {
     if (!student) {
       return authError(res, 401, INVALID_CREDENTIALS_MESSAGE);
     }
-    const token = await issueToken({ role: "student", id: student.id });
+    const token = await issueToken({ role: "student", id: student.id, req });
     return authSuccess(res, {
       token,
       role: "student",
@@ -494,7 +485,7 @@ export const resetPassword = async (req, res) => {
         where: { id: admin.id },
         data: { password: hashedPassword },
       });
-      await clearUserSessions("admin", admin.id);
+      await clearUserSessions("admin", admin.id, "PASSWORD_CHANGED");
       return authSuccess(res, { message: "Admin password reset successful" });
     }
 
@@ -519,7 +510,7 @@ export const resetPassword = async (req, res) => {
         data: { password: hashedPassword },
       });
     }
-    await clearUserSessions("student", student.id);
+    await clearUserSessions("student", student.id, "PASSWORD_CHANGED");
     return authSuccess(res, { message: "Student password reset successful" });
   } catch (err) {
     if (isDbUnavailableError(err)) {
@@ -544,9 +535,9 @@ export const logoutUser = async (req, res) => {
     }
 
     if (req.tokenId) {
-      await removeSession(req.userRole, req.user.id, req.tokenId);
+      await removeSession(req.userRole, req.user.id, req.tokenId, "LOGOUT");
     }
-    return authSuccess(res, { message: "Logged out successfully" });
+    return authSuccess(res, { message: "Logged out successfully." });
   } catch (err) {
     console.error("LOGOUT ERROR:", err?.message || err);
     return authError(res, 500, "Logout failed");
@@ -556,27 +547,27 @@ export const logoutUser = async (req, res) => {
 export const markTabClosing = async (req, res) => {
   try {
     if (!req.user || !req.userRole || !req.tokenId) {
-      return res.status(204).end();
+      return authSuccess(res, { message: "No active session." });
     }
 
     await markSessionClosing(req.userRole, req.user.id, req.tokenId);
-    return res.status(204).end();
+    return authSuccess(res, { message: "Session closed." });
   } catch (err) {
     console.error("TAB CLOSE ERROR:", err?.message || err);
-    return res.status(204).end();
+    return authSuccess(res, { message: "Session close acknowledged." });
   }
 };
 
 export const heartbeatSession = async (req, res) => {
   try {
     if (!req.user || !req.userRole || !req.tokenId) {
-      return res.status(204).end();
+      return authError(res, 401, "Session expired. Please login again.");
     }
 
-    await touchSessionActivity(req.userRole, req.user.id, req.tokenId);
-    return res.status(204).end();
+    await touchSessionActivity(req.userRole, req.user.id, req.tokenId, { force: true });
+    return authSuccess(res, { message: "Session active." });
   } catch (err) {
     console.error("SESSION HEARTBEAT ERROR:", err?.message || err);
-    return res.status(204).end();
+    return authError(res, 401, "Session expired. Please login again.");
   }
 };

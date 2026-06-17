@@ -844,6 +844,9 @@ export default function AdminDashboard() {
 
         <div className={`nav-links ${menuOpen ? "open" : ""}`}>
           <Link href="/students">Students</Link>
+          <Link href="/admin/faculty">Faculty</Link>
+          <Link href="/admin/notifications">Notifications</Link>
+          <Link href="/admin/audit-logs">Audit Logs</Link>
           <Link href="/payments">Payments</Link>
           <MotionButton className="logout-btn" onClick={handleLogout}>Logout</MotionButton>
 

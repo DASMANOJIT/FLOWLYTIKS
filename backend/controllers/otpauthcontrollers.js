@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import prisma from "../prisma/client.js";
 import {
   addSession,
-  getActiveSessionCount,
+  getAccessTokenExpiryMinutes,
 } from "../utils/sessionStore.js";
 import { sendEmailOtp, verifyEmailOtp } from "../services/emailOtpService.js";
 import {
@@ -25,7 +25,6 @@ import {
 } from "../utils/authValidation.js";
 import { resolveDefaultAdminId } from "../services/classSchoolGroupService.js";
 
-const MAX_DEVICES_PER_ACCOUNT = 2;
 const validPurposes = new Set(["signup", "login", "reset", "2fa"]);
 
 const authError = (res, status, error, extra = {}) =>
@@ -99,24 +98,17 @@ const isDbUnavailableError = (err) => {
   );
 };
 
-const issueToken = async ({ role, id }) => {
-  const currentActive = await getActiveSessionCount(role, id);
-  if (currentActive >= MAX_DEVICES_PER_ACCOUNT) {
-    const err = new Error(
-      "Login limit reached (2 devices). Logout from another device first."
-    );
-    err.status = 403;
-    throw err;
-  }
+const issueToken = async ({ role, id, req }) => {
   const tokenId = crypto.randomUUID();
+  const expiryMinutes = getAccessTokenExpiryMinutes();
   const token = jwt.sign({ id, role }, process.env.JWT_SECRET, {
     algorithm: "HS256",
-    expiresIn: "7d",
+    expiresIn: `${expiryMinutes}m`,
     jwtid: tokenId,
   });
   const decoded = jwt.decode(token);
-  const expMs = decoded?.exp ? decoded.exp * 1000 : Date.now() + 7 * 86400000;
-  await addSession(role, id, tokenId, expMs);
+  const expMs = decoded?.exp ? decoded.exp * 1000 : Date.now() + expiryMinutes * 60000;
+  await addSession(role, id, tokenId, expMs, req);
   return token;
 };
 
@@ -304,7 +296,7 @@ export const signupWithOtp = async (req, res) => {
       },
     });
 
-    const token = await issueToken({ role: "student", id: student.id });
+    const token = await issueToken({ role: "student", id: student.id, req });
     return authSuccess(res, {
       token,
       role: "student",

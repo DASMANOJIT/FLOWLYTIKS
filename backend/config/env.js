@@ -99,6 +99,8 @@ export const validateEnv = () => {
   assertOptionalHttpUrls("PHONEPE_BASE_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("WHATSAPP_GRAPH_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("CASHFREE_RETURN_URL", { allowLocal: !isProduction });
+  assertOptionalHttpUrls("CASHFREE_PAYOUT_API_BASE_URL", { allowLocal: !isProduction });
+  assertOptionalHttpUrls("BACKEND_PUBLIC_URL", { allowLocal: !isProduction });
 
   const runScheduledJobs = String(process.env.RUN_SCHEDULED_JOBS || "").trim();
   if (runScheduledJobs && !["0", "1"].includes(runScheduledJobs)) {
@@ -108,4 +110,12 @@ export const validateEnv = () => {
   assertOptionalPositiveInt("BACKGROUND_JOB_POLL_INTERVAL_MS");
   assertOptionalPositiveInt("BACKGROUND_JOB_BATCH_SIZE");
   assertOptionalPositiveInt("BACKGROUND_JOB_STALE_MINUTES");
+  assertOptionalPositiveInt("MAX_ACTIVE_SESSIONS_PER_USER");
+  assertOptionalPositiveInt("SESSION_IDLE_TIMEOUT_MINUTES");
+  assertOptionalPositiveInt("ACCESS_TOKEN_EXPIRY_MINUTES");
+
+  const payoutEnvironment = String(process.env.CASHFREE_PAYOUT_ENVIRONMENT || "").trim();
+  if (payoutEnvironment && !["sandbox", "production"].includes(payoutEnvironment.toLowerCase())) {
+    throw new Error("CASHFREE_PAYOUT_ENVIRONMENT must be either sandbox or production.");
+  }
 };
