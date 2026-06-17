@@ -29,29 +29,10 @@ export default function AuthTabLifecycle() {
         .catch(() => {});
     };
 
-    const handlePageHide = () => {
-      const token = getAuthToken();
-      if (!token) return;
-      const pathname = window.location?.pathname || "";
-      if (pathname === "/login" || pathname === "/") return;
-      if (pathname.startsWith("/pay/") || pathname.startsWith("/payment-success")) return;
-
-      fetch(`${API_BASE}/api/auth/session/close`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        keepalive: true,
-        cache: "no-store",
-      }).catch(() => {});
-    };
-
     sendHeartbeat();
     const intervalId = window.setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
-    window.addEventListener("pagehide", handlePageHide);
     return () => {
       window.clearInterval(intervalId);
-      window.removeEventListener("pagehide", handlePageHide);
     };
   }, []);
 

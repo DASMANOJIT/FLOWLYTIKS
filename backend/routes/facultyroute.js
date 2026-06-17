@@ -5,6 +5,7 @@ import {
   getFaculty,
   getFacultyById,
   changeMyFacultyPassword,
+  permanentlyDeleteFaculty,
   updateFaculty,
   updateFacultyStatus,
 } from "../controllers/facultycontrollers.js";
@@ -122,6 +123,15 @@ router.patch(
   validateBody(facultyStatusBodySchema),
   auditAction({ action: "FACULTY_STATUS_UPDATED", entityType: "Faculty", entityId: (req) => req.params.id, metadata: (req) => req.body }),
   updateFacultyStatus
+);
+router.delete(
+  "/:id/permanent",
+  protect,
+  adminOnly,
+  adminWriteRateLimit,
+  validateParams(facultyIdParamSchema),
+  auditAction({ action: "FACULTY_PERMANENTLY_DELETED", entityType: "Faculty", entityId: (req) => req.params.id }),
+  permanentlyDeleteFaculty
 );
 router.delete(
   "/:id",

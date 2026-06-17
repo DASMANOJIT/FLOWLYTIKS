@@ -52,22 +52,11 @@ export default function useSessionControl(role) {
         .catch(() => {});
     };
 
-    const closeSession = () => {
-      fetch("/api/auth/session/close", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        keepalive: true,
-        cache: "no-store",
-      }).catch(() => {});
-    };
-
     sendHeartbeat();
     const intervalId = window.setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
-    window.addEventListener("pagehide", closeSession);
 
     return () => {
       window.clearInterval(intervalId);
-      window.removeEventListener("pagehide", closeSession);
     };
   }, [role]);
 }

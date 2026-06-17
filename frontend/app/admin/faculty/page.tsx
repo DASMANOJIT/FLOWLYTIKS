@@ -4,7 +4,7 @@ import Link from "next/link";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, BookOpen, Eye, EyeOff, Gift, Plus, X } from "lucide-react";
+import { ArrowLeft, BookOpen, Eye, EyeOff, Gift, Pencil, Plus, Trash2, X } from "lucide-react";
 import { getAuthToken } from "../../../lib/authStorage.js";
 import { apiCall } from "../../../lib/api.js";
 import PremiumLoader from "../../components/ui/PremiumLoader";
@@ -234,6 +234,7 @@ export default function FacultyManagementPage() {
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [confirmFaculty, setConfirmFaculty] = useState<Faculty | null>(null);
+  const [deleteFaculty, setDeleteFaculty] = useState<Faculty | null>(null);
   const [showPassword, setShowPassword] = useState(false);
 
   const token = useMemo(() => getAuthToken(), []);
@@ -407,6 +408,27 @@ export default function FacultyManagementPage() {
     }
   };
 
+  const permanentlyDeleteFaculty = async () => {
+    if (!deleteFaculty || !token) return;
+    try {
+      await callApi(`/faculty/${deleteFaculty.id}/permanent`, "DELETE", null, token);
+      setDeleteFaculty(null);
+      showToast({
+        type: "success",
+        message: "Faculty member permanently deleted successfully.",
+      });
+      await loadFaculty();
+    } catch (deleteError) {
+      showToast({
+        type: "error",
+        message:
+          deleteError instanceof Error
+            ? deleteError.message
+            : "Failed to permanently delete faculty member.",
+      });
+    }
+  };
+
   const updateForm = (field: keyof FacultyForm, value: string) => {
     setForm((current) => ({ ...current, [field]: value }));
     setFormErrors((current) => ({ ...current, [field]: "" }));
@@ -508,9 +530,9 @@ export default function FacultyManagementPage() {
                     <th>Full Name</th>
                     <th>Phone Number</th>
                     <th>Email</th>
-                    <th>Employment Type</th>
                     <th>Salary Type</th>
                     <th>Status</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -536,12 +558,38 @@ export default function FacultyManagementPage() {
                       <td>{row.fullName}</td>
                       <td>{row.phone}</td>
                       <td>{row.email || "-"}</td>
-                      <td>{row.employmentType || "-"}</td>
                       <td>{salaryTypeLabels[row.salaryType]}</td>
                       <td>
                         <span className={`faculty-status faculty-status--${row.status}`}>
                           {row.status === "ACTIVE" ? "Active" : "Inactive"}
                         </span>
+                      </td>
+                      <td>
+                        <div className="faculty-actions">
+                          <button
+                            type="button"
+                            className="faculty-button faculty-button--ghost"
+                            onClick={() => openEditModal(row)}
+                          >
+                            <Pencil size={16} />
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className={`faculty-button ${row.status === "ACTIVE" ? "faculty-button--danger" : "faculty-button--soft"}`}
+                            onClick={() => setConfirmFaculty(row)}
+                          >
+                            {row.status === "ACTIVE" ? "Make Inactive" : "Make Active"}
+                          </button>
+                          <button
+                            type="button"
+                            className="faculty-button faculty-button--danger"
+                            onClick={() => setDeleteFaculty(row)}
+                          >
+                            <Trash2 size={16} />
+                            Delete
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -785,6 +833,29 @@ export default function FacultyManagementPage() {
                 onClick={toggleStatus}
               >
                 {confirmFaculty.status === "ACTIVE" ? "Deactivate" : "Activate"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {deleteFaculty ? (
+        <div className="faculty-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="faculty-modal faculty-modal--confirm">
+            <div className="faculty-modal-header">
+              <h2>Permanently Delete Faculty?</h2>
+            </div>
+            <div className="faculty-form">
+              This will permanently delete this faculty member from the database. Continue?
+              <br />
+              <strong>{deleteFaculty.fullName}</strong> ({deleteFaculty.facultyId})
+            </div>
+            <div className="faculty-modal-footer">
+              <button className="faculty-button faculty-button--ghost" onClick={() => setDeleteFaculty(null)}>
+                Cancel
+              </button>
+              <button className="faculty-button faculty-button--danger" onClick={permanentlyDeleteFaculty}>
+                Permanently Delete
               </button>
             </div>
           </div>

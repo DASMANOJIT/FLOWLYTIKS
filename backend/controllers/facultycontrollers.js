@@ -430,6 +430,10 @@ export const updateFacultyStatus = async (req, res) => {
       select: FACULTY_SELECT,
     });
 
+    if (req.body.status === "INACTIVE") {
+      await clearUserSessions("faculty", faculty.id, "FACULTY_INACTIVE");
+    }
+
     return res.json({ success: true, faculty: toFacultyDto(faculty) });
   } catch (error) {
     if (error?.code === "P2025") {
@@ -442,12 +446,71 @@ export const updateFacultyStatus = async (req, res) => {
 export const deleteFaculty = async (req, res) => {
   try {
     const facultyId = req.params.id;
-    await prisma.faculty.update({
+    const faculty = await prisma.faculty.update({
       where: { id: facultyId },
       data: { status: "INACTIVE" },
+      select: FACULTY_SELECT,
+    });
+    await clearUserSessions("faculty", facultyId, "FACULTY_INACTIVE");
+
+    return res.json({
+      success: true,
+      faculty: toFacultyDto(faculty),
+      message: "Faculty member marked inactive successfully.",
+    });
+  } catch (error) {
+    if (error?.statusCode) {
+      return res.status(error.statusCode).json({ success: false, message: error.message });
+    }
+    if (error?.code === "P2025") {
+      return res.status(404).json({ success: false, message: "Faculty member not found." });
+    }
+    return handleFacultyError(res, error);
+  }
+};
+
+export const permanentlyDeleteFaculty = async (req, res) => {
+  try {
+    const facultyId = req.params.id;
+
+    const result = await prisma.$transaction(async (tx) => {
+      const faculty = await tx.faculty.findUnique({
+        where: { id: facultyId },
+        select: { id: true, facultyId: true, fullName: true, phone: true },
+      });
+
+      if (!faculty) {
+        const error = new Error("Faculty member not found.");
+        error.statusCode = 404;
+        throw error;
+      }
+
+      await tx.userSession.deleteMany({ where: { role: "faculty", userId: faculty.id } });
+
+      if (tx.facultyPasswordOtp && faculty.phone) {
+        await tx.facultyPasswordOtp.deleteMany({ where: { phone: faculty.phone } });
+      }
+
+      await tx.facultyExtraIncentiveEntry.deleteMany({ where: { facultyId: faculty.id } });
+      await tx.facultyExtraIncentivePayment.deleteMany({ where: { facultyId: faculty.id } });
+      await tx.facultyPaymentRecord.deleteMany({ where: { facultyId: faculty.id } });
+      await tx.facultyPayout.deleteMany({ where: { facultyId: faculty.id } });
+      await tx.facultyEarningsPayroll.deleteMany({ where: { facultyId: faculty.id } });
+      await tx.workLedgerEntry.deleteMany({ where: { facultyId: faculty.id } });
+      await tx.notification.deleteMany({ where: { facultyId: faculty.id } });
+      await tx.profilePicture.deleteMany({ where: { facultyId: faculty.id } });
+      await tx.facultyBankAccount.deleteMany({ where: { facultyId: faculty.id } });
+
+      await tx.faculty.delete({ where: { id: faculty.id } });
+
+      return faculty;
     });
 
-    return res.json({ success: true, message: "Faculty member deleted successfully." });
+    return res.json({
+      success: true,
+      message: "Faculty member permanently deleted successfully.",
+      faculty: result,
+    });
   } catch (error) {
     if (error?.statusCode) {
       return res.status(error.statusCode).json({ success: false, message: error.message });

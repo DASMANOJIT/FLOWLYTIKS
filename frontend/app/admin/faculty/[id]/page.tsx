@@ -123,9 +123,8 @@ export default function FacultyProfilePage() {
   const deleteFacultyConfirm = useCallback(async () => {
     if (!hasMounted || role !== "admin") return;
 
-    // Confirm permanent deletion
     const ok = window.confirm(
-      "Are you sure you want to delete this faculty member? This action cannot be undone."
+      "This will permanently delete this faculty member from the database. Continue?"
     );
     if (!ok) return;
 
@@ -138,8 +137,7 @@ export default function FacultyProfilePage() {
     try {
       setLoading(true);
       setError("");
-      // Call DELETE to perform a hard delete on the backend
-      await callApi(`/faculty/${params.id}`, "DELETE", null, effectiveToken);
+      await callApi(`/faculty/${params.id}/permanent`, "DELETE", null, effectiveToken);
       // Redirect back to faculty list on success
       router.push("/admin/faculty");
     } catch (err) {

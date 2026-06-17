@@ -71,7 +71,7 @@ export const loginFaculty = async (req, res) => {
       return authResponse(res, 401, { message: "Invalid email or password." });
     }
     if (faculty.status !== "ACTIVE") {
-      return authResponse(res, 403, { message: "Faculty account is inactive." });
+      return authResponse(res, 403, { message: "Your faculty account is inactive. Please contact admin." });
     }
 
     const token = await issueFacultyToken(faculty, req);

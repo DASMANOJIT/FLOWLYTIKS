@@ -47,12 +47,19 @@ export const protect = async (req, res, next) => {
     } else if (decoded.role === "faculty") {
       user = await prisma.faculty.findUnique({
         where: { id: decoded.id },
-        select: { id: true, fullName: true, email: true, phone: true, facultyId: true },
+        select: { id: true, fullName: true, email: true, phone: true, facultyId: true, status: true },
       });
     }
 
     if (!user) {
       return authJson(res, 401, "Session expired. Please login again.");
+    }
+
+    if (decoded.role === "faculty" && user.status !== "ACTIVE") {
+      if (decoded.jti) {
+        await removeSession(decoded.role, decoded.id, decoded.jti, "FACULTY_INACTIVE");
+      }
+      return authJson(res, 403, "Faculty account is inactive. Please contact admin.");
     }
 
     if (!decoded.jti) {
