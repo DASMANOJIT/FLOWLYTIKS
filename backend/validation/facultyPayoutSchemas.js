@@ -1,14 +1,15 @@
 import { z } from "zod";
+import { prismaStringId } from "./idSchemas.js";
 
 export const payoutCreateBodySchema = z.object({
-  facultyId: z.string().uuid("Faculty id must be a valid UUID."),
-  payrollId: z.string().uuid("Payroll id must be a valid UUID.").optional(),
+  facultyId: prismaStringId("Faculty id must be valid."),
+  payrollId: prismaStringId("Payroll id must be valid.").optional(),
   amount: z.coerce.number().min(1, "Amount must be greater than zero.").optional(),
   paymentMethod: z.string().optional(),
 });
 
 export const payoutBulkBodySchema = z.object({
-  payoutIds: z.array(z.string().uuid("Payout id must be a valid UUID.")).min(1),
+  payoutIds: z.array(prismaStringId("Payout id must be valid.")).min(1),
 });
 
 export const payoutMarkPaidBodySchema = z.object({
@@ -24,10 +25,10 @@ export const payoutMarkFailedBodySchema = z.object({
 });
 
 export const payoutPayrollCycleBodySchema = z.object({
-  payrollCycleId: z.string().uuid("Payroll cycle id must be a valid UUID."),
+  payrollCycleId: prismaStringId("Payroll cycle id must be valid."),
 });
 
-export const payoutIdParamSchema = z.object({ id: z.string().uuid("Payout id must be a valid UUID.") });
+export const payoutIdParamSchema = z.object({ id: prismaStringId("Payout id must be valid.") });
 
 export const payoutListQuerySchema = z.object({
   status: z.enum(["all", "PENDING", "PROCESSING", "SUCCESS", "FAILED", "CANCELLED", "REVERSED"]).optional().default("all"),

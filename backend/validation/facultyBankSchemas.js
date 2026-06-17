@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { prismaStringId } from "./idSchemas.js";
 
 const emptyToNull = (value) => {
   if (value === undefined || value === null) return null;
@@ -10,7 +11,7 @@ const optionalText = z.preprocess(emptyToNull, z.string().max(300).nullable().op
 const payoutModeSchema = z.enum(["UPI", "BANK", "BOTH", "NONE"]).optional().default("NONE");
 
 const payoutDetailsShape = {
-  facultyId: z.string().uuid("Faculty id must be a valid UUID.").optional(),
+  facultyId: prismaStringId("Faculty id must be valid.").optional(),
   payoutMode: payoutModeSchema,
   accountHolderName: optionalText,
   accountNumber: z.preprocess(emptyToNull, z.string().regex(/^\d{6,24}$/, "Bank account number must contain 6-24 digits.").nullable().optional()),
@@ -44,7 +45,7 @@ const enforcePayoutModeRequirements = (data, ctx) => {
 
 export const facultyBankCreateSchema = z.object({
   ...payoutDetailsShape,
-  facultyId: z.string().uuid("Faculty id must be a valid UUID."),
+  facultyId: prismaStringId("Faculty id must be valid."),
 }).superRefine(enforcePayoutModeRequirements);
 
 export const facultyBankUpdateSchema = z
@@ -65,6 +66,6 @@ export const facultySelfBankUpdateSchema = z.object({
   payoutContactEmail: payoutDetailsShape.payoutContactEmail,
 }).superRefine(enforcePayoutModeRequirements);
 
-export const facultyIdParamSchema = z.object({ facultyId: z.string().uuid("Faculty id must be a valid UUID.") });
+export const facultyIdParamSchema = z.object({ facultyId: prismaStringId("Faculty id must be valid.") });
 
-export const bankIdParamSchema = z.object({ id: z.string().uuid("Bank id must be a valid UUID.") });
+export const bankIdParamSchema = z.object({ id: prismaStringId("Bank id must be valid.") });

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { prismaStringId } from "./idSchemas.js";
 
 export const salaryTypes = ["MONTHLY_FIXED", "PER_CLASS", "ATTENDANCE_BASED"];
 export const facultyStatuses = ["ACTIVE", "INACTIVE"];
@@ -46,7 +47,7 @@ const experienceYears = z.preprocess((value) => {
 }, z.number().int().min(0).max(80).nullable().optional());
 
 export const facultyIdParamSchema = z.object({
-  id: z.uuid("Faculty id must be a valid UUID."),
+  id: prismaStringId("Faculty id must be valid."),
 });
 
 export const facultyListQuerySchema = z.object({

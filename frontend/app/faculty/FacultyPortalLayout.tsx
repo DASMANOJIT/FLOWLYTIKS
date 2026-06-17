@@ -59,12 +59,19 @@ export default function FacultyPortalLayout({
       }
     };
 
-    const previousOverflow = document.body.style.overflow;
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    document.documentElement.classList.add("faculty-mobile-menu-lock");
+    document.body.classList.add("faculty-mobile-menu-lock");
+    document.documentElement.style.overflow = "hidden";
     document.body.style.overflow = "hidden";
     window.addEventListener("keydown", handleKeyDown);
 
     return () => {
-      document.body.style.overflow = previousOverflow;
+      document.documentElement.classList.remove("faculty-mobile-menu-lock");
+      document.body.classList.remove("faculty-mobile-menu-lock");
+      document.documentElement.style.overflow = previousHtmlOverflow;
+      document.body.style.overflow = previousBodyOverflow;
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [mobileMenuOpen]);

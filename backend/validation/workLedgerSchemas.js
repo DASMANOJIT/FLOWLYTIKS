@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { prismaStringId } from "./idSchemas.js";
 
 export const workLedgerShifts = ["MORNING", "AFTERNOON", "EVENING"];
 
@@ -16,7 +17,7 @@ const dateOnly = z.preprocess((value) => {
 }, z.date({ error: "Date is required." }));
 
 export const workLedgerIdParamSchema = z.object({
-  id: z.uuid("Ledger entry id must be a valid UUID."),
+  id: prismaStringId("Ledger entry id must be valid."),
 });
 
 export const workLedgerWeekParamSchema = z.object({
@@ -24,11 +25,11 @@ export const workLedgerWeekParamSchema = z.object({
 });
 
 export const workLedgerFacultyParamSchema = z.object({
-  facultyId: z.uuid("Faculty id must be a valid UUID."),
+  facultyId: prismaStringId("Faculty id must be valid."),
 });
 
 export const workLedgerBodySchema = z.object({
-  facultyId: z.uuid("Faculty member is required."),
+  facultyId: prismaStringId("Faculty member is required."),
   date: dateOnly,
   shift: z.enum(workLedgerShifts, { error: "Shift is required." }),
   amount: z.coerce.number().min(0, "Amount cannot be negative."),
@@ -44,7 +45,7 @@ export const workLedgerAttendancePatchSchema = z.object({
 export const workLedgerListQuerySchema = z.object({
   startDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   endDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  facultyId: z.union([z.uuid(), z.literal("all")]).optional().default("all"),
+  facultyId: z.union([prismaStringId("Faculty id must be valid."), z.literal("all")]).optional().default("all"),
   shift: z.enum(["all", ...workLedgerShifts]).optional().default("all"),
   search: z.string().trim().max(160).optional().default(""),
   week: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

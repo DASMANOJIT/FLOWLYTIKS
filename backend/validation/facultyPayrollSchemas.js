@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { prismaStringId } from "./idSchemas.js";
 
 const dateOnly = z.preprocess((value) => {
   const raw = String(value || "").trim();
@@ -18,16 +19,16 @@ export const payrollGenerateBodySchema = z
   });
 
 export const payrollProcessBodySchema = z.object({
-  payrollBatchId: z.uuid("Payroll cycle id must be valid.").optional(),
-  payrollCycleId: z.uuid("Payroll cycle id must be valid.").optional(),
+  payrollBatchId: prismaStringId("Payroll cycle id must be valid.").optional(),
+  payrollCycleId: prismaStringId("Payroll cycle id must be valid.").optional(),
 }).refine((data) => data.payrollBatchId || data.payrollCycleId, {
   path: ["payrollCycleId"],
   message: "Payroll cycle id is required.",
 });
 
 export const payrollInitiatePayoutBodySchema = z.object({
-  cycleId: z.uuid("Payroll cycle id must be valid.").optional(),
-  payrollCycleId: z.uuid("Payroll cycle id must be valid.").optional(),
+  cycleId: prismaStringId("Payroll cycle id must be valid.").optional(),
+  payrollCycleId: prismaStringId("Payroll cycle id must be valid.").optional(),
   weekStart: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   weekEnd: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 }).refine((data) => data.cycleId || data.payrollCycleId || (data.weekStart && data.weekEnd), {
@@ -36,23 +37,23 @@ export const payrollInitiatePayoutBodySchema = z.object({
 });
 
 export const payrollCycleParamSchema = z.object({
-  id: z.uuid("Payroll cycle id must be valid."),
+  id: prismaStringId("Payroll cycle id must be valid."),
 });
 
 export const payrollActionBodySchema = z.object({
-  payrollCycleId: z.uuid("Payroll cycle id must be valid."),
+  payrollCycleId: prismaStringId("Payroll cycle id must be valid."),
   remarks: z.string().trim().max(500).optional(),
 });
 
 export const payrollListQuerySchema = z.object({
-  batchId: z.uuid().optional(),
-  cycleId: z.uuid().optional(),
+  batchId: prismaStringId().optional(),
+  cycleId: prismaStringId().optional(),
   weekStart: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   weekEnd: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 export const payrollWeekDetailsQuerySchema = z.object({
-  cycleId: z.uuid().optional(),
+  cycleId: prismaStringId().optional(),
   weekStart: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   weekEnd: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 }).refine((data) => data.cycleId || (data.weekStart && data.weekEnd), {
@@ -63,8 +64,8 @@ export const payrollWeekDetailsQuerySchema = z.object({
 export const payrollReportQuerySchema = z.object({
   type: z.enum(["weekly", "monthly", "faculty", "summary"]).optional(),
   format: z.enum(["csv", "excel", "xlsx", "pdf"]).optional(),
-  cycleId: z.uuid().optional(),
-  facultyId: z.uuid().optional(),
+  cycleId: prismaStringId().optional(),
+  facultyId: prismaStringId("Faculty id must be valid.").optional(),
   status: z.enum(["DRAFT", "PENDING_APPROVAL", "APPROVED", "PAID", "REJECTED", "LOCKED"]).optional(),
   startDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   endDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
