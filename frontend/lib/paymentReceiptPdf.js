@@ -145,7 +145,7 @@ const getReceiptPaymentMethod = (payment) =>
     ? "Cash"
     : payment?.phonepeTransactionId
     ? "UPI"
-    : "Online Payment");
+    : "Not Available");
 
 const getReceiptNumber = (payment) =>
   payment?.receiptMeta?.receiptNumber ||

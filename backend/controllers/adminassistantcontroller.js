@@ -134,6 +134,21 @@ const isBulkAllStudentsPrompt = (promptText) =>
   /\ball\s+students\b/i.test(promptText) ||
   /\ball\b/i.test(promptText);
 
+const isBulkMarkUnpaidPrompt = (promptText) =>
+  isBulkAllStudentsPrompt(promptText) ||
+  /\bany(?:one|body)\b/i.test(promptText) ||
+  hasAny(promptText, ["cash payments", "admin cash payments", "manual payments"]);
+
+const isUndoPaymentPrompt = (promptText) => {
+  const text = lower(promptText);
+  return (
+    (hasAny(text, ["unpaid", "mistake", "remove paid status"]) &&
+      hasAny(text, ["mark", "set", "make", "remove", "reverse", "undo"])) ||
+    (hasAny(text, ["undo", "reverse"]) &&
+      hasAny(text, ["cash payment", "cash payments", "payment"]))
+  );
+};
+
 const extractBulkMarkPaidConfirmation = (promptText) => {
   const match = sanitizePrompt(promptText).match(
     /^confirm\s+mark\s+([a-z]+)(?:\s+(\d{4}))?\s+paid$/i
@@ -329,7 +344,39 @@ const matchStudentsFromPrompt = (promptText, students) => {
   const matched = students.filter((s) =>
     text.includes(String(s.name || "").toLowerCase())
   );
-  return matched;
+  if (matched.length) return matched;
+
+  const ignoredTokens = new Set([
+    ...Object.keys(MONTH_ALIASES),
+    "student",
+    "mark",
+    "set",
+    "make",
+    "remove",
+    "reverse",
+    "paid",
+    "unpaid",
+    "payment",
+    "status",
+    "for",
+    "the",
+    "this",
+    "month",
+    "mistake",
+    "by",
+    "was",
+    "id",
+  ]);
+  const promptNameTokens = words(promptText).filter(
+    (token) => token.length >= 3 && !ignoredTokens.has(token) && !/^\d+$/.test(token)
+  );
+
+  if (!promptNameTokens.length) return [];
+
+  return students.filter((student) => {
+    const nameTokens = words(student.name || "");
+    return promptNameTokens.some((token) => nameTokens.includes(token));
+  });
 };
 
 const runMarkPaidCommand = async (promptText, requestedByUserId = null) => {
@@ -419,6 +466,287 @@ const runMarkPaidCommand = async (promptText, requestedByUserId = null) => {
     message: `Done. Marked paid for ${created} student(s), already paid: ${alreadyPaid}, month: ${month}, academic year: ${buildAcademicYearLabel(
       academicYear
     )}.`,
+  };
+};
+
+const PAYMENT_SELECT_FOR_UNDO = {
+  id: true,
+  studentId: true,
+  month: true,
+  academicYear: true,
+  status: true,
+  paymentProvider: true,
+  teacherAdminId: true,
+  phonepeTransactionId: true,
+  phonepePaymentId: true,
+  gatewayOrders: {
+    orderBy: { createdAt: "desc" },
+    take: 1,
+    select: {
+      id: true,
+      provider: true,
+      paymentMethod: true,
+      paymentMethodHint: true,
+      cashfreeOrderId: true,
+      cashfreeCfOrderId: true,
+      gatewayReference: true,
+      attempts: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: {
+          provider: true,
+          cfPaymentId: true,
+          paymentMethod: true,
+          bankReference: true,
+          gatewayPaymentId: true,
+        },
+      },
+    },
+  },
+};
+
+const normalizePaymentMethod = (value) =>
+  String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+
+const ONLINE_PAYMENT_METHODS = new Set([
+  "PHONEPE",
+  "CASHFREE",
+  "UPI",
+  "ONLINE",
+  "GATEWAY",
+  "QR",
+  "BANK",
+  "BANK_TRANSFER",
+  "NETBANK",
+  "NETBANKING",
+  "NB",
+  "CARD",
+  "CC",
+  "DC",
+  "CREDIT_CARD",
+  "DEBIT_CARD",
+]);
+
+const getLatestGatewayOrder = (payment) => payment?.gatewayOrders?.[0] || null;
+const getLatestPaymentAttempt = (payment) => getLatestGatewayOrder(payment)?.attempts?.[0] || null;
+
+const hasOnlinePaymentEvidence = (payment) => {
+  const gatewayOrder = getLatestGatewayOrder(payment);
+  const latestAttempt = getLatestPaymentAttempt(payment);
+  const methodValues = [
+    payment?.paymentProvider,
+    gatewayOrder?.provider,
+    gatewayOrder?.paymentMethod,
+    gatewayOrder?.paymentMethodHint,
+    latestAttempt?.provider,
+    latestAttempt?.paymentMethod,
+  ].map(normalizePaymentMethod);
+
+  return (
+    methodValues.some((value) => ONLINE_PAYMENT_METHODS.has(value)) ||
+    Boolean(
+      payment?.phonepeTransactionId ||
+        payment?.phonepePaymentId ||
+        gatewayOrder?.cashfreeOrderId ||
+        gatewayOrder?.cashfreeCfOrderId ||
+        gatewayOrder?.gatewayReference ||
+        latestAttempt?.cfPaymentId ||
+        latestAttempt?.bankReference ||
+        latestAttempt?.gatewayPaymentId
+    )
+  );
+};
+
+const getUndoBlockedPaymentMethodLabel = (payment) => {
+  const gatewayOrder = getLatestGatewayOrder(payment);
+  const latestAttempt = getLatestPaymentAttempt(payment);
+  const rawMethod =
+    latestAttempt?.paymentMethod ||
+    gatewayOrder?.paymentMethod ||
+    gatewayOrder?.paymentMethodHint ||
+    latestAttempt?.provider ||
+    gatewayOrder?.provider ||
+    payment?.paymentProvider ||
+    "";
+  const method = normalizePaymentMethod(rawMethod);
+
+  if (method === "PHONEPE" || method === "UPI" || payment?.phonepeTransactionId || payment?.phonepePaymentId) {
+    return "UPI";
+  }
+  if (method === "CASHFREE" || gatewayOrder?.cashfreeOrderId || gatewayOrder?.cashfreeCfOrderId || latestAttempt?.cfPaymentId) {
+    return "Cashfree";
+  }
+  if (["BANK", "BANK_TRANSFER", "NETBANK", "NETBANKING", "NB"].includes(method)) {
+    return "Bank Transfer";
+  }
+  if (["CARD", "CC", "DC", "CREDIT_CARD", "DEBIT_CARD"].includes(method)) {
+    return "Card";
+  }
+  if (method === "QR") {
+    return "QR";
+  }
+  if (method === "ONLINE" || method === "GATEWAY") {
+    return "Online";
+  }
+  if (method === "CASH") {
+    return "Cash";
+  }
+  return rawMethod ? String(rawMethod) : "Not Available";
+};
+
+const isUndoableAdminCashPayment = (payment) => {
+  if (!payment || String(payment.status || "").toLowerCase() !== "paid") {
+    return false;
+  }
+  if (hasOnlinePaymentEvidence(payment)) {
+    return false;
+  }
+  const provider = normalizePaymentMethod(payment.paymentProvider);
+  return provider === "CASH" || !provider || Boolean(payment.teacherAdminId);
+};
+
+const isUnknownManualPaymentWithoutOnlineTrace = (payment) =>
+  String(payment?.status || "").toLowerCase() === "paid" &&
+  !normalizePaymentMethod(payment?.paymentProvider) &&
+  !hasOnlinePaymentEvidence(payment);
+
+const reverseAdminCashPayment = async (payment, requestedByUserId = null) => {
+  const updateData = {
+    status: "pending",
+    paidAt: null,
+    isLatePayment: false,
+    paymentProvider: null,
+    teacherAdminId: requestedByUserId ? Number(requestedByUserId) : payment.teacherAdminId,
+  };
+
+  try {
+    return await prisma.payment.update({
+      where: { id: payment.id },
+      data: updateData,
+    });
+  } catch (error) {
+    if (!isPaymentSchemaCompatibilityError(error)) throw error;
+    logPaymentCompatibilityFallback("reverseAdminCashPayment", error);
+    return prisma.payment.update({
+      where: { id: payment.id },
+      data: stripExtendedPaymentWriteData(updateData),
+    });
+  }
+};
+
+const runMarkUnpaidCommand = async (promptText, requestedByUserId = null) => {
+  const month = extractMonth(promptText);
+  if (!month) {
+    return { ok: false, message: "Please mention month. Example: mark Rahul unpaid for March" };
+  }
+
+  const calendarYear = extractCalendarYear(promptText);
+  const academicYear = resolveAcademicYearForMonth(month, calendarYear);
+  const academicYearLabel = buildAcademicYearLabel(academicYear);
+
+  if (isBulkMarkUnpaidPrompt(promptText)) {
+    const paidPayments = await prisma.payment.findMany({
+      where: {
+        month,
+        academicYear,
+        status: "paid",
+      },
+      select: {
+        ...PAYMENT_SELECT_FOR_UNDO,
+        student: { select: { id: true, name: true } },
+      },
+      orderBy: { studentId: "asc" },
+    });
+
+    let reversedCount = 0;
+    let skippedOnlineCount = 0;
+
+    for (const payment of paidPayments) {
+      if (!isUndoableAdminCashPayment(payment)) {
+        skippedOnlineCount += 1;
+        continue;
+      }
+      await reverseAdminCashPayment(payment, requestedByUserId);
+      reversedCount += 1;
+    }
+
+    if (!reversedCount) {
+      return {
+        ok: true,
+        message: `No admin-entered cash/manual payments were found for ${month}. Online/UPI/Cashfree payments cannot be marked unpaid from the chatbot.`,
+      };
+    }
+
+    return {
+      ok: true,
+      message: `Done. Marked ${reversedCount} admin-entered cash/manual payments unpaid for ${month}, academic year ${academicYearLabel}. Skipped ${skippedOnlineCount} online/UPI/Cashfree payments because they cannot be undone from the chatbot.`,
+    };
+  }
+
+  const allStudents = await prisma.student.findMany({
+    select: { id: true, name: true, phone: true },
+    orderBy: { id: "asc" },
+  });
+  const targets = matchStudentsFromPrompt(promptText, allStudents);
+
+  if (!targets.length) {
+    return { ok: false, message: "No student matched. Use full name or 'student id 12'." };
+  }
+
+  if (targets.length > 1) {
+    return {
+      ok: false,
+      message: `Multiple students matched. Please use student id. Matches: ${targets
+        .slice(0, 5)
+        .map((student) => `${student.name} (ID ${student.id})`)
+        .join(", ")}${targets.length > 5 ? ", ..." : ""}`,
+    };
+  }
+
+  const student = targets[0];
+  const payment = await prisma.payment.findUnique({
+    where: {
+      studentId_month_academicYear: {
+        studentId: Number(student.id),
+        month,
+        academicYear,
+      },
+    },
+    select: PAYMENT_SELECT_FOR_UNDO,
+  });
+
+  if (!payment || String(payment.status || "").toLowerCase() !== "paid") {
+    return {
+      ok: true,
+      message: "This student is already marked unpaid for this month.",
+    };
+  }
+
+  if (!isUndoableAdminCashPayment(payment)) {
+    const paymentMethod = getUndoBlockedPaymentMethodLabel(payment);
+    return {
+      ok: false,
+      message: `This payment was made through ${paymentMethod}. Only admin-entered cash/manual payments can be undone from the admin chatbot.`,
+    };
+  }
+
+  const updatedPayment = await reverseAdminCashPayment(payment, requestedByUserId);
+
+  return {
+    ok: true,
+    message: `Done. Marked ${student.name} unpaid for ${month}, academic year ${buildAcademicYearLabel(
+      academicYear
+    )}.${isUnknownManualPaymentWithoutOnlineTrace(payment) ? " The previous record had no online payment trace." : ""}`,
+    payment: {
+      id: updatedPayment.id,
+      studentId: updatedPayment.studentId,
+      month: updatedPayment.month,
+      academicYear: updatedPayment.academicYear,
+      status: updatedPayment.status,
+    },
   };
 };
 
@@ -707,6 +1035,7 @@ const detectIntent = (promptText) => {
 
   const scores = {
     markPaid: 0,
+    markUnpaid: 0,
     reminder: 0,
     listUnpaid: 0,
     updateStudent: 0,
@@ -718,6 +1047,14 @@ const detectIntent = (promptText) => {
 
   if (hasAny(text, ["mark", "paid", "payment"])) scores.markPaid += 2;
   if (extractMonth(text)) scores.markPaid += 1;
+
+  if (isUndoPaymentPrompt(text)) {
+    scores.markUnpaid += 4;
+  }
+  if (hasAny(text, ["paid by mistake", "marked paid by mistake", "remove paid status"])) {
+    scores.markUnpaid += 4;
+  }
+  if (extractMonth(text)) scores.markUnpaid += 1;
 
   if (hasAny(text, ["reminder", "notify", "message", "whatsapp", "ping"])) scores.reminder += 2;
   if (tokenSet.has("send") || tokenSet.has("trigger")) scores.reminder += 1;
@@ -750,6 +1087,10 @@ const detectIntent = (promptText) => {
   const [intent, score] = sorted[0];
   if (!score || score < 2) return null;
 
+  if (intent === "markPaid" && isUndoPaymentPrompt(text)) {
+    return "markUnpaid";
+  }
+
   if (intent === "markPaid" && hasAny(text, ["unpaid", "pending", "due", "left"])) {
     return "listUnpaid";
   }
@@ -774,6 +1115,8 @@ export const adminAssistantChat = async (req, res) => {
     let result;
     if (intent === "markPaid") {
       result = await runMarkPaidCommand(prompt, adminUserId);
+    } else if (intent === "markUnpaid") {
+      result = await runMarkUnpaidCommand(prompt, adminUserId);
     } else if (intent === "reminder") {
       result = await runReminderCommand(prompt, adminUserId);
     } else if (intent === "listUnpaid") {

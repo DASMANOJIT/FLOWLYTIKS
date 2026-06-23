@@ -172,7 +172,7 @@ const formatPaymentMethodLabel = ({ payment, gatewayOrder, latestAttempt }) => {
     case "CASH":
       return "Cash";
     default:
-      return rawMethod ? String(rawMethod) : "Online Payment";
+      return rawMethod ? String(rawMethod) : "Not Available";
   }
 };
 
