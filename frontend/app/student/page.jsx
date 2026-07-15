@@ -10,6 +10,7 @@ import GreetingPanel from "../components/dashboard/GreetingPanel.jsx";
 import { clearAuthSession, getAuthToken } from "../../lib/authStorage.js";
 import { downloadPaymentReceiptPdf } from "../../lib/paymentReceiptPdf.js";
 import { getApiBaseUrl } from "../../lib/api.js";
+import CompanyLink from "../components/company/CompanyLink.jsx";
 
 const API_BASE = getApiBaseUrl();
 
@@ -230,13 +231,9 @@ export default function StudentDashboard() {
           <p className="total-caption">
             Students are paying their fees to Mr. Subhabrata Datta. To know more about the institute,
             visit{" "}
-            <a
-              href="https://subhoscomputerinstitute.com"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
+            <CompanyLink type="institute">
               SUBHO&apos;S COMPUTER INSTITUTE
-            </a>
+            </CompanyLink>
             .
           </p>
         </MotionCard>

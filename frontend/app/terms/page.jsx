@@ -1,5 +1,6 @@
 import styles from "../legal-page.module.css";
 import LegalBackButton from "../components/legal/LegalBackButton.jsx";
+import CompanyLink from "../components/company/CompanyLink.jsx";
 
 export default function TermsPage() {
   return (
@@ -10,8 +11,10 @@ export default function TermsPage() {
           <span className={styles.badge}>Terms &amp; Conditions</span>
           <h1 className={styles.title}>Terms of Service</h1>
           <p className={styles.intro}>
-            These terms govern access to and use of Flowlytiks, a fee management web application
-            operated by DM Stack Labs for tutors, coaching centers, and educational institutes.
+            These terms govern access to and use of{" "}
+            <CompanyLink type="flowlytiks" className={styles.link} />, a fee management web
+            application technically maintained by{" "}
+            <CompanyLink type="dmStackLabs" className={styles.link} />.
           </p>
         </header>
 
@@ -19,10 +22,10 @@ export default function TermsPage() {
           <section className={styles.section}>
             <h2 className={styles.sectionTitle}>Platform Usage</h2>
             <p className={styles.sectionBody}>
-              Flowlytiks is provided to help institutes manage students, monthly fees, payment
-              records, reminders, and receipts. By using the platform, you agree to provide
-              accurate information, use the service lawfully, and protect the confidentiality of
-              your account credentials.
+              <CompanyLink type="flowlytiks" className={styles.link} /> is provided to help
+              institutes manage students, monthly fees, payment records, reminders, and receipts.
+              By using the platform, you agree to provide accurate information, use the service
+              lawfully, and protect the confidentiality of your account credentials.
             </p>
           </section>
 
@@ -38,9 +41,10 @@ export default function TermsPage() {
           <section className={styles.section}>
             <h2 className={styles.sectionTitle}>Payments &amp; Records</h2>
             <p className={styles.sectionBody}>
-              Flowlytiks records fee payments and related status information based on institute
-              operations and supported payment workflows. Institutes remain responsible for the
-              accuracy of student fee schedules, due amounts, and manual payment entries.
+              <CompanyLink type="flowlytiks" className={styles.link} /> records fee payments and
+              related status information based on institute operations and supported payment
+              workflows. Institutes remain responsible for the accuracy of student fee schedules,
+              due amounts, and manual payment entries.
             </p>
           </section>
 

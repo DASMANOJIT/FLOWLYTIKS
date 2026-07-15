@@ -1,5 +1,6 @@
 import styles from "../legal-page.module.css";
 import LegalBackButton from "../components/legal/LegalBackButton.jsx";
+import CompanyLink from "../components/company/CompanyLink.jsx";
 
 export default function ContactPage() {
   return (
@@ -8,10 +9,12 @@ export default function ContactPage() {
         <LegalBackButton />
         <header className={styles.hero}>
           <span className={styles.badge}>Contact &amp; Support</span>
-          <h1 className={styles.title}>Contact Flowlytiks</h1>
+          <h1 className={styles.title}>
+            Contact <CompanyLink type="flowlytiks" className={styles.link} />
+          </h1>
           <p className={styles.intro}>
             Reach out for support, feedback, onboarding questions, or payment-related coordination
-            for institutes using Flowlytiks.
+            for institutes using <CompanyLink type="flowlytiks" className={styles.link} />.
           </p>
         </header>
 
@@ -21,11 +24,15 @@ export default function ContactPage() {
             <div className={styles.detailGrid}>
               <div className={styles.detailRow}>
                 <p className={styles.detailLabel}>Product</p>
-                <p className={styles.detailValue}>Flowlytiks Fee Management Web App</p>
+                <p className={styles.detailValue}>
+                  <CompanyLink type="flowlytiks" className={styles.link} /> Fee Management Web App
+                </p>
               </div>
               <div className={styles.detailRow}>
                 <p className={styles.detailLabel}>Operated By</p>
-                <p className={styles.detailValue}>DM Stack Labs</p>
+                <p className={styles.detailValue}>
+                  <CompanyLink type="dmStackLabs" className={styles.link} />
+                </p>
               </div>
               <div className={styles.detailRow}>
                 <p className={styles.detailLabel}>Founder</p>

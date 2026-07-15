@@ -1,5 +1,6 @@
 import styles from "../legal-page.module.css";
 import LegalBackButton from "../components/legal/LegalBackButton.jsx";
+import CompanyLink from "../components/company/CompanyLink.jsx";
 
 export default function PrivacyPage() {
   return (
@@ -10,8 +11,9 @@ export default function PrivacyPage() {
           <span className={styles.badge}>Privacy Policy</span>
           <h1 className={styles.title}>Privacy Policy</h1>
           <p className={styles.intro}>
-            This policy explains how Flowlytiks collects, uses, and protects operational data for
-            institutes, admins, and students using the platform.
+            This policy explains how <CompanyLink type="flowlytiks" className={styles.link} />{" "}
+            collects, uses, and protects operational data for institutes, admins, and students using
+            the platform.
           </p>
         </header>
 

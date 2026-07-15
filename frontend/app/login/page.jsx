@@ -5,6 +5,7 @@ import "./login.css";
 import Fall from "../animation/fallingword.jsx";
 import { MotionButton } from "../components/motion/primitives.jsx";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
+import CompanyLink from "../components/company/CompanyLink.jsx";
 import { getApiBaseUrl, readApiResponse } from "../../lib/api.js";
 import {
   clearLegacyAuthStorage,
@@ -735,7 +736,10 @@ export default function Login() {
         transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
       >
         <h1>
-          WELCOME TO THE <br /> SUBHO&apos;S COMPUTER INSTITUTE
+          WELCOME TO THE <br />{" "}
+          <CompanyLink type="institute">
+            SUBHO&apos;S COMPUTER INSTITUTE
+          </CompanyLink>
         </h1>
         <p className="login-subtitle">
           Secure student access with a modern experience.

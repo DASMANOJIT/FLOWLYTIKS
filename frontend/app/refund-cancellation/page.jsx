@@ -1,5 +1,6 @@
 import styles from "../legal-page.module.css";
 import LegalBackButton from "../components/legal/LegalBackButton.jsx";
+import CompanyLink from "../components/company/CompanyLink.jsx";
 
 export default function RefundCancellationPage() {
   return (
@@ -11,7 +12,7 @@ export default function RefundCancellationPage() {
           <h1 className={styles.title}>Refund &amp; Cancellation Policy</h1>
           <p className={styles.intro}>
             This policy outlines how refund and cancellation matters are handled for student fee
-            payments managed through Flowlytiks.
+            payments managed through <CompanyLink type="flowlytiks" className={styles.link} />.
           </p>
         </header>
 
@@ -20,9 +21,10 @@ export default function RefundCancellationPage() {
             <h2 className={styles.sectionTitle}>Fee Payments</h2>
             <p className={styles.sectionBody}>
               Student fee payments are recorded according to the institute&apos;s fee schedule and
-              payment status maintained within Flowlytiks. Any refund or cancellation request is
-              subject to the institute&apos;s review, applicable payment records, and payment gateway
-              processing rules where relevant.
+              payment status maintained within{" "}
+              <CompanyLink type="flowlytiks" className={styles.link} />. Any refund or cancellation
+              request is subject to the institute&apos;s review, applicable payment records, and
+              payment gateway processing rules where relevant.
             </p>
           </section>
 

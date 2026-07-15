@@ -1,5 +1,11 @@
 import Image from "next/image";
 import Link from "next/link";
+import CompanyLink from "../company/CompanyLink.jsx";
+
+const merchantDetails = {
+  businessType: "",
+  registeredBusinessAddress: "",
+};
 
 export default function Footer() {
   return (
@@ -16,113 +22,171 @@ export default function Footer() {
                 className="app-footer__logo"
               />
               <div className="app-footer__brand-copy">
-                <span className="app-footer__title" id="footer-brand-title">Flowlytiks</span>
+                <span className="app-footer__title" id="footer-brand-title">
+                  <CompanyLink type="flowlytiks" className="app-footer__nav-link" />
+                </span>
                 <p className="app-footer__subtitle">
-                  Flowlytiks is a fee management web application created and operated by{" "}
-                  <a
-                    href="https://dmstacklabs.in"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="app-footer__nav-link"
-                    aria-label="Visit DM Stack Labs website"
-                  >
-                    DM Stack Labs
-                  </a>
-                  , a web development company founded by Manojit Das in 2025. Flowlytiks helps
-                  tutors, coaching centers, and educational institutes manage students, monthly
-                  fees, payments, reminders, and receipts in a simple digital workflow.
+                  <CompanyLink type="flowlytiks" className="app-footer__nav-link" /> is the
+                  official student fee management portal of{" "}
+                  <CompanyLink type="institute" className="app-footer__nav-link" />. It is used to
+                  manage student records, monthly tuition fees, payment reminders and receipts
+                  through a secure digital workflow. All student fee payments made through this
+                  portal are collected by{" "}
+                  <CompanyLink type="institute" className="app-footer__nav-link" /> and are
+                  credited to the registered merchant bank account of the institute’s authorised
+                  proprietor.
+                </p>
+                <p className="app-footer__subtitle">
+                  <CompanyLink type="dmStackLabs" className="app-footer__nav-link" /> provides
+                  software development and technical maintenance services only.{" "}
+                  <CompanyLink type="dmStackLabs" className="app-footer__nav-link" />, Manojit Das
+                  and Abhirup Mukherjee do not collect, receive or control any student fee
+                  payments.
                 </p>
               </div>
             </div>
           </section>
 
           <section className="app-footer__panel" aria-labelledby="footer-business-title">
-            <p className="app-footer__section-title" id="footer-business-title">Business Details</p>
+            <p className="app-footer__section-title" id="footer-business-title">
+              Merchant and Institute Details
+            </p>
             <dl className="app-footer__detail-list">
               <div className="app-footer__detail-item">
-                <dt className="app-footer__detail-term">Product</dt>
-                <dd className="app-footer__detail-value">Flowlytiks Fee Management Web App</dd>
-              </div>
-              <div className="app-footer__detail-item">
-                <dt className="app-footer__detail-term">Operated By</dt>
-                <dd className="app-footer__detail-value">DM Stack Labs</dd>
-              </div>
-              <div className="app-footer__detail-item">
-                <dt className="app-footer__detail-term">Founder</dt>
-                <dd className="app-footer__detail-value">Manojit Das</dd>
-              </div>
-              <div className="app-footer__detail-item">
-                <dt className="app-footer__detail-term">Website</dt>
+                <dt className="app-footer__detail-term">Institute Name</dt>
                 <dd className="app-footer__detail-value">
-                  <a
-                    href="https://www.flowlytiks.in"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="app-footer__nav-link"
-                    aria-label="Visit Flowlytiks website"
-                  >
-                    https://www.flowlytiks.in
-                  </a>
+                  <CompanyLink type="institute" className="app-footer__nav-link" />
                 </dd>
               </div>
               <div className="app-footer__detail-item">
+                <dt className="app-footer__detail-term">Legal Merchant / Proprietor</dt>
+                <dd className="app-footer__detail-value">Mr. Subhabrata Datta</dd>
+              </div>
+              {merchantDetails.businessType ? (
+                <div className="app-footer__detail-item">
+                  <dt className="app-footer__detail-term">Business Type</dt>
+                  <dd className="app-footer__detail-value">{merchantDetails.businessType}</dd>
+                </div>
+              ) : null}
+              <div className="app-footer__detail-item">
                 <dt className="app-footer__detail-term">Service Type</dt>
+                <dd className="app-footer__detail-value">Computer education and tuition services</dd>
+              </div>
+              <div className="app-footer__detail-item">
+                <dt className="app-footer__detail-term">Platform Type</dt>
                 <dd className="app-footer__detail-value">
-                  SaaS platform for tutors and educational institutes
+                  Student fee management portal exclusively used by{" "}
+                  <CompanyLink type="institute" className="app-footer__nav-link" />
                 </dd>
               </div>
               <div className="app-footer__detail-item">
                 <dt className="app-footer__detail-term">Payment Use Case</dt>
                 <dd className="app-footer__detail-value">
-                  Student fee collection and institute/vendor payment management
+                  Monthly tuition fee collection from enrolled students of{" "}
+                  <CompanyLink type="institute" className="app-footer__nav-link" />
+                </dd>
+              </div>
+              {merchantDetails.registeredBusinessAddress ? (
+                <div className="app-footer__detail-item">
+                  <dt className="app-footer__detail-term">Registered Business Address</dt>
+                  <dd className="app-footer__detail-value">
+                    {merchantDetails.registeredBusinessAddress}
+                  </dd>
+                </div>
+              ) : null}
+              <div className="app-footer__detail-item">
+                <dt className="app-footer__detail-term">Merchant Contact Number</dt>
+                <dd className="app-footer__detail-value">
+                  <a
+                    href="tel:+919831934306"
+                    className="app-footer__nav-link"
+                    aria-label="Call Subho’s Computer Institute"
+                  >
+                    9831934306
+                  </a>
+                </dd>
+              </div>
+              <div className="app-footer__detail-item">
+                <dt className="app-footer__detail-term">Merchant Email Address</dt>
+                <dd className="app-footer__detail-value">
+                  <a
+                    href="mailto:subhoscomputerinstitute@gmail.com"
+                    className="app-footer__nav-link"
+                  >
+                    subhoscomputerinstitute@gmail.com
+                  </a>
+                </dd>
+              </div>
+              <div className="app-footer__detail-item">
+                <dt className="app-footer__detail-term">Institute Website</dt>
+                <dd className="app-footer__detail-value">
+                  <CompanyLink type="institute" className="app-footer__nav-link" />
+                </dd>
+              </div>
+              <div className="app-footer__detail-item">
+                <dt className="app-footer__detail-term">Technology Provider</dt>
+                <dd className="app-footer__detail-value">
+                  <CompanyLink type="dmStackLabs" className="app-footer__nav-link" /> — software
+                  development and technical maintenance only
                 </dd>
               </div>
             </dl>
           </section>
 
           <section className="app-footer__panel" aria-labelledby="footer-support-title">
-            <p className="app-footer__section-title" id="footer-support-title">Support &amp; Feedback</p>
+            <p className="app-footer__section-title" id="footer-support-title">
+              Payment, Fee and Refund Support
+            </p>
             <p className="app-footer__contact-label">
-              Share feedback, report issues, or raise complaints. Our team will review and
-              respond as soon as possible.
+              <CompanyLink type="institute" className="app-footer__nav-link" />
+            </p>
+            <div className="app-footer__phones">
+              <a
+                href="tel:+919831934306"
+                className="app-footer__nav-link"
+                aria-label="Call Subho’s Computer Institute"
+              >
+                9831934306
+              </a>
+              <a
+                href="mailto:subhoscomputerinstitute@gmail.com"
+                className="app-footer__nav-link"
+                aria-label="Email Subho’s Computer Institute"
+              >
+                subhoscomputerinstitute@gmail.com
+              </a>
+            </div>
+            <p className="app-footer__panel-note">
+              Support Hours: Monday–Friday, 8:00 AM–9:00 PM
+            </p>
+            <a
+              href="mailto:subhoscomputerinstitute@gmail.com"
+              className="app-footer__mail-button"
+              aria-label="Email Subho’s Computer Institute"
+            >
+              Email Institute Support
+            </a>
+          </section>
+
+          <section className="app-footer__panel" aria-labelledby="footer-technical-title">
+            <p className="app-footer__section-title" id="footer-technical-title">
+              Technical Support
+            </p>
+            <p className="app-footer__contact-label">
+              <CompanyLink type="dmStackLabs" className="app-footer__nav-link" />
             </p>
             <a
               href="mailto:dmstacklabs@gmail.com"
               className="app-footer__nav-link"
-              aria-label="Email DM Stack Labs support"
+              aria-label="Email DM Stack Labs technical support"
             >
               dmstacklabs@gmail.com
             </a>
             <p className="app-footer__panel-note">
-              Support Hours: Monday to Saturday, 10:00 AM – 7:00 PM
+              <CompanyLink type="dmStackLabs" className="app-footer__nav-link" /> handles technical
+              issues related to accessing or using the web application only. It cannot approve
+              refunds and does not collect or receive student fee payments.
             </p>
-          </section>
-
-          <section className="app-footer__panel" aria-labelledby="footer-contact-title">
-            <p className="app-footer__section-title" id="footer-contact-title">Contact</p>
-            <div className="app-footer__phones">
-              <a
-                href="tel:8617759263"
-                className="app-footer__nav-link"
-                aria-label="Call 8617759263"
-              >
-                8617759263
-              </a>
-              <a
-                href="tel:7003751561"
-                className="app-footer__nav-link"
-                aria-label="Call 7003751561"
-              >
-                7003751561
-              </a>
-            </div>
-            <a
-              href="mailto:dmstacklabs@gmail.com"
-              className="app-footer__mail-button"
-              aria-label="Email DM Stack Labs"
-            >
-              Mail Us
-            </a>
           </section>
 
           <section className="app-footer__panel" aria-labelledby="footer-legal-title">
@@ -145,18 +209,12 @@ export default function Footer() {
         </div>
 
         <div className="app-footer__bottom">
-          <span>© Flowlytiks 2026</span>
           <span>
-            Created &amp; operated by{" "}
-            <a
-              href="https://dmstacklabs.in"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="app-footer__nav-link"
-              aria-label="Visit DM Stack Labs website"
-            >
-              DM Stack Labs
-            </a>
+            © <CompanyLink type="flowlytiks" className="app-footer__nav-link" /> 2026
+          </span>
+          <span>
+            Developed and technically maintained by{" "}
+            <CompanyLink type="dmStackLabs" className="app-footer__nav-link" />
           </span>
         </div>
       </div>

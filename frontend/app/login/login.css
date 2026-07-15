@@ -64,6 +64,16 @@
   text-shadow: 0 10px 28px rgba(2, 24, 73, 0.45);
 }
 
+.login-header h1 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.login-header h1 a:hover,
+.login-header h1 a:focus-visible {
+  text-decoration: underline;
+}
+
 .login-subtitle {
   margin: 12px 0 0;
   font-size: 15px;
