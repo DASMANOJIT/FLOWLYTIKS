@@ -60,6 +60,27 @@ export const cashfreeCreateOrderBodySchema = z.object({
   upiId: z.string().trim().max(120).optional().nullable(),
 });
 
+export const manualUpiPaymentBodySchema = z.object({
+  month: paymentMonthSchema,
+  academicYear: z
+    .union([
+      z.coerce.number().int().min(2000).max(3000),
+      z
+        .string()
+        .trim()
+        .regex(/^\d{4}-\d{4}$/, "Academic year must use YYYY-YYYY format.")
+        .transform((value) => Number(value.split("-")[0])),
+    ])
+    .optional(),
+  utrNumber: z
+    .string()
+    .trim()
+    .transform((value) => value.replace(/\s+/g, "").toUpperCase())
+    .refine((value) => /^[A-Z0-9]{8,35}$/.test(value), {
+      message: "UTR number must be 8 to 35 letters or numbers.",
+    }),
+});
+
 export const revenueQuerySchema = z.object({
   from: isoDateStringSchema,
   to: isoDateStringSchema,

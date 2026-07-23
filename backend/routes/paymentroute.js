@@ -5,6 +5,7 @@ import {
   markPaid,
   bulkUpdatePayments,
   getTotalRevenue,
+  submitManualUpiPayment,
   reversePayment,
 } from "../controllers/paymentcontrollers.js";
 import {
@@ -24,6 +25,7 @@ import {
 import {
   bulkUpdatePaymentsBodySchema,
   cashfreeCreateOrderBodySchema,
+  manualUpiPaymentBodySchema,
   markPaidBodySchema,
   paymentsQuerySchema,
   reversePaymentBodySchema,
@@ -72,6 +74,15 @@ router.get("/revenue", protect, adminOnly, validateQuery(revenueQuerySchema), ge
 router.post("/phonepe/initiate", protect, initiatePhonePePayment);
 router.post("/phonepe/callback", phonePeCallback);
 router.get("/phonepe/status/:transactionId", protect, getPhonePePaymentStatus);
+
+// MANUAL UPI
+router.post(
+  "/manual-upi",
+  protect,
+  paymentInitiationRateLimit,
+  validateBody(manualUpiPaymentBodySchema),
+  submitManualUpiPayment
+);
 
 // CASHFREE
 router.post(
