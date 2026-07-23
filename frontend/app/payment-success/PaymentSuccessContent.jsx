@@ -267,21 +267,38 @@ export default function PaymentSuccessContent() {
   const transactionId = searchParams.get("txnid");
   const gateway = searchParams.get("gateway");
   const paymentId = searchParams.get("paymentId");
+  const month = searchParams.get("month");
+  const amount = searchParams.get("amount");
+  const utr = searchParams.get("utr");
+  const academicYear = searchParams.get("academicYear");
+  const studentName = searchParams.get("studentName");
+  const studentId = searchParams.get("studentId");
+  const paidAt = searchParams.get("paidAt");
   const gatewayOrderId = searchParams.get("gatewayOrderId");
   const cashfreeOrderId =
     searchParams.get("cashfreeOrderId") || searchParams.get("order_id");
   const apiBase = getApiBaseUrl();
+  const isManualUpiSuccess = gateway === "manual-upi" && paymentId;
 
   const [status, setStatus] = useState(
-    transactionId || gatewayOrderId || cashfreeOrderId
+    isManualUpiSuccess
+      ? `Payment completed successfully for ${month || "selected month"}${
+          amount ? `, amount ₹${amount}` : ""
+        }. UTR: ${utr || "Not Available"}. Redirecting to dashboard...`
+      : transactionId || gatewayOrderId || cashfreeOrderId
       ? "Checking payment status..."
       : "Invalid payment reference."
   );
   const [checking, setChecking] = useState(
-    Boolean(transactionId || gatewayOrderId || cashfreeOrderId)
+    !isManualUpiSuccess && Boolean(transactionId || gatewayOrderId || cashfreeOrderId)
   );
 
   useEffect(() => {
+    if (isManualUpiSuccess) {
+      const timeoutId = setTimeout(() => router.push("/student"), 1400);
+      return () => clearTimeout(timeoutId);
+    }
+
     if (!transactionId && !gatewayOrderId && !cashfreeOrderId) {
       return;
     }
@@ -362,7 +379,16 @@ export default function PaymentSuccessContent() {
     };
 
     checkStatus();
-  }, [apiBase, cashfreeOrderId, gateway, gatewayOrderId, paymentId, router, transactionId]);
+  }, [
+    apiBase,
+    cashfreeOrderId,
+    gateway,
+    gatewayOrderId,
+    isManualUpiSuccess,
+    paymentId,
+    router,
+    transactionId,
+  ]);
 
   const statusTone = useMemo(() => {
     if (checking) return "checking";
@@ -375,6 +401,34 @@ export default function PaymentSuccessContent() {
   }, [checking, status]);
 
   const statusMeta = statusVisualConfig[statusTone] || statusVisualConfig.unknown;
+  const manualSuccessDetails = isManualUpiSuccess
+    ? [
+        ["Student Name", studentName || "-"],
+        ["Student ID", studentId || "-"],
+        ["Month", month || "-"],
+        [
+          "Academic Year",
+          academicYear
+            ? String(academicYear).includes("-")
+              ? academicYear
+              : `${academicYear}-${Number(academicYear) + 1}`
+            : "-",
+        ],
+        ["Amount", amount ? `₹${amount}` : "-"],
+        ["Payment Method", "Manual UPI"],
+        ["UTR Number", utr || "-"],
+        [
+          "Payment Date",
+          paidAt
+            ? new Intl.DateTimeFormat("en-IN", {
+                dateStyle: "medium",
+                timeStyle: "short",
+                timeZone: "Asia/Kolkata",
+              }).format(new Date(paidAt))
+            : "-",
+        ],
+      ]
+    : [];
 
   return (
     <motion.div
@@ -548,6 +602,40 @@ export default function PaymentSuccessContent() {
                     {status}
                   </div>
                 </motion.div>
+
+                {manualSuccessDetails.length ? (
+                  <motion.div
+                    style={{
+                      width: "100%",
+                      maxWidth: 560,
+                      display: "grid",
+                      gap: 10,
+                      padding: "18px 20px",
+                      borderRadius: 22,
+                      textAlign: "left",
+                      background: "rgba(255,255,255,0.78)",
+                      border: "1px solid rgba(34, 197, 94, 0.22)",
+                    }}
+                  >
+                    {manualSuccessDetails.map(([label, value]) => (
+                      <div
+                        key={label}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "minmax(130px, 0.44fr) 1fr",
+                          gap: 12,
+                          alignItems: "start",
+                          fontSize: "0.95rem",
+                        }}
+                      >
+                        <span style={{ color: "#64748b", fontWeight: 700 }}>{label}</span>
+                        <strong style={{ color: "#0f172a", wordBreak: "break-word" }}>
+                          {value}
+                        </strong>
+                      </div>
+                    ))}
+                  </motion.div>
+                ) : null}
               </motion.div>
             </AnimatePresence>
 

@@ -13,6 +13,10 @@ import { buildRequestLogMeta, logInfo, logWarn } from "../utils/appLogger.js";
 
 const isUniqueConstraintError = (error) => error?.code === "P2002";
 const isDevelopmentPaymentTestMode = process.env.NODE_ENV === "development";
+const getConfiguredPaymentMode = () => {
+  const mode = String(process.env.PAYMENT_MODE || "MANUAL_UPI").trim().toUpperCase();
+  return mode === "MANUAL_UPI" ? "MANUAL_UPI" : "CASHFREE";
+};
 
 const createUserFacingError = (status, message, extra = {}) => {
   const error = new Error(message);
@@ -133,6 +137,8 @@ const formatGatewayProviderLabel = (provider) => {
   switch (String(provider || "").toUpperCase()) {
     case "CASHFREE":
       return "Cashfree";
+    case "MANUAL_UPI":
+      return "Manual UPI";
     case "PHONEPE":
       return "PhonePe";
     case "CASH":
@@ -143,8 +149,12 @@ const formatGatewayProviderLabel = (provider) => {
 };
 
 const formatPaymentMethodLabel = ({ payment, gatewayOrder, latestAttempt }) => {
-  if (String(payment?.paymentProvider || "").trim().toUpperCase() === "CASH") {
+  const provider = String(payment?.paymentProvider || "").trim().toUpperCase();
+  if (provider === "CASH") {
     return "Cash";
+  }
+  if (provider === "MANUAL_UPI") {
+    return "Manual UPI";
   }
 
   const rawMethod =
@@ -169,6 +179,8 @@ const formatPaymentMethodLabel = ({ payment, gatewayOrder, latestAttempt }) => {
       return "UPI";
     case "CASHFREE":
       return "Online Payment";
+    case "MANUAL_UPI":
+      return "Manual UPI";
     case "CASH":
       return "Cash";
     default:
@@ -177,14 +189,17 @@ const formatPaymentMethodLabel = ({ payment, gatewayOrder, latestAttempt }) => {
 };
 
 const buildReceiptMeta = ({ payment, gatewayOrder }) => {
+  const provider = String(payment?.paymentProvider || "").trim().toUpperCase();
   const effectiveGatewayOrder =
-    String(payment?.paymentProvider || "").trim().toUpperCase() === "CASH"
+    provider === "CASH" || provider === "MANUAL_UPI"
       ? null
       : gatewayOrder;
   const latestAttempt = effectiveGatewayOrder?.attempts?.[0] || null;
   let paymentGateway = "Online Payment";
-  if (String(payment?.paymentProvider || "").trim().toUpperCase() === "CASH") {
+  if (provider === "CASH") {
     paymentGateway = "Cash";
+  } else if (provider === "MANUAL_UPI") {
+    paymentGateway = "Manual UPI";
   } else if (effectiveGatewayOrder?.provider) {
     paymentGateway = formatGatewayProviderLabel(effectiveGatewayOrder.provider);
   } else if (payment?.phonepeTransactionId) {
@@ -422,6 +437,189 @@ const createCashPaymentForStudent = async ({
     newStatus: payment?.status || "paid",
     action: existing ? "updated" : "created",
   };
+};
+
+// ===============================
+// STUDENT: MANUAL UPI PAYMENT (CURRENT SESSION)
+// ===============================
+export const submitManualUpiPayment = async (req, res) => {
+  try {
+    if (req.userRole !== "student") {
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    if (getConfiguredPaymentMode() !== "MANUAL_UPI") {
+      return res.status(403).json({
+        success: false,
+        message: "Manual UPI payment mode is not enabled.",
+      });
+    }
+
+    const { month, academicYear: requestedAcademicYear, utrNumber } = req.body || {};
+    if (!month || !VALID_PAYMENT_MONTHS.has(month)) {
+      return res.status(400).json({ success: false, message: "Valid month is required." });
+    }
+
+    const normalizedUtr = String(utrNumber || "").replace(/\s+/g, "").trim().toUpperCase();
+    if (!/^[A-Z0-9]{8,35}$/.test(normalizedUtr)) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter a valid UTR number.",
+      });
+    }
+
+    const academicYear = requestedAcademicYear
+      ? Number(requestedAcademicYear)
+      : getCurrentAcademicYear();
+    if (!Number.isInteger(academicYear) || academicYear < 2000 || academicYear > 3000) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid academic year is required.",
+      });
+    }
+
+    const studentId = Number(req.user?.id);
+    if (!Number.isInteger(studentId) || studentId <= 0) {
+      return res.status(401).json({
+        success: false,
+        message: "Session expired. Please login again.",
+      });
+    }
+
+    const appSettings = await prisma.appSettings.findUnique({
+      where: { id: 1 },
+    });
+    if (!appSettings?.monthlyFee) {
+      return res.status(500).json({
+        success: false,
+        message: "Payment configuration is not available.",
+      });
+    }
+
+    const paidAt = new Date();
+    const result = await prisma.$transaction(async (tx) => {
+      const student = await tx.student.findUnique({
+        where: { id: studentId },
+        select: { id: true, name: true, phone: true },
+      });
+
+      if (!student) {
+        throw createUserFacingError(404, "Student not found.");
+      }
+
+      const existing = await tx.payment.findUnique({
+        where: {
+          studentId_month_academicYear: {
+            studentId,
+            month,
+            academicYear,
+          },
+        },
+      });
+
+      if (String(existing?.status || "").toLowerCase() === "paid") {
+        throw createUserFacingError(409, "This month is already marked paid.");
+      }
+
+      const duplicateUtr = await tx.payment.findFirst({
+        where: {
+          OR: [
+            { phonepeTransactionId: normalizedUtr },
+            { phonepePaymentId: normalizedUtr },
+          ],
+          NOT: existing ? { id: existing.id } : undefined,
+        },
+        select: {
+          id: true,
+          studentId: true,
+          month: true,
+          academicYear: true,
+        },
+      });
+
+      if (duplicateUtr) {
+        throw createUserFacingError(409, "This UTR number has already been used.");
+      }
+
+      const paymentData = {
+        amount: Number(existing?.amount || appSettings.monthlyFee),
+        status: "paid",
+        currency: "INR",
+        paymentProvider: "MANUAL_UPI",
+        paidAt,
+        isLatePayment: isLatePaymentForPeriod({
+          month,
+          academicYear,
+          paidAt,
+        }),
+        phonepeTransactionId: normalizedUtr,
+        phonepePaymentId: normalizedUtr,
+        teacherAdminId: null,
+      };
+
+      const payment = existing
+        ? await tx.payment.update({
+            where: { id: existing.id },
+            data: paymentData,
+          })
+        : await tx.payment.create({
+            data: {
+              studentId,
+              month,
+              academicYear,
+              ...paymentData,
+            },
+          });
+
+      return { student, payment };
+    });
+
+    await autoPromoteIfEligible(studentId, academicYear);
+
+    logInfo("payments.manual_upi_success", buildRequestLogMeta(req, {
+      studentId,
+      month,
+      academicYear,
+      paymentId: result.payment.id,
+      paymentMode: "manual_upi",
+    }));
+
+    return res.json({
+      success: true,
+      status: "PAID",
+      message: "Payment completed successfully.",
+      payment: {
+        ...result.payment,
+        receiptMeta: buildReceiptMeta({
+          payment: result.payment,
+          gatewayOrder: null,
+        }),
+      },
+      paymentId: result.payment.id,
+      month,
+      academicYear,
+      amount: result.payment.amount,
+      utrNumber: normalizedUtr,
+    });
+  } catch (err) {
+    if (err?.status) {
+      logWarn("payments.manual_upi_rejected", buildRequestLogMeta(req, {
+        status: err.status,
+        reason: err.message,
+        month: req.body?.month || null,
+      }));
+      return res.status(err.status).json({
+        success: false,
+        message: err.message,
+      });
+    }
+
+    console.error("submitManualUpiPayment error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to complete manual UPI payment.",
+    });
+  }
 };
 
 // ===============================

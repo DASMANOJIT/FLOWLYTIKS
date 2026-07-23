@@ -139,13 +139,17 @@ const getPaymentStatusLabel = (payment) => {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 };
 
-const getReceiptPaymentMethod = (payment) =>
-  payment?.receiptMeta?.paymentMethod ||
-  (String(payment?.paymentProvider || "").trim().toUpperCase() === "CASH"
-    ? "Cash"
-    : payment?.phonepeTransactionId
-    ? "UPI"
-    : "Not Available");
+const getReceiptPaymentMethod = (payment) => {
+  if (payment?.receiptMeta?.paymentMethod) {
+    return payment.receiptMeta.paymentMethod;
+  }
+
+  const provider = String(payment?.paymentProvider || "").trim().toUpperCase();
+  if (provider === "CASH") return "Cash";
+  if (provider === "MANUAL_UPI") return "Manual UPI";
+  if (payment?.phonepeTransactionId) return "UPI";
+  return "Not Available";
+};
 
 const getReceiptNumber = (payment) =>
   payment?.receiptMeta?.receiptNumber ||
@@ -205,6 +209,10 @@ export const downloadPaymentReceiptPdf = async ({
     payment?.phonepeTransactionId ||
     payment?.phonepePaymentId ||
     String(payment?.id || "-");
+  const transactionLabel =
+    String(payment?.paymentProvider || "").trim().toUpperCase() === "MANUAL_UPI"
+      ? "UTR / Transaction Reference"
+      : "Transaction ID";
 
   const studentRows = [
     ["Student Name", student?.name || "-"],
@@ -221,7 +229,10 @@ export const downloadPaymentReceiptPdf = async ({
     ["Paid On", paidOnDate],
     ["Payment Status", getPaymentStatusLabel(payment)],
     ["Payment Method", getReceiptPaymentMethod(payment)],
-    ["Transaction ID", transactionId],
+    ...(String(payment?.paymentProvider || "").trim().toUpperCase() === "MANUAL_UPI"
+      ? [["UPI ID", "9831934306@ybl"]]
+      : []),
+    [transactionLabel, transactionId],
   ];
 
   const logoImage = await loadReceiptLogo();
