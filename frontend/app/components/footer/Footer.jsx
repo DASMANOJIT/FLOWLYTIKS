@@ -192,6 +192,9 @@ export default function Footer() {
           <section className="app-footer__panel" aria-labelledby="footer-legal-title">
             <p className="app-footer__section-title" id="footer-legal-title">Legal &amp; Policies</p>
             <div className="app-footer__nav-group">
+              <Link href="/about" className="app-footer__nav-link">
+                About Flowlytiks
+              </Link>
               <Link href="/terms" className="app-footer__nav-link">
                 Terms &amp; Conditions
               </Link>
