@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import Modal from "./../components/ui/Modal";
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import { Trash2, X } from "lucide-react";
 import "./admin.css";
@@ -15,11 +15,9 @@ import {
   MotionButton,
   MotionCard,
   MotionSection,
-  fadeUpItem,
-  staggerContainer,
 } from "../components/motion/primitives.jsx";
 import {
-  clearAuthSession,
+  clearAuthSessionForUnauthorizedResponse,
   getAuthName,
   getAuthRole,
   getAuthToken,
@@ -37,6 +35,8 @@ import {
 } from "../../lib/whatsapp.js";
 import useSessionChatHistory from "../../lib/useSessionChatHistory.js";
 import { getApiBaseUrl } from "../../lib/api.js";
+import AdminDashboardSummary from "../components/admin/AdminDashboardSummary.jsx";
+import OnlineClassSummary from "../components/admin/OnlineClassSummary";
 
 const API_BASE = getApiBaseUrl();
 const STUDENT_PAGE_SIZE = 8;
@@ -70,21 +70,6 @@ const resolveGroupSchoolName = (groupForm) =>
 
 const ADMIN_CHAT_STORAGE_KEY_PREFIX = "flowlytiks_admin_chat_history_";
 const DEFAULT_ADMIN_CHAT_STORAGE_KEY = `${ADMIN_CHAT_STORAGE_KEY_PREFIX}session`;
-const REVENUE_MONTH_OPTIONS = [
-  "All Months",
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
 const DEFAULT_CHAT_MESSAGES = [
   {
     role: "bot",
@@ -197,13 +182,13 @@ const AdminFeeStatusChart = dynamic(
 
 export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [adminName, setAdminName] = useState("");
 
   const [students, setStudents] = useState([]);
   const [studentPage, setStudentPage] = useState(1);
   const [studentTotalPages, setStudentTotalPages] = useState(1);
   const [studentsLoading, setStudentsLoading] = useState(false);
+  const [dashboardError, setDashboardError] = useState("");
   const [dashboardSummary, setDashboardSummary] = useState({
     totalStudents: 0,
     paid: 0,
@@ -212,7 +197,7 @@ export default function AdminDashboard() {
     monthlyFee: 0,
   });
   const [monthlyFee, setMonthlyFee] = useState(0);
-  const [totalRevenue, setTotalRevenue] = useState(0);
+  const [periodSummary, setPeriodSummary] = useState(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -221,15 +206,6 @@ export default function AdminDashboard() {
     DEFAULT_ADMIN_CHAT_STORAGE_KEY
   );
 
-  // =========================
-  // Date Filter State
-  // =========================
-  const [filterFrom, setFilterFrom] = useState("");
-  const [filterTo, setFilterTo] = useState("");
-  const [filterMonth, setFilterMonth] = useState("All Months");
-  const [filteredRevenue, setFilteredRevenue] = useState(0);
-  const [filteredPaid, setFilteredPaid] = useState(0);
-  const [filterLoading, setFilterLoading] = useState(false);
   const [classSchoolGroups, setClassSchoolGroups] = useState([]);
   const [missingGroupLinks, setMissingGroupLinks] = useState([]);
   const [groupForm, setGroupForm] = useState(EMPTY_GROUP_FORM);
@@ -269,7 +245,6 @@ export default function AdminDashboard() {
       return;
     }
     if (role && role !== "admin") {
-      clearAuthSession();
       window.location.href = "/login";
       return;
     }
@@ -292,10 +267,9 @@ export default function AdminDashboard() {
 
       if (
         [groupsRes.status, missingRes.status].some(
-          (status) => status === 401 || status === 403
+          (status) => clearAuthSessionForUnauthorizedResponse(status, token, "admin")
         )
       ) {
-        clearAuthSession();
         window.location.href = "/login";
         return;
       }
@@ -334,25 +308,6 @@ export default function AdminDashboard() {
     fetchGroupManagementData();
   }, []);
 
-  useEffect(() => {
-    if (!groupModalOpen) return undefined;
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    const handleEscape = (event) => {
-      if (event.key === "Escape" && !groupSubmitting) {
-        setGroupModalOpen(false);
-      }
-    };
-
-    window.addEventListener("keydown", handleEscape);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", handleEscape);
-    };
-  }, [groupModalOpen, groupSubmitting]);
-
   const buildAssistantBotMessage = (data) => {
     if (data?.ui === "whatsapp_reminders" && Array.isArray(data?.reminders)) {
       return {
@@ -390,7 +345,6 @@ export default function AdminDashboard() {
       return;
     }
     if (role && role !== "admin") {
-      clearAuthSession();
       window.location.href = "/login";
       return;
     }
@@ -418,14 +372,14 @@ export default function AdminDashboard() {
       setStudentsLoading(true);
     }
 
+    setDashboardError("");
     fetch(`${API_BASE}/api/students?${params.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(async (res) => {
         const data = await res.json();
         if (!res.ok) {
-          if (res.status === 401 || res.status === 403) {
-            clearAuthSession();
+          if (clearAuthSessionForUnauthorizedResponse(res.status, token, "admin")) {
             window.location.href = "/login";
             return;
           }
@@ -442,7 +396,6 @@ export default function AdminDashboard() {
           setStudentTotalPages(data.totalPages || 1);
           if (data.summary) {
             setDashboardSummary(data.summary);
-            setTotalRevenue(data.summary.revenue || 0);
             setMonthlyFee((current) => current || data.summary.monthlyFee || 0);
           }
         }
@@ -450,6 +403,7 @@ export default function AdminDashboard() {
       .catch((err) => {
         dashboardRequestKeyRef.current = "";
         console.error("Admin dashboard fetch error:", err);
+        setDashboardError(err.message || "Failed to load dashboard data. Please refresh to retry.");
       })
       .finally(() => {
         if (isInitialLoad) {
@@ -459,21 +413,6 @@ export default function AdminDashboard() {
         setStudentsLoading(false);
       });
   }, [studentPage]);
-  // Logout function
-  const handleLogout = () => {
-    const token = getAuthToken();
-    if (token) {
-      fetch(`${API_BASE}/api/auth/logout`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => {});
-    }
-    clearChatHistory();
-    clearAuthSession();
-    alert("You are logged out from this device. Please login again.");
-    window.location.href = "/login";
-  };
-
   const handleClearChat = () => {
     clearChatHistory();
     setChatInput("");
@@ -552,8 +491,7 @@ export default function AdminDashboard() {
       );
 
       const data = await res.json().catch(() => ({}));
-      if (res.status === 401 || res.status === 403) {
-        clearAuthSession();
+      if (clearAuthSessionForUnauthorizedResponse(res.status, token, "admin")) {
         window.location.href = "/login";
         return;
       }
@@ -622,8 +560,7 @@ export default function AdminDashboard() {
       );
       const data = await res.json().catch(() => ({}));
 
-      if (res.status === 401 || res.status === 403) {
-        clearAuthSession();
+      if (clearAuthSessionForUnauthorizedResponse(res.status, token, "admin")) {
         window.location.href = "/login";
         return;
       }
@@ -668,74 +605,10 @@ export default function AdminDashboard() {
     setGroupModalOpen(true);
   };
 
-  // =========================
-  // Filter Functions
-  // =========================
-  const fetchRevenueSummary = async ({ from = "", to = "", month = "All Months" } = {}) => {
-    const token = getAuthToken();
-    if (!token) {
-      window.location.href = "/login";
-      return;
-    }
-
-    setFilterLoading(true);
-
-    try {
-      const params = new URLSearchParams();
-      if (from) params.set("from", from);
-      if (to) params.set("to", to);
-      if (month && month !== "All Months") params.set("month", month);
-
-      const queryString = params.toString();
-      const res = await fetch(`${API_BASE}/api/payments/revenue${queryString ? `?${queryString}` : ""}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json().catch(() => ({}));
-
-      if (res.status === 401 || res.status === 403) {
-        clearAuthSession();
-        window.location.href = "/login";
-        return;
-      }
-
-      if (!res.ok) {
-        throw new Error(data?.message || "Failed to apply date filter");
-      }
-
-      setFilteredRevenue(data.grossRevenue ?? data.totalRevenue ?? 0);
-      setFilteredPaid(data.paidRevenue ?? data.totalRevenue ?? 0);
-    } catch (err) {
-      console.error("Admin revenue filter error:", err);
-      alert("Failed to apply the selected filters.");
-    } finally {
-      setFilterLoading(false);
-    }
-  };
-
-  const applyFilter = async () => {
-    await fetchRevenueSummary({
-      from: filterFrom,
-      to: filterTo,
-      month: filterMonth,
-    });
-  };
-
-  const clearFilter = async () => {
-    setFilterFrom("");
-    setFilterTo("");
-    setFilterMonth("All Months");
-    await fetchRevenueSummary();
-  };
-
-  useEffect(() => {
-    fetchRevenueSummary();
-  }, []);
-
   const stats = {
     totalStudents: dashboardSummary.totalStudents,
-    paid: dashboardSummary.paid,
-    unpaid: dashboardSummary.unpaid,
-    revenue: totalRevenue,
+    paid: periodSummary?.paidStudents ?? 0,
+    unpaid: periodSummary?.unpaidStudents ?? 0,
   };
 
   // =========================
@@ -827,32 +700,6 @@ export default function AdminDashboard() {
         transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
       >
 
-      {/* NAVBAR */}
-      <MotionSection className="admin-nav" delay={0.02}>
-        <div className="nav-left">
-          <h2 className="nav-title">FLOWLYTIKS Fee Management Dashboard</h2>
-        </div>
-
-        <div className="nav-actions">
-          <MotionButton
-            className="hamburger"
-            onClick={() => setMenuOpen(!menuOpen)}
-          >
-            ☰
-          </MotionButton>
-        </div>
-
-        <div className={`nav-links ${menuOpen ? "open" : ""}`}>
-          <Link href="/students">Students</Link>
-          <Link href="/admin/faculty">Faculty</Link>
-          <Link href="/admin/notifications">Notifications</Link>
-          <Link href="/admin/audit-logs">Audit Logs</Link>
-          <Link href="/payments">Payments</Link>
-          <MotionButton className="logout-btn" onClick={handleLogout}>Logout</MotionButton>
-
-        </div>
-      </MotionSection>
-
       <MotionSection delay={0.04}>
         <GreetingPanel
           name={adminName}
@@ -861,82 +708,10 @@ export default function AdminDashboard() {
         />
       </MotionSection>
 
-      {/* SUMMARY */}
-      <motion.div
-        className="monthly-summary"
-        variants={staggerContainer}
-        initial="hidden"
-        animate="visible"
-      >
-        <motion.div className="summary-box" variants={fadeUpItem}>
-          <h3>Total Students</h3>
-          <p>{stats.totalStudents}</p>
-        </motion.div>
-        <motion.div className="summary-box" variants={fadeUpItem}>
-          <h3>Paid</h3>
-          <p>{stats.paid}</p>
-        </motion.div>
-        <motion.div className="summary-box" variants={fadeUpItem}>
-          <h3>Unpaid</h3>
-          <p>{stats.unpaid}</p>
-        </motion.div>
-        <motion.div className="summary-box" variants={fadeUpItem}>
-          <h3>Total Revenue</h3>
-          <p>₹{stats.revenue}</p>
-        </motion.div>
-      </motion.div>
+      <AdminDashboardSummary onSummary={setPeriodSummary} />
+      {dashboardError ? <p role="alert">{dashboardError}</p> : null}
 
-      {/* DATE FILTER */}
-      <MotionCard className="date-filter-wrapper" delay={0.08}>
-        <div className="date-inputs">
-          <div className="date-input">
-            <label>From:</label>
-            <input
-              type="date"
-              value={filterFrom}
-              onChange={(e) => setFilterFrom(e.target.value)}
-            />
-          </div>
-          <div className="date-input">
-            <label>To:</label>
-            <input
-              type="date"
-              value={filterTo}
-              onChange={(e) => setFilterTo(e.target.value)}
-            />
-          </div>
-          <div className="date-input">
-            <label>Month:</label>
-            <select
-              value={filterMonth}
-              onChange={(e) => setFilterMonth(e.target.value)}
-            >
-              {REVENUE_MONTH_OPTIONS.map((monthOption) => (
-                <option key={monthOption} value={monthOption}>
-                  {monthOption}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <div className="filter-actions">
-          <MotionButton className="apply-btn" onClick={applyFilter} disabled={filterLoading}>
-            {filterLoading ? (
-              <span className="button-loading-content">
-                <PremiumLoader inline compact />
-                <span>Applying</span>
-              </span>
-            ) : (
-              "Apply"
-            )}
-          </MotionButton>
-          <MotionButton className="clear-btn" onClick={clearFilter}>Clear</MotionButton>
-        </div>
-        <div className="filter-result">
-          <p>Total Revenue: ₹{filteredRevenue}</p>
-          <p>Fees Paid: ₹{filteredPaid}</p>
-        </div>
-      </MotionCard>
+      <OnlineClassSummary />
      
 
 
@@ -1126,11 +901,9 @@ export default function AdminDashboard() {
       {assistantPortalRoot && groupModalOpen
         ? createPortal(
             <AnimatePresence>
-              <motion.div
+              <Modal
                 className="group-modal-backdrop"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
+                onClose={closeGroupModal}
               >
                 <motion.div
                   className="group-modal"
@@ -1139,8 +912,6 @@ export default function AdminDashboard() {
                   exit={{ opacity: 0, y: 12, scale: 0.98 }}
                   transition={{ duration: 0.22 }}
                   onClick={(event) => event.stopPropagation()}
-                  role="dialog"
-                  aria-modal="true"
                   aria-labelledby="group-modal-title"
                 >
                   <div className="group-modal-header">
@@ -1279,7 +1050,7 @@ export default function AdminDashboard() {
                     </div>
                   </form>
                 </motion.div>
-              </motion.div>
+              </Modal>
             </AnimatePresence>,
             assistantPortalRoot
           )

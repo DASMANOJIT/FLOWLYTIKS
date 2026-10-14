@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import prisma from "../prisma/client.js";
+import { withDatabaseRecovery } from "../utils/databaseRecovery.js";
 import {
   addSession,
   clearUserSessions,
@@ -564,10 +565,10 @@ export const heartbeatSession = async (req, res) => {
       return authError(res, 401, "Session expired. Please login again.");
     }
 
-    await touchSessionActivity(req.userRole, req.user.id, req.tokenId, { force: true });
+    await withDatabaseRecovery(() => touchSessionActivity(req.userRole, req.user.id, req.tokenId, { force: true }), "heartbeat.activity");
     return authSuccess(res, { message: "Session active." });
   } catch (err) {
-    console.error("SESSION HEARTBEAT ERROR:", err?.message || err);
-    return authError(res, 401, "Session expired. Please login again.");
+    console.error("SESSION HEARTBEAT ERROR:", { name: err?.name, code: err?.code });
+    return res.status(503).json({ success: false, code: "AUTH_SERVICE_UNAVAILABLE", message: "Authentication service unavailable. Please try again." });
   }
 };

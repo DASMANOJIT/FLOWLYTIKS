@@ -2,7 +2,10 @@ import prisma from "../prisma/client.js";
 import { randomUUID } from "node:crypto";
 import { createAuditLog } from "../services/auditLogService.js";
 import { createPayout, initiatePayout } from "../services/facultyPayoutService.js";
+import { assertPayoutConfig, refreshExtraPaymentFromPayout } from "../services/cashfreePayoutService.js";
 import { sendFacultyExtraIncentiveEmail } from "../services/emailNotificationService.js";
+import { isOnlineDoubtClass, usesOnlineClassWorkflow } from "../services/facultyOnlineClassService.js";
+import { copySetDto, listCopySets, saveCopySet, withIncentiveOperationLock } from "../services/incentiveCopySetService.js";
 
 const money = (value) => Number(Number(value || 0).toFixed(2));
 
@@ -13,11 +16,12 @@ const typeDto = (type) => ({
   name: type.name,
   rate: money(type.rate),
   isActive: Boolean(type.isActive),
+  onlineClassWorkflow: isOnlineDoubtClass(type) || Boolean(type.onlineClasses?.length),
   createdAt: type.createdAt,
   updatedAt: type.updatedAt,
 });
 
-const summarizeEntries = (entries = []) => {
+export const summarizeEntries = (entries = []) => {
   const byType = new Map();
   for (const entry of entries) {
     const key = entry.incentiveTypeId;
@@ -62,6 +66,7 @@ const isMissingExtraPaymentColumnsError = (error) => {
 
 const createCashPaymentLegacy = async ({ facultyId, req }) =>
   prisma.$transaction(async (tx) => {
+    await req.incentiveOperationGuard(tx);
     const faculty = await tx.faculty.findUnique({ where: { id: facultyId } });
     if (!faculty) {
       const error = new Error("Faculty not found.");
@@ -241,6 +246,7 @@ export const getAdminSummary = async (req, res) => {
         pendingSummary: summary,
         pendingCount: summary.reduce((sum, item) => sum + item.quantity, 0),
         pendingAmount: money(summary.reduce((sum, item) => sum + item.amount, 0)),
+        pendingEntries: (entriesByFaculty.get(faculty.id) || []).map(copySetDto),
       };
     });
 
@@ -251,14 +257,52 @@ export const getAdminSummary = async (req, res) => {
   }
 };
 
-export const adjustMyIncentive = async (req, res) => {
+const adjustMyIncentiveUnlocked = async (req, res) => {
   try {
+    if (req.method === "PATCH") {
+      if (!req.user || req.userRole !== "faculty") return res.status(403).json({ success: false, message: "Faculty access required." });
+      const { pendingCount, expectedPendingCount } = req.body || {};
+      if (![pendingCount, expectedPendingCount].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 2147483647)) {
+        return res.status(400).json({ success: false, message: "Pending count must be a non-negative whole number." });
+      }
+      const result = await prisma.$transaction(async tx => {
+        await req.incentiveOperationGuard(tx);
+        const type = await tx.extraIncentiveType.findFirst({ where: { id: req.params.incentiveTypeId, isActive: true } });
+        if (!type) throw Object.assign(new Error("Incentive type not found."), { status: 404 });
+        if (await usesOnlineClassWorkflow(tx, type)) throw Object.assign(new Error("Online doubt class incentives are added only through class completion."), { status: 403 });
+        const pending = await tx.facultyExtraIncentiveEntry.findMany({ where: { facultyId: req.user.id, incentiveTypeId: type.id, status: "PENDING" } });
+        const quantity = pending.reduce((sum, entry) => sum + Number(entry.quantityChange), 0);
+        const amount = money(pending.reduce((sum, entry) => sum + Number(entry.amountSnapshot), 0));
+        const difference = pendingCount - quantity;
+        if (!difference) return { entry: null };
+        if (quantity !== expectedPendingCount) throw Object.assign(new Error("Pending count changed. Refresh the table and try again."), { status: 409 });
+        // Reductions retain the weighted value of existing snapshots, including old rates.
+        const rate = difference > 0 ? money(type.rate) : amount / quantity;
+        const adjustmentAmount = money(difference * rate);
+        if (!Number.isFinite(adjustmentAmount) || Math.abs(adjustmentAmount) > 9999999999.99) throw Object.assign(new Error("Pending amount is too large."), { status: 400 });
+        const entry = await tx.facultyExtraIncentiveEntry.create({ data: {
+          facultyId: req.user.id, incentiveTypeId: type.id, quantityChange: difference,
+          rateSnapshot: money(rate), amountSnapshot: adjustmentAmount, status: "PENDING",
+          createdByType: "FACULTY", createdById: req.user.id,
+        } });
+        return { entry };
+      }, { isolationLevel: "Serializable" });
+      if (result.entry) await createAuditLog({
+        req, actorType: "FACULTY", actorId: req.user.id, actorName: req.user.fullName,
+        action: result.entry.quantityChange > 0 ? "EXTRA_INCENTIVE_INCREMENTED" : "EXTRA_INCENTIVE_DECREMENTED",
+        entityType: "FacultyExtraIncentiveEntry", entityId: result.entry.id,
+        metadata: { incentiveTypeId: req.params.incentiveTypeId, quantityChange: result.entry.quantityChange },
+      }).catch(error => console.error("Extra incentive adjustment audit failed:", { code: error?.code, name: error?.name }));
+      return res.json({ success: true, entry: result.entry });
+    }
     const direction = req.params.action === "decrement" ? -1 : 1;
     const facultyId = req.user.id;
     const type = await prisma.extraIncentiveType.findFirst({
       where: { id: req.params.incentiveTypeId, isActive: true },
     });
     if (!type) return res.status(404).json({ success: false, message: "Incentive type not found." });
+
+    if (await usesOnlineClassWorkflow(prisma, type)) return res.status(403).json({ success: false, message: "Online doubt class incentives are added only through class completion." });
 
     if (direction < 0) {
       const pending = await prisma.facultyExtraIncentiveEntry.findMany({
@@ -292,6 +336,7 @@ export const adjustMyIncentive = async (req, res) => {
     });
     return res.json({ success: true, entry });
   } catch (error) {
+    if (error.status || error.code === "P2034") return res.status(error.status || 409).json({ success: false, message: error.status ? error.message : "Pending incentives changed. Refresh the table and try again." });
     console.error("Adjust my extra incentive error:", error?.message || error);
     return res.status(500).json({ success: false, message: "Failed to update extra incentive." });
   }
@@ -299,17 +344,17 @@ export const adjustMyIncentive = async (req, res) => {
 
 export const getMyIncentives = async (req, res) => {
   try {
-    const [types, entries] = await Promise.all([
-      prisma.extraIncentiveType.findMany({ where: { isActive: true }, orderBy: { name: "asc" } }),
+    const [types, entries, pendingEntries] = await Promise.all([
+      prisma.extraIncentiveType.findMany({ where: { isActive: true }, include: { onlineClasses: { select: { id: true }, take: 1 } }, orderBy: { name: "asc" } }),
       prisma.facultyExtraIncentiveEntry.findMany({
         where: { facultyId: req.user.id },
         include: { incentiveType: true },
         orderBy: { createdAt: "desc" },
         take: 200,
       }),
+      prisma.facultyExtraIncentiveEntry.findMany({ where: { facultyId: req.user.id, status: "PENDING" }, include: { incentiveType: true } }),
     ]);
     const payments = await findExtraIncentivePayments({ facultyId: req.user.id });
-    const pendingEntries = entries.filter((entry) => entry.status === "PENDING");
     return res.json({
       success: true,
       types: types.map(typeDto),
@@ -322,6 +367,7 @@ export const getMyIncentives = async (req, res) => {
         rate: money(entry.rateSnapshot),
         amount: money(entry.amountSnapshot),
         status: entry.status,
+        note: entry.note,
         createdAt: entry.createdAt,
       })),
       payments: payments.map(paymentDto),
@@ -332,7 +378,7 @@ export const getMyIncentives = async (req, res) => {
   }
 };
 
-export const payFacultyIncentives = async (req, res) => {
+const payFacultyIncentivesUnlocked = async (req, res) => {
   try {
     const facultyId = req.params.facultyId;
     const method = String(req.body?.method || "CASH").trim().toUpperCase();
@@ -341,35 +387,12 @@ export const payFacultyIncentives = async (req, res) => {
     }
 
     let cashfreePayout = null;
-    if (method === "CASHFREE") {
-      const entries = await prisma.facultyExtraIncentiveEntry.findMany({
-        where: { facultyId, status: "PENDING" },
-        include: { incentiveType: true },
-      });
-      const summary = summarizeEntries(entries);
-      const totalAmount = money(summary.reduce((sum, item) => sum + item.amount, 0));
-      if (totalAmount <= 0) {
-        return res.status(400).json({ success: false, message: "No pending extra incentive amount to pay." });
-      }
-      const payout = await createPayout({
-        facultyId,
-        amount: totalAmount,
-        paymentMethod: "BANK_TRANSFER",
-        createdBy: req.user?.id,
-      });
-      const initiated = await initiatePayout(payout.id, { paidBy: req.user?.id });
-      cashfreePayout = initiated?.payout || payout;
-      if (String(cashfreePayout.status || "").toUpperCase() === "FAILED") {
-        return res.status(502).json({
-          success: false,
-          message: cashfreePayout.failureReason || "Cashfree payout failed.",
-        });
-      }
-    }
+    if (method === "CASHFREE") assertPayoutConfig();
 
     let result;
     try {
       result = await prisma.$transaction(async (tx) => {
+      await req.incentiveOperationGuard(tx);
       const faculty = await tx.faculty.findUnique({ where: { id: facultyId } });
       if (!faculty) {
         const error = new Error("Faculty not found.");
@@ -386,6 +409,9 @@ export const payFacultyIncentives = async (req, res) => {
         const error = new Error("No pending extra incentive amount to pay.");
         error.status = 400;
         throw error;
+      }
+      if (method === "CASHFREE") {
+        cashfreePayout = await createPayout({ facultyId, amount: totalAmount, paymentMethod: "BANK_TRANSFER", createdBy: req.user.id }, tx);
       }
       const payment = await tx.facultyExtraIncentivePayment.create({
         data: {
@@ -419,6 +445,15 @@ export const payFacultyIncentives = async (req, res) => {
       }
     }
 
+    if (cashfreePayout) {
+      try {
+        await initiatePayout(cashfreePayout.id, { paidBy: req.user.id });
+      } finally {
+        const current = await prisma.facultyPayout.findUniqueOrThrow({ where: { id: cashfreePayout.id } });
+        await refreshExtraPaymentFromPayout(current);
+      }
+      result.payment = await prisma.facultyExtraIncentivePayment.findUniqueOrThrow({ where: { id: result.payment.id } });
+    }
     await createAuditLog({
       req,
       action: "EXTRA_INCENTIVE_PAID",
@@ -436,16 +471,58 @@ export const payFacultyIncentives = async (req, res) => {
     }
     return res.json({
       success: true,
-      message: "Extra incentives paid successfully",
+      message: result.payment.status === "PAID" ? "Extra incentives paid successfully" : "Extra incentive payout is processing.",
       payment: paymentDto({ ...result.payment, faculty: result.faculty }),
     });
   } catch (error) {
     console.error("Pay extra incentives error:", error?.message || error);
-    return res.status(error?.status || 500).json({
+    return res.status(error?.status || error?.statusCode || 500).json({
       success: false,
-      message: error?.status ? error.message : "Failed to pay extra incentives.",
+      message: error?.status || error?.statusCode ? error.message : "Failed to pay extra incentives.",
     });
   }
+};
+
+const operationError = (res, error) => {
+  console.warn("incentive.operation_failed", { name: error.name, code: error.code });
+  return res.status(error.status || (error.code === "P2034" ? 409 : 503)).json({ success: false, message: error.status ? error.message : "Incentive updates are temporarily unavailable. Please try again." });
+};
+
+export const payFacultyIncentives = async (req, res) => {
+  if (req.userRole !== "admin") return res.status(403).json({ success: false, message: "Admin access required." });
+  try {
+    return await withIncentiveOperationLock(req.params.facultyId, async guard => {
+      req.incentiveOperationGuard = guard;
+      return payFacultyIncentivesUnlocked(req, res);
+    });
+  } catch (error) { return operationError(res, error); }
+};
+
+export const adjustMyIncentive = async (req, res) => {
+  if (!req.user || req.userRole !== "faculty") return res.status(403).json({ success: false, message: "Faculty access required." });
+  try {
+    return await withIncentiveOperationLock(req.user.id, async guard => {
+      req.incentiveOperationGuard = guard;
+      return adjustMyIncentiveUnlocked(req, res);
+    });
+  } catch (error) { return operationError(res, error); }
+};
+
+export const saveMyCopySet = async (req, res) => {
+  try {
+    const result = await saveCopySet(req.user.id, req.params.incentiveTypeId, req.body, req.params.entryId);
+    if (result.changed) await createAuditLog({ req, actorType: "FACULTY", actorId: req.user.id, actorName: req.user.fullName,
+      action: req.params.entryId ? "EXTRA_INCENTIVE_SET_UPDATED" : "EXTRA_INCENTIVE_SET_ADDED", entityType: "FacultyExtraIncentiveEntry", entityId: result.entry.id,
+      metadata: { previous: result.previous, quantity: result.entry.quantityChange, remark: result.entry.note, rate: result.entry.rate } }).catch(error => console.warn("incentive.set_audit_failed", { name: error.name, code: error.code }));
+    return res.json({ success: true, entry: result.entry });
+  } catch (error) { return operationError(res, error); }
+};
+
+export const getIncentiveCopySets = async (req, res) => {
+  try {
+    const facultyId = req.userRole === "faculty" ? req.user.id : req.params.facultyId;
+    return res.json({ success: true, ...await listCopySets(facultyId, req.params.incentiveTypeId, Number(req.query.page || 1)) });
+  } catch (error) { return operationError(res, error); }
 };
 
 export const listIncentivePayments = async (req, res) => {

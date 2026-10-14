@@ -1,12 +1,16 @@
 "use client";
 
+import Modal from "../../../components/ui/Modal";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, RotateCcw, X } from "lucide-react";
+import { RotateCcw, X } from "lucide-react";
+import BackToDashboard from "../../../components/admin/BackToDashboard";
 import { apiCall } from "../../../../lib/api.js";
 import { getAuthRole, getAuthToken } from "../../../../lib/authStorage.js";
 import PremiumLoader from "../../../components/ui/PremiumLoader";
 import "../faculty.css";
+import OnlineClassDetails from "../extra-incentives/OnlineClassDetails";
 
 type ApiCall = <T = unknown>(endpoint: string, method?: string, body?: unknown, token?: string | null) => Promise<T>;
 const callApi = apiCall as ApiCall;
@@ -79,6 +83,7 @@ const formatDate = (value?: string | null) => {
 };
 
 export default function FacultyPaymentRecordsPage() {
+  const [classPayment, setClassPayment] = useState<ExtraIncentivePayment | null>(null);
   const [token, setToken] = useState("");
   const [records, setRecords] = useState<WeeklyRecord[]>([]);
   const [extraPayments, setExtraPayments] = useState<ExtraIncentivePayment[]>([]);
@@ -130,10 +135,7 @@ export default function FacultyPaymentRecordsPage() {
     <main className="faculty-page">
       <div className="faculty-shell">
         <header className="faculty-header">
-          <Link className="faculty-button faculty-button--ghost" href="/admin/faculty">
-            <ArrowLeft size={18} />
-            Back
-          </Link>
+          <BackToDashboard />
           <div className="faculty-title-block">
             <h1>Faculty Payment Records</h1>
             <p>View weekly online and cash payment records for faculty payouts.</p>
@@ -254,7 +256,9 @@ export default function FacultyPaymentRecordsPage() {
                     <td>{payment.facultyCode || "-"}</td>
                     <td>{payment.facultyName || "-"}</td>
                     <td>{payment.paymentMethod === "CASHFREE" ? "Cashfree Payout" : "Cash"}</td>
-                    <td>{(payment.summary || []).map((item) => `${item.name}: ${item.quantity} x ${money(item.rate)}`).join(", ") || "-"}</td>
+                    <td>{(payment.summary || []).map((item) => `${item.name}: ${item.quantity} x ${money(item.rate)}`).join(", ") || "-"}
+                      {(payment.summary || []).some(item => item.name.trim().replace(/\s+/g, " ").toUpperCase() === "ONLINE DOUBT CLASS") ? <button type="button" className="faculty-button faculty-button--ghost" onClick={() => setClassPayment(payment)}>Class Details</button> : null}
+                    </td>
                     <td>{money(payment.totalAmount)}</td>
                     <td><span className={`faculty-status faculty-status--${payment.status}`}>{payment.status}</span></td>
                     <td>{formatDate(payment.paidAt)}</td>
@@ -270,8 +274,14 @@ export default function FacultyPaymentRecordsPage() {
         </section>
       </div>
 
+      {classPayment ? <Modal onClose={() => setClassPayment(null)}>
+        <div className="faculty-modal payroll-detail-modal">
+          <div className="faculty-modal-header"><h2>Linked Classes - {classPayment.facultyName}</h2><button className="faculty-icon-button" aria-label="Close" onClick={() => setClassPayment(null)}><X size={18} /></button></div>
+          <OnlineClassDetails token={token} paymentId={classPayment.id} />
+        </div>
+      </Modal> : null}
       {selected ? (
-        <div className="faculty-modal-backdrop" role="dialog" aria-modal="true">
+        <Modal className="faculty-modal-backdrop" role="dialog" aria-modal="true">
           <div className="faculty-modal payroll-detail-modal">
             <div className="faculty-modal-header">
               <h2>Payment Details — {formatDate(selected.weekStart)} to {formatDate(selected.weekEnd)}</h2>
@@ -314,7 +324,7 @@ export default function FacultyPaymentRecordsPage() {
               </table>
             </div>
           </div>
-        </div>
+        </Modal>
       ) : null}
     </main>
   );

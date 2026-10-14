@@ -7,7 +7,7 @@ import Nav from "../components/navbar/navbar.jsx";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection } from "../components/motion/primitives.jsx";
 import GreetingPanel from "../components/dashboard/GreetingPanel.jsx";
-import { clearAuthSession, getAuthToken } from "../../lib/authStorage.js";
+import { clearAuthSessionForUnauthorizedResponse, getAuthToken } from "../../lib/authStorage.js";
 import { downloadPaymentReceiptPdf } from "../../lib/paymentReceiptPdf.js";
 import { getApiBaseUrl } from "../../lib/api.js";
 import CompanyLink from "../components/company/CompanyLink.jsx";
@@ -64,6 +64,8 @@ export default function StudentDashboard() {
   const [student, setStudent] = useState(null);
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [reload, setReload] = useState(0);
 
   const [totalMonthlyFees, setTotalMonthlyFees] = useState(0); // <-- dynamic fee
   const handlePay = (month) => {
@@ -89,6 +91,7 @@ export default function StudentDashboard() {
   // FETCH STUDENT + PAYMENTS
   // ===============================
   useEffect(() => {
+  let cancelled = false;
   const fetchData = async () => {
     const token = getAuthToken();
     if (!token) {
@@ -96,6 +99,8 @@ export default function StudentDashboard() {
       return;
     }
 
+    setLoading(true);
+    setLoadError("");
     try {
       const [studentRes, paymentRes] = await Promise.all([
         fetch(`${API_BASE}/api/students/me`, {
@@ -112,26 +117,29 @@ export default function StudentDashboard() {
         }),
       ]);
 
+      if (cancelled) return;
+      if ([studentRes, paymentRes].some(response => response.status === 401)) {
+        if (clearAuthSessionForUnauthorizedResponse(401, token, "student")) router.replace("/login");
+        return;
+      }
       if (!studentRes.ok) throw new Error("Failed to fetch student");
       if (!paymentRes.ok) throw new Error("Failed to fetch payments");
 
-      const studentData = await studentRes.json();
+      const [studentData, paymentData] = await Promise.all([studentRes.json(), paymentRes.json()]);
+      if (cancelled || getAuthToken() !== token) return;
       setStudent(studentData);
       setTotalMonthlyFees(studentData.monthlyFee || 0);
-
-      const paymentData = await paymentRes.json();
       setPayments(paymentData);
-    } catch (err) {
-      console.error("Fetch error:", err);
-      clearAuthSession();
-      router.push("/login");
+    } catch {
+      if (!cancelled) setLoadError("Student dashboard is temporarily unavailable. Please try again.");
     } finally {
-      setLoading(false);
+      if (!cancelled) setLoading(false);
     }
   };
 
   fetchData();
-}, [router]);
+  return () => { cancelled = true; };
+}, [router, reload]);
 
   // ===============================
   // CALCULATIONS
@@ -208,6 +216,7 @@ export default function StudentDashboard() {
 
 
   if (loading) return <PremiumLoader fullScreen label="Loading student dashboard" />;
+  if (loadError) return <main className="student-dashboard"><p role="alert">{loadError}</p><MotionButton onClick={() => setReload(value => value + 1)}>Retry</MotionButton></main>;
 
   return (
     <motion.div

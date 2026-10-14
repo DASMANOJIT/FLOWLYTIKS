@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import BackToDashboard from "../../components/admin/BackToDashboard";
+import { RefreshCw } from "lucide-react";
 import { apiCall } from "../../../lib/api.js";
 import { getAuthToken } from "../../../lib/authStorage.js";
 import "../faculty/faculty.css";
@@ -90,7 +90,7 @@ export default function AdminAuditLogsPage() {
       <div className="faculty-shell">
         <header className="faculty-header">
           <div className="faculty-title-block">
-            <Link href="/admin" className="faculty-back-link"><ArrowLeft size={18} /> Admin Dashboard</Link>
+            <BackToDashboard />
             <h1>Audit Logs</h1>
             <p>Review critical admin, faculty, payroll, payout, report, and attendance actions.</p>
           </div>

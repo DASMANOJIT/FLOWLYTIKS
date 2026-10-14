@@ -3,6 +3,7 @@ import {
   createWorkLedgerEntry,
   deleteWorkLedgerEntry,
   exportWorkLedgerCsv,
+  exportWorkLedgerReport,
   getWorkLedgerEntries,
   getWorkLedgerEntryById,
   getWorkLedgerFaculty,
@@ -27,6 +28,7 @@ const router = express.Router();
 
 router.get("/", protect, validateQuery(workLedgerListQuerySchema), getWorkLedgerEntries);
 router.get("/export.csv", protect, validateQuery(workLedgerListQuerySchema), exportWorkLedgerCsv);
+router.get("/export.json", protect, validateQuery(workLedgerListQuerySchema), exportWorkLedgerReport);
 router.get(
   "/week/:weekId",
   protect,

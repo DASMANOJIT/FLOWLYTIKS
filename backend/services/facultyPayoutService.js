@@ -69,14 +69,21 @@ export const listFacultyPayouts = async ({ page = 1, limit = 20, status = "all" 
   return { rows, total };
 };
 
-export const createPayout = async ({ facultyId, payrollId = null, amount, paymentMethod, createdBy }) => {
+export const createPayout = async ({ facultyId, payrollId = null, amount, paymentMethod, createdBy }, db = prisma) => {
+  if (db === prisma && payrollId) return prisma.$transaction(tx => createPayout({ facultyId, payrollId, amount, paymentMethod, createdBy }, tx));
   let payrollAmount = amount;
   if (payrollId) {
-    const payroll = await prisma.facultyEarningsPayroll.findUnique({ where: { id: payrollId } });
+    const period = await db.facultyEarningsPayroll.findUnique({ where: { id: payrollId }, include: { payrollCycle: true } });
+    if (!period) throw new Error("Referenced payroll not found");
+    const key = `weekly-pay:${period.payrollCycle.startDate.toISOString().slice(0, 10)}:${period.payrollCycle.endDate.toISOString().slice(0, 10)}`;
+    await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${key})::bigint)::text`;
+    const payroll = await db.facultyEarningsPayroll.findUnique({ where: { id: payrollId } });
     if (!payroll) throw new Error("Referenced payroll not found");
     if (String(payroll.status || "").toUpperCase() !== "APPROVED") {
       throw new Error("Payroll must be APPROVED before creating a payout.");
     }
+    const active = await db.facultyPayout.findFirst({ where: { payrollId, status: { in: ["PENDING", "PROCESSING", "SUCCESS"] } }, include: withPayoutIncludes });
+    if (active) return active;
     facultyId = payroll.facultyId;
     payrollAmount = payroll.totalAmount;
   }
@@ -84,7 +91,7 @@ export const createPayout = async ({ facultyId, payrollId = null, amount, paymen
     throw new Error("Faculty and payout amount are required.");
   }
 
-  const payout = await prisma.facultyPayout.create({
+  const payout = await db.facultyPayout.create({
     data: {
       facultyId,
       payrollId,
@@ -103,8 +110,8 @@ export const createPayout = async ({ facultyId, payrollId = null, amount, paymen
   return payout;
 };
 
-export const createPayoutsForApprovedPayrolls = async ({ payrollCycleId, createdBy }) => {
-  const payrolls = await prisma.facultyEarningsPayroll.findMany({
+export const createPayoutsForApprovedPayrolls = async ({ payrollCycleId, createdBy }, db = prisma) => {
+  const payrolls = await db.facultyEarningsPayroll.findMany({
     where: {
       payrollCycleId,
       status: "APPROVED",
@@ -121,7 +128,7 @@ export const createPayoutsForApprovedPayrolls = async ({ payrollCycleId, created
       amount: payroll.totalAmount,
       paymentMethod: "BANK_TRANSFER",
       createdBy,
-    }));
+    }, db));
   }
   return created;
 };
@@ -176,9 +183,9 @@ export const markPayoutPaid = async (payoutId, { transactionId, paidBy }) => {
   if (payout.payroll && !["APPROVED", "PAID"].includes(payout.payroll.status)) throw new Error("Only approved payrolls can be marked paid.");
 
   const now = new Date();
-  await prisma.$transaction([
-    prisma.facultyPayout.update({
-      where: { id: payoutId },
+  await prisma.$transaction(async tx => {
+    const changed = await tx.facultyPayout.updateMany({
+      where: { id: payoutId, status: payout.status, updatedAt: payout.updatedAt },
       data: {
         status: "SUCCESS",
         paidAt: now,
@@ -191,22 +198,15 @@ export const markPayoutPaid = async (payoutId, { transactionId, paidBy }) => {
         payoutDate: now,
         failureReason: null,
       },
-    }),
-    ...(payout.payrollId ? [
-      prisma.facultyEarningsPayroll.update({
+    });
+    if (!changed.count) throw new Error("Payout changed. Refresh before marking paid.");
+    if (payout.payrollId) {
+      await tx.facultyEarningsPayroll.update({
         where: { id: payout.payrollId },
         data: { status: "PAID", paidAt: now, paidBy: actorKey(paidBy) },
-      }),
-    ] : []),
-    prisma.notification.create({
-      data: {
-        facultyId: payout.facultyId,
-        title: "Payment successful",
-        message: `Your payout of INR ${Number(payout.amount || 0)} has been paid. Transaction ID: ${transactionId}.`,
-        type: "PAYOUT_SUCCESS",
-      },
-    }),
-  ]);
+      });
+    }
+  });
   const notificationPayout = await prisma.facultyPayout.findUnique({
     where: { id: payoutId },
     include: { faculty: true, payroll: { include: { payrollCycle: true } } },
@@ -214,7 +214,7 @@ export const markPayoutPaid = async (payoutId, { transactionId, paidBy }) => {
   const admin = paidBy
     ? await prisma.admin.findUnique({ where: { id: Number(paidBy) }, select: { id: true, name: true, email: true } }).catch(() => null)
     : null;
-  notifyPayoutSuccess({ payout: notificationPayout, admin })
+  await notifyPayoutSuccess({ payout: notificationPayout, admin })
     .catch((error) => console.error("Payout paid notification error:", error?.message || error));
   return { success: true };
 };
@@ -222,17 +222,14 @@ export const markPayoutPaid = async (payoutId, { transactionId, paidBy }) => {
 export const markPayoutFailed = async (payoutId, { failureReason, modifiedBy }) => {
   const payout = await prisma.facultyPayout.findUnique({ where: { id: payoutId } });
   if (!payout) throw new Error("Payout not found");
-  await prisma.facultyPayout.update({
-    where: { id: payoutId },
-    data: { status: "FAILED", failureReason: failureReason || "Marked failed manually", paidBy: actorKey(modifiedBy) },
-  });
-  await prisma.notification.create({
-    data: {
-      facultyId: payout.facultyId,
-      title: "Payment failed",
-      message: `Your payout of INR ${Number(payout.amount || 0)} was marked failed.`,
-      type: "PAYOUT_FAILED",
-    },
+  if (!["PENDING", "PROCESSING"].includes(payout.status)) throw new Error("Only pending or processing payouts can be marked failed.");
+  if (payout.cashfreeTransferId) throw new Error("An initiated transfer must be reconciled with Cashfree before retrying.");
+  await prisma.$transaction(async tx => {
+    const changed = await tx.facultyPayout.updateMany({
+      where: { id: payoutId, status: payout.status, updatedAt: payout.updatedAt },
+      data: { status: "FAILED", failureReason: failureReason || "Marked failed manually", paidBy: actorKey(modifiedBy) },
+    });
+    if (!changed.count) throw new Error("Payout changed. Refresh before marking failed.");
   });
   const notificationPayout = await prisma.facultyPayout.findUnique({
     where: { id: payoutId },
@@ -241,7 +238,7 @@ export const markPayoutFailed = async (payoutId, { failureReason, modifiedBy }) 
   const admin = modifiedBy
     ? await prisma.admin.findUnique({ where: { id: Number(modifiedBy) }, select: { id: true, name: true, email: true } }).catch(() => null)
     : null;
-  notifyPayoutFailed({ payout: notificationPayout, admin })
+  await notifyPayoutFailed({ payout: notificationPayout, admin })
     .catch((error) => console.error("Payout failed notification error:", error?.message || error));
   return { success: true };
 };

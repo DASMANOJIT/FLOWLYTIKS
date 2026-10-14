@@ -1,6 +1,8 @@
 import prisma from "../prisma/client.js";
 import { createPayoutsForApprovedPayrolls, initiateBulkPayouts } from "../services/facultyPayoutService.js";
 import { sendFacultyWeeklyPayoutEmail } from "../services/emailNotificationService.js";
+import { lockAttendanceDates } from "../services/dailyAttendanceService.js";
+import { assertPayoutConfig, refreshWeeklyRecordFromPayout } from "../services/cashfreePayoutService.js";
 
 const money = (value) => Math.round(Number(value || 0) * 100) / 100;
 const toDateKey = (value) => {
@@ -33,6 +35,7 @@ const parseWeek = (req, res) => {
 };
 
 const buildCycleNumber = async (tx) => {
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('weekly-pay:cycle-number')::bigint)::text`;
   const count = await tx.payrollCycle.count();
   return `FP-${new Date().getUTCFullYear()}-${String(count + 1).padStart(5, "0")}`;
 };
@@ -58,8 +61,8 @@ const groupAttendance = (entries) => {
   }));
 };
 
-const getAttendanceBreakdown = async (weekStart, weekEnd) => {
-  const entries = await prisma.workLedgerEntry.findMany({
+const getAttendanceBreakdown = async (weekStart, weekEnd, db = prisma) => {
+  const entries = await db.workLedgerEntry.findMany({
     where: { date: { gte: weekStart, lte: weekEnd } },
     include: {
       faculty: {
@@ -87,8 +90,8 @@ const getAttendanceBreakdown = async (weekStart, weekEnd) => {
   };
 };
 
-const getExistingRecord = (weekStart, weekEnd) =>
-  prisma.weeklyFacultyPaymentRecord.findUnique({
+const getExistingRecord = (weekStart, weekEnd, db = prisma) =>
+  db.weeklyFacultyPaymentRecord.findUnique({
     where: { weekStart_weekEnd: { weekStart, weekEnd } },
     include: { facultyRecords: { orderBy: { facultyName: "asc" } } },
   });
@@ -131,7 +134,7 @@ const paymentRecordDto = (record) =>
       }
     : null;
 
-const buildStatusPayload = async (weekStart, weekEnd) => {
+export const buildStatusPayload = async (weekStart, weekEnd) => {
   const [breakdown, record] = await Promise.all([getAttendanceBreakdown(weekStart, weekEnd), getExistingRecord(weekStart, weekEnd)]);
   const status = record?.status || (breakdown.totalAmount > 0 ? "UNPAID" : "UNPAID");
   return {
@@ -156,14 +159,14 @@ const buildStatusPayload = async (weekStart, weekEnd) => {
   };
 };
 
-const ensurePayable = async (weekStart, weekEnd) => {
-  const existing = await getExistingRecord(weekStart, weekEnd);
+const ensurePayable = async (weekStart, weekEnd, db = prisma) => {
+  const existing = await getExistingRecord(weekStart, weekEnd, db);
   if (existing && ["PAID", "PROCESSING"].includes(existing.status)) {
     const error = new Error("This week has already been paid or is processing.");
     error.statusCode = 409;
     throw error;
   }
-  const breakdown = await getAttendanceBreakdown(weekStart, weekEnd);
+  const breakdown = await getAttendanceBreakdown(weekStart, weekEnd, db);
   if (breakdown.totalAmount <= 0 || !breakdown.totalEntries) {
     const error = new Error("No payable attendance records found for this week.");
     error.statusCode = 400;
@@ -172,14 +175,14 @@ const ensurePayable = async (weekStart, weekEnd) => {
   return { existing, breakdown };
 };
 
-const ensurePayrollCycle = async (req, weekStart, weekEnd, breakdown) => {
-  let cycle = await prisma.payrollCycle.findUnique({
+const ensurePayrollCycle = async (req, weekStart, weekEnd, breakdown, db = prisma) => {
+  let cycle = await db.payrollCycle.findUnique({
     where: { startDate_endDate: { startDate: weekStart, endDate: weekEnd } },
     include: { payrolls: { include: { faculty: { include: { bankAccounts: { orderBy: { updatedAt: "desc" }, take: 1 } } }, payouts: true } } },
   });
   if (cycle) return cycle;
 
-  const created = await prisma.$transaction(async (tx) => {
+  const createCycle = async (tx) => {
     const payrollCycle = await tx.payrollCycle.create({
       data: {
         cycleNumber: await buildCycleNumber(tx),
@@ -202,17 +205,18 @@ const ensurePayrollCycle = async (req, weekStart, weekEnd, breakdown) => {
       })),
     });
     return payrollCycle;
-  });
+  };
+  const created = db === prisma ? await db.$transaction(createCycle) : await createCycle(db);
 
-  return prisma.payrollCycle.findUnique({
+  return db.payrollCycle.findUnique({
     where: { id: created.id },
     include: { payrolls: { include: { faculty: { include: { bankAccounts: { orderBy: { updatedAt: "desc" }, take: 1 } } }, payouts: true } } },
   });
 };
 
-const upsertRecord = async ({ weekStart, weekEnd, breakdown, paymentMode, status, paidAt, req, remarks, payrollCycleId, payoutRows = [] }) => {
+const upsertRecord = async ({ weekStart, weekEnd, breakdown, paymentMode, status, paidAt, req, remarks, payrollCycleId, payoutRows = [] }, db = prisma) => {
   const paid = status === "PAID" ? breakdown.totalAmount : 0;
-  const record = await prisma.weeklyFacultyPaymentRecord.upsert({
+  const record = await db.weeklyFacultyPaymentRecord.upsert({
     where: { weekStart_weekEnd: { weekStart, weekEnd } },
     update: {
       totalEntries: breakdown.totalEntries,
@@ -251,7 +255,7 @@ const upsertRecord = async ({ weekStart, weekEnd, breakdown, paymentMode, status
   await Promise.all(
     breakdown.facultyBreakdown.map((row) => {
       const payout = payoutByFaculty.get(row.facultyId);
-      return prisma.facultyPaymentRecord.upsert({
+      return db.facultyPaymentRecord.upsert({
         where: { weeklyPaymentRecordId_facultyId: { weeklyPaymentRecordId: record.id, facultyId: row.facultyId } },
         update: {
           facultyCode: row.facultyCode,
@@ -288,7 +292,7 @@ const upsertRecord = async ({ weekStart, weekEnd, breakdown, paymentMode, status
       });
     })
   );
-  return getExistingRecord(weekStart, weekEnd);
+  return getExistingRecord(weekStart, weekEnd, db);
 };
 
 const sendWeeklyPayoutEmailsForRecord = async (recordId) => {
@@ -343,10 +347,14 @@ export const payWeeklyCash = async (req, res) => {
     if (!requireAdmin(req, res)) return null;
     const week = parseWeek(req, res);
     if (!week) return null;
-    const { breakdown } = await ensurePayable(week.weekStart, week.weekEnd);
     const paidAt = req.body?.paidAt ? new Date(`${req.body.paidAt}T00:00:00.000Z`) : new Date();
-    const cycle = await ensurePayrollCycle(req, week.weekStart, week.weekEnd, breakdown);
-    await prisma.$transaction(async (tx) => {
+    const record = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`weekly-pay:${toDateKey(week.weekStart)}:${toDateKey(week.weekEnd)}`})::bigint)::text`;
+      const faculties = await tx.faculty.findMany({ select: { id: true }, orderBy: { id: "asc" } });
+      for (const faculty of faculties) await lockAttendanceDates(tx, faculty.id, [week.weekStart]);
+      const { breakdown } = await ensurePayable(week.weekStart, week.weekEnd, tx);
+      const cycle = await ensurePayrollCycle(req, week.weekStart, week.weekEnd, breakdown, tx);
+      if (["PAID", "LOCKED"].includes(cycle.status)) throw Object.assign(new Error("This payroll cycle is already settled."), { statusCode: 409 });
       await tx.facultyEarningsPayroll.updateMany({
         where: { payrollCycleId: cycle.id },
         data: { status: "PAID", paidBy: actorKey(req), paidAt, updatedBy: actorKey(req) },
@@ -355,18 +363,18 @@ export const payWeeklyCash = async (req, res) => {
         where: { id: cycle.id },
         data: { status: "PAID", ledgerLocked: true, paidBy: actorKey(req), paidAt, updatedBy: actorKey(req) },
       });
-    });
-    const record = await upsertRecord({
-      weekStart: week.weekStart,
-      weekEnd: week.weekEnd,
-      breakdown,
-      paymentMode: "CASH",
-      status: "PAID",
-      paidAt,
-      req,
-      remarks: req.body?.remarks || "",
-      payrollCycleId: cycle.id,
-    });
+      return upsertRecord({
+        weekStart: week.weekStart,
+        weekEnd: week.weekEnd,
+        breakdown,
+        paymentMode: "CASH",
+        status: "PAID",
+        paidAt,
+        req,
+        remarks: req.body?.remarks || "",
+        payrollCycleId: cycle.id,
+      }, tx);
+    }, { maxWait: 5000, timeout: 15000 });
     await sendWeeklyPayoutEmailsForRecord(record.id);
     return res.json({ success: true, message: "Faculty week marked paid in cash.", record: paymentRecordDto(record) });
   } catch (error) {
@@ -379,18 +387,21 @@ export const payWeeklyOnline = async (req, res) => {
     if (!requireAdmin(req, res)) return null;
     const week = parseWeek(req, res);
     if (!week) return null;
-    const { breakdown } = await ensurePayable(week.weekStart, week.weekEnd);
-    const cycle = await ensurePayrollCycle(req, week.weekStart, week.weekEnd, breakdown);
-    const notReady = cycle.payrolls.filter((payroll) => {
-      const bank = payroll.faculty?.bankAccounts?.[0];
-      return !bank || bank.verificationStatus !== "VERIFIED" || !bank.payoutEligible;
-    });
-    if (notReady.length) {
-      return res.status(400).json({ success: false, message: "Payout details not verified for selected faculty." });
-    }
-    if (cycle.status !== "APPROVED") {
-      const approvedAt = new Date();
-      await prisma.$transaction(async (tx) => {
+    assertPayoutConfig();
+    const { payouts, recordId } = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`weekly-pay:${toDateKey(week.weekStart)}:${toDateKey(week.weekEnd)}`})::bigint)::text`;
+      const faculties = await tx.faculty.findMany({ select: { id: true }, orderBy: { id: "asc" } });
+      for (const faculty of faculties) await lockAttendanceDates(tx, faculty.id, [week.weekStart]);
+      const { breakdown } = await ensurePayable(week.weekStart, week.weekEnd, tx);
+      const cycle = await ensurePayrollCycle(req, week.weekStart, week.weekEnd, breakdown, tx);
+      if (["PAID", "LOCKED"].includes(cycle.status)) throw Object.assign(new Error("This payroll cycle is already settled."), { statusCode: 409 });
+      const notReady = cycle.payrolls.some((payroll) => {
+        const bank = payroll.faculty?.bankAccounts?.[0];
+        return !bank || bank.verificationStatus !== "VERIFIED" || !bank.payoutEligible;
+      });
+      if (notReady) throw Object.assign(new Error("Payout details not verified for selected faculty."), { statusCode: 400 });
+      if (cycle.status !== "APPROVED") {
+        const approvedAt = new Date();
         await tx.facultyEarningsPayroll.updateMany({
           where: { payrollCycleId: cycle.id },
           data: { status: "APPROVED", approvedBy: actorKey(req), approvedAt, updatedBy: actorKey(req) },
@@ -399,32 +410,18 @@ export const payWeeklyOnline = async (req, res) => {
           where: { id: cycle.id },
           data: { status: "APPROVED", ledgerLocked: true, approvedBy: actorKey(req), approvedAt, updatedBy: actorKey(req) },
         });
+      }
+      const existingPayouts = await tx.facultyPayout.findMany({
+        where: { payroll: { payrollCycleId: cycle.id }, status: { in: ["PENDING", "PROCESSING", "SUCCESS"] } },
       });
-    }
-    const existingPayouts = await prisma.facultyPayout.findMany({
-      where: { payroll: { payrollCycleId: cycle.id }, status: { in: ["PENDING", "PROCESSING", "SUCCESS"] } },
-    });
-    const payouts = existingPayouts.length
-      ? existingPayouts
-      : await createPayoutsForApprovedPayrolls({ payrollCycleId: cycle.id, createdBy: req.user?.id });
+      const payouts = existingPayouts.length ? existingPayouts : await createPayoutsForApprovedPayrolls({ payrollCycleId: cycle.id, createdBy: req.user?.id }, tx);
+      const reserved = await upsertRecord({ weekStart: week.weekStart, weekEnd: week.weekEnd, breakdown, paymentMode: "ONLINE", status: "PROCESSING", paidAt: null, req, remarks: "", payrollCycleId: cycle.id, payoutRows: payouts }, tx);
+      return { payouts, recordId: reserved.id };
+    }, { maxWait: 5000, timeout: 15000 });
     const results = await initiateBulkPayouts(payouts.map((payout) => payout.id), { paidBy: req.user?.id });
-    const refreshedPayouts = await prisma.facultyPayout.findMany({ where: { payroll: { payrollCycleId: cycle.id } } });
-    const hasFailed = refreshedPayouts.some((payout) => ["FAILED", "CANCELLED", "REVERSED"].includes(payout.status));
-    const hasSuccess = refreshedPayouts.some((payout) => payout.status === "SUCCESS");
-    const status = hasFailed ? "FAILED" : hasSuccess && refreshedPayouts.every((payout) => payout.status === "SUCCESS") ? "PAID" : "PROCESSING";
-    const record = await upsertRecord({
-      weekStart: week.weekStart,
-      weekEnd: week.weekEnd,
-      breakdown,
-      paymentMode: "ONLINE",
-      status,
-      paidAt: status === "PAID" ? new Date() : null,
-      req,
-      remarks: "",
-      payrollCycleId: cycle.id,
-      payoutRows: refreshedPayouts,
-    });
-    await sendWeeklyPayoutEmailsForRecord(record.id);
+    if (payouts[0]) await refreshWeeklyRecordFromPayout(payouts[0]);
+    const record = await getExistingRecord(week.weekStart, week.weekEnd);
+    await sendWeeklyPayoutEmailsForRecord(recordId);
     return res.json({ success: true, message: "Faculty online payouts initiated.", results, record: paymentRecordDto(record) });
   } catch (error) {
     const message =

@@ -1,0 +1,28 @@
+.dialog.dialog.dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  max-height: min(90dvh, calc(100dvh - 24px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.dialog.dialog.dialog::backdrop {
+  background: rgba(15, 23, 42, .48);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+.overlay.overlay.overlay {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  padding: 12px;
+  border: 0;
+  background: transparent;
+  overflow: hidden;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.overlay[open] { display: grid; place-items: center; }
+.content { width: 100%; display: flex; justify-content: center; min-height: 0; max-height: 100%; }
+.content > * { max-width: 100%; max-height: calc(100dvh - 24px); overflow-y: auto; overscroll-behavior: contain; }

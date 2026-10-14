@@ -12,7 +12,7 @@ import {
 } from "../../components/motion/primitives.jsx";
 import { getApiBaseUrl, readApiResponse } from "../../../lib/api.js";
 import {
-  clearAuthSession,
+  clearAuthSessionForUnauthorizedResponse,
   getAuthRole,
   getAuthToken,
 } from "../../../lib/authStorage.js";
@@ -89,7 +89,6 @@ export default function AddStudentPage() {
       return;
     }
     if (role && role !== "admin") {
-      clearAuthSession();
       router.push("/login");
       return;
     }
@@ -173,8 +172,7 @@ export default function AddStudentPage() {
       );
 
       if (!ok) {
-        if (res.status === 401 || res.status === 403) {
-          clearAuthSession();
+        if (clearAuthSessionForUnauthorizedResponse(res.status, token, "admin")) {
           router.push("/login");
           return;
         }
@@ -248,8 +246,7 @@ export default function AddStudentPage() {
       );
 
       if (!ok) {
-        if (res.status === 401 || res.status === 403) {
-          clearAuthSession();
+        if (clearAuthSessionForUnauthorizedResponse(res.status, token, "admin")) {
           router.push("/login");
           return;
         }

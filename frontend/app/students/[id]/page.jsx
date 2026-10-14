@@ -6,9 +6,10 @@ import { useParams, useRouter } from "next/navigation";
 import "./stu.css";
 import PremiumLoader from "../../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection } from "../../components/motion/primitives.jsx";
-import { clearAuthSession, getAuthRole, getAuthToken } from "../../../lib/authStorage.js";
+import { clearAuthSessionForUnauthorizedResponse, getAuthRole, getAuthToken } from "../../../lib/authStorage.js";
 import { downloadPaymentReceiptPdf } from "../../../lib/paymentReceiptPdf.js";
 import { getApiBaseUrl } from "../../../lib/api.js";
+import StaffFollowUps from "./StaffFollowUps";
 
 const API_BASE = getApiBaseUrl();
 
@@ -26,7 +27,6 @@ export default function StudentProfile() {
       return;
     }
     if (role && role !== "admin") {
-      clearAuthSession();
       router.push("/login");
       return;
     }
@@ -37,8 +37,7 @@ export default function StudentProfile() {
       .then(async (res) => {
         const data = await res.json();
         if (!res.ok) {
-          if (res.status === 401 || res.status === 403) {
-            clearAuthSession();
+          if (clearAuthSessionForUnauthorizedResponse(res.status, token, "admin")) {
             router.push("/login");
             return null;
           }
@@ -200,6 +199,7 @@ export default function StudentProfile() {
             <p className="no-data">No payment history found</p>
           )}
         </div>
+        <StaffFollowUps studentId={student.id} />
       </MotionCard>
     </motion.div>
   );

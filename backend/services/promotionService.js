@@ -125,8 +125,8 @@ export const getPromotionHistoryForAcademicYear = async (
   };
 };
 
-export const findActivePromotionJobForAcademicYear = async (academicYear) => {
-  const jobs = await prisma.backgroundJob.findMany({
+export const findActivePromotionJobForAcademicYear = async (academicYear, db = prisma) => {
+  const jobs = await db.backgroundJob.findMany({
     where: {
       type: ANNUAL_PROMOTION_JOB_TYPE,
       status: {

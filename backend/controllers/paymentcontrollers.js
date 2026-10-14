@@ -296,7 +296,7 @@ const runCashPaymentPostActions = async ({
   await autoPromoteIfEligible(Number(student?.id || payment?.studentId), academicYear);
 };
 
-const createCashPaymentForStudent = async ({
+export const createCashPaymentForStudent = async ({
   tx = prisma,
   studentId,
   month,
@@ -306,6 +306,7 @@ const createCashPaymentForStudent = async ({
   runPostPaymentActions = true,
 }) => {
   const normalizedStudentId = Number(studentId);
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`cashfree:create:${normalizedStudentId}:${academicYear}:${month}`})::bigint)::text`;
   const paidAt = new Date();
   const isLatePayment = isLatePaymentForPeriod({
     month,
@@ -1456,8 +1457,8 @@ export const reversePayment = async (req, res) => {
       );
     }
 
-    const updatedPayment = await prisma.payment.update({
-      where: { id: payment.id },
+    const changed = await prisma.payment.updateMany({
+      where: { id: payment.id, status: "paid", paymentProvider: "CASH" },
       data: {
         status: "pending",
         paidAt: null,
@@ -1466,6 +1467,8 @@ export const reversePayment = async (req, res) => {
         teacherAdminId: req.user?.id ? Number(req.user.id) : payment.teacherAdminId,
       },
     });
+    if (!changed.count) return res.status(409).json({ success: false, message: "Payment changed. Refresh before attempting a cash reversal." });
+    const updatedPayment = await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } });
 
     const auditMessage = buildAuditMessage({
       studentId: student.id,

@@ -264,7 +264,6 @@ function StatusVisual({ tone }) {
 export default function PaymentSuccessContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const transactionId = searchParams.get("txnid");
   const gateway = searchParams.get("gateway");
   const paymentId = searchParams.get("paymentId");
   const month = searchParams.get("month");
@@ -285,12 +284,12 @@ export default function PaymentSuccessContent() {
       ? `Payment completed successfully for ${month || "selected month"}${
           amount ? `, amount ₹${amount}` : ""
         }. UTR: ${utr || "Not Available"}. Redirecting to dashboard...`
-      : transactionId || gatewayOrderId || cashfreeOrderId
+      : gatewayOrderId || cashfreeOrderId || (gateway === "cashfree" && paymentId)
       ? "Checking payment status..."
       : "Invalid payment reference."
   );
   const [checking, setChecking] = useState(
-    !isManualUpiSuccess && Boolean(transactionId || gatewayOrderId || cashfreeOrderId)
+    !isManualUpiSuccess && Boolean(gatewayOrderId || cashfreeOrderId || (gateway === "cashfree" && paymentId))
   );
 
   useEffect(() => {
@@ -299,7 +298,7 @@ export default function PaymentSuccessContent() {
       return () => clearTimeout(timeoutId);
     }
 
-    if (!transactionId && !gatewayOrderId && !cashfreeOrderId) {
+    if (!gatewayOrderId && !cashfreeOrderId && !(gateway === "cashfree" && paymentId)) {
       return;
     }
 
@@ -314,14 +313,11 @@ export default function PaymentSuccessContent() {
 
     const checkStatus = async () => {
       try {
-        const endpoint =
-          gateway === "cashfree" || gatewayOrderId || cashfreeOrderId
-            ? `${apiBase}/api/payments/cashfree/verify?paymentId=${encodeURIComponent(
-                paymentId || ""
-              )}&gatewayOrderId=${encodeURIComponent(
-                gatewayOrderId || ""
-              )}&cashfreeOrderId=${encodeURIComponent(cashfreeOrderId || "")}`
-            : `${apiBase}/api/payments/phonepe/status/${transactionId}`;
+        const endpoint = `${apiBase}/api/payments/cashfree/verify?paymentId=${encodeURIComponent(
+          paymentId || ""
+        )}&gatewayOrderId=${encodeURIComponent(
+          gatewayOrderId || ""
+        )}&cashfreeOrderId=${encodeURIComponent(cashfreeOrderId || "")}`;
 
         const res = await fetch(endpoint, {
           headers: {
@@ -387,7 +383,6 @@ export default function PaymentSuccessContent() {
     isManualUpiSuccess,
     paymentId,
     router,
-    transactionId,
   ]);
 
   const statusTone = useMemo(() => {

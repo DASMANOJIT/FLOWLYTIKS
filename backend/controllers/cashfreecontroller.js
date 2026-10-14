@@ -1,10 +1,11 @@
 import crypto from "crypto";
+import { logError, logInfo, logWarn } from "../utils/appLogger.js";
 import prisma from "../prisma/client.js";
 import { getAcademicYear } from "../utils/academicYear.js";
 import { isLatePaymentForPeriod } from "../utils/paymentPeriod.js";
 import { autoPromoteIfEligible } from "./studentcontrollers.js";
 import { sendFeePaidWhatsAppNotification } from "../services/whatsappservice.js";
-import { withPgAdvisoryLock } from "../utils/dbLocks.js";
+import { reserveCashfreeCheckout, finishCashfreeCheckout } from "../services/cashfreeCheckoutService.js";
 import {
   createCashfreeOrder,
   fetchCashfreeOrder,
@@ -12,6 +13,7 @@ import {
   getCashfreeEnvironment,
   normalizeCashfreeAttemptStatus,
   normalizeCashfreeOrderState,
+  assertCashfreePaymentEvidence,
   verifyCashfreeWebhookSignature,
 } from "../services/cashfreeService.js";
 import {
@@ -37,9 +39,9 @@ const VALID_MONTHS = new Set([
 
 const shouldDebugCashfree = process.env.DEBUG_CASHFREE === "1";
 
-const logCashfreeDebug = (...args) => {
+const logCashfreeDebug = (event, meta) => {
   if (shouldDebugCashfree) {
-    console.log(...args);
+    logInfo(event, meta);
   }
 };
 
@@ -250,13 +252,6 @@ const resolveCashfreePaymentMethods = (preferredMethod) => {
   }
 };
 
-const buildCashfreeOrderId = ({ paymentId, month }) => {
-  const monthKey = normalizeMonth(month).slice(0, 3).toUpperCase();
-  return `flowlytiks_${paymentId}_${monthKey}_${Date.now()}_${crypto
-    .randomBytes(3)
-    .toString("hex")}`;
-};
-
 const getRequiredUrlFromEnv = (name) => {
   const rawValue = String(process.env[name] || "").trim();
   if (!rawValue) {
@@ -334,23 +329,6 @@ const resolveTeacherAdminId = async () => {
   return admins.length === 1 ? admins[0].id : null;
 };
 
-const getReusableGatewayOrder = async (paymentId) =>
-  prisma.paymentGatewayOrder.findFirst({
-    where: {
-      paymentId,
-      provider: "CASHFREE",
-      status: {
-        in: ["PENDING", "INITIATED"],
-      },
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
-  });
-
-const getGatewayOrderEnvironment = (gatewayOrder) =>
-  String(gatewayOrder?.metadata?.cashfreeEnvironment || "").trim().toLowerCase();
-
 const syncPaymentAttempts = async (db, gatewayOrderId, cashfreeOrderId, payments = []) => {
   for (const payment of payments) {
     if (!payment?.cf_payment_id) continue;
@@ -421,16 +399,28 @@ const runPostPaymentSideEffects = async (payment) => {
       payment,
       mode: "cashfree",
     }).catch((error) => {
-      console.error("Cashfree fee-paid notification failed:", error?.message || error);
+      logError("cashfree.notification_failed", { error });
     });
   }
 };
 
-const finalizeCashfreeState = async ({ gatewayOrder, order, payments, source }) =>
-  withPgAdvisoryLock(prisma, `cashfree:finalize:${gatewayOrder.cashfreeOrderId}`, async () => {
-    const normalized = normalizeCashfreeOrderState({ order, payments });
+const finalizeCashfreeState = async ({ gatewayOrder, order, payments, source }) => {
+    let normalized = normalizeCashfreeOrderState({ order, payments });
+    assertCashfreePaymentEvidence({ gatewayOrder, order, normalized });
 
     await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`cashfree:finalize:${gatewayOrder.cashfreeOrderId}`})::bigint)::text AS locked`;
+      const confirmed = await tx.paymentGatewayOrder.findUnique({
+        where: { id: gatewayOrder.id },
+        include: { attempts: { where: { status: "PAID" }, orderBy: { createdAt: "desc" }, take: 1 } },
+      });
+      if (confirmed?.status === "PAID" && normalized.status !== "PAID") {
+        // A provider snapshot fetched before another request completed must not undo success.
+        normalized = { ...normalized, status: "PAID", orderStatus: confirmed.orderStatus || "PAID",
+          paymentMethod: confirmed.paymentMethod, paidAt: confirmed.paidAt?.toISOString() || null,
+          cfPaymentId: confirmed.attempts?.[0]?.cfPaymentId || null };
+        return;
+      }
       await syncPaymentAttempts(tx, gatewayOrder.id, gatewayOrder.cashfreeOrderId, payments);
 
       await tx.paymentGatewayOrder.update({
@@ -493,10 +483,7 @@ const finalizeCashfreeState = async ({ gatewayOrder, order, payments, source }) 
           if (payment) {
             setImmediate(() => {
               runPostPaymentSideEffects(payment).catch((error) => {
-                console.error(
-                  "Cashfree post-payment side effects failed:",
-                  error?.message || error
-                );
+                logError("cashfree.post_payment_failed", { error });
               });
             });
           }
@@ -526,7 +513,7 @@ const finalizeCashfreeState = async ({ gatewayOrder, order, payments, source }) 
     });
 
     return normalized;
-  });
+};
 
 const findGatewayOrderForVerification = async ({ paymentId, gatewayOrderId, cashfreeOrderId }) => {
   if (gatewayOrderId) {
@@ -612,252 +599,69 @@ export const createCashfreeHostedOrder = async (req, res) => {
     const academicYear = getAcademicYear();
     const teacherAdminId = await resolveTeacherAdminId();
 
-    const result = await withPgAdvisoryLock(
-      prisma,
-      `cashfree:create:${studentId}:${academicYear}:${month}`,
-      async () => {
-        let payment = await prisma.payment.findUnique({
-          where: {
-            studentId_month_academicYear: {
-              studentId,
-              month,
-              academicYear,
-            },
-          },
-        });
-
-        if (payment?.status === "paid") {
-          return { alreadyPaid: true, payment };
+    let result;
+    // Reserve/finalize on one transaction connection; provider calls never
+    // occupy it. An uncertain create response retains the same idempotency key.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const reservation = await reserveCashfreeCheckout(prisma, {
+        studentId, academicYear, month, amount: student.monthlyFee,
+        teacherAdminId, environment: getCashfreeEnvironment(), preferredMethod,
+        notifyUrl: getNotifyUrl,
+      });
+      if (!reservation?.gatewayOrder) { result = reservation; break; }
+      const { gatewayOrder, payment } = reservation;
+      const cashfreeOrderId = gatewayOrder.cashfreeOrderId;
+      let returnUrl;
+      const networkOptions = () => ({ signal: AbortSignal.timeout(30000) });
+      try {
+        returnUrl = getReturnUrl({ paymentId: payment.id, gatewayOrderId: gatewayOrder.id, cashfreeOrderId });
+        let providerOrder;
+        if (reservation.recover) {
+          try { providerOrder = await fetchCashfreeOrder(cashfreeOrderId, networkOptions()); }
+          catch (error) { if (error.status !== 404) throw error; }
         }
-
-        if (!payment) {
-          payment = await prisma.payment.create({
-            data: {
-              studentId,
-              teacherAdminId,
-              month,
-              academicYear,
-              amount: student.monthlyFee,
-              currency: "INR",
-              status: "created",
-              paymentProvider: "CASHFREE",
-            },
-          });
-        } else {
-          payment = await prisma.payment.update({
-            where: { id: payment.id },
-            data: {
-              amount: student.monthlyFee,
-              currency: "INR",
-              teacherAdminId,
-              paymentProvider: "CASHFREE",
-            },
-          });
-        }
-
-        const currentCashfreeEnvironment = getCashfreeEnvironment();
-        const reusableOrder = await getReusableGatewayOrder(payment.id);
-        const reusableOrderEnvironment = getGatewayOrderEnvironment(reusableOrder);
-        if (
-          reusableOrder?.paymentSessionId &&
-          reusableOrderEnvironment &&
-          reusableOrderEnvironment === currentCashfreeEnvironment
-        ) {
-          const expiry = reusableOrder.orderExpiryTime?.getTime?.() || 0;
-          if (!expiry || expiry > Date.now()) {
-            return { reusableOrder };
-          }
-        }
-
-        if (reusableOrder?.cashfreeOrderId) {
-          try {
-            const existingCashfreeOrder = await fetchCashfreeOrder(reusableOrder.cashfreeOrderId);
-            const normalizedExistingCashfreeOrder =
-              extractCashfreeOrderResponse(existingCashfreeOrder);
-
-            if (normalizedExistingCashfreeOrder.paymentSessionId) {
-              const updatedReusableOrder = await prisma.paymentGatewayOrder.update({
-                where: { id: reusableOrder.id },
-                data: {
-                  status:
-                    normalizedExistingCashfreeOrder.orderStatus === "PAID"
-                      ? "PAID"
-                      : "INITIATED",
-                  paymentSessionId: normalizedExistingCashfreeOrder.paymentSessionId,
-                  cashfreeCfOrderId:
-                    normalizedExistingCashfreeOrder.cfOrderId || reusableOrder.cashfreeCfOrderId,
-                  orderStatus:
-                    normalizedExistingCashfreeOrder.orderStatus || reusableOrder.orderStatus,
-                  orderExpiryTime:
-                    normalizedExistingCashfreeOrder.orderExpiryTime ||
-                    reusableOrder.orderExpiryTime,
-                  metadata: {
-                    ...(reusableOrder.metadata || {}),
-                    cashfreeEnvironment: currentCashfreeEnvironment,
-                  },
-                  rawCreateResponse: normalizedExistingCashfreeOrder.raw,
-                },
-              });
-
-              if (normalizedExistingCashfreeOrder.orderStatus === "PAID") {
-                const payments = await fetchCashfreePaymentsForOrder(reusableOrder.cashfreeOrderId);
-                await finalizeCashfreeState({
-                  gatewayOrder: updatedReusableOrder,
-                  order: normalizedExistingCashfreeOrder.raw,
-                  payments,
-                  source: "create-order-recovery",
-                });
-                return { alreadyPaid: true, payment };
-              }
-
-              const expiry = updatedReusableOrder.orderExpiryTime?.getTime?.() || 0;
-              if (!expiry || expiry > Date.now()) {
-                return { reusableOrder: updatedReusableOrder };
-              }
-            }
-          } catch (error) {
-            console.warn("Cashfree reusable order recovery skipped:", error?.message || error);
-          }
-        }
-
-        const cashfreeOrderId = buildCashfreeOrderId({ paymentId: payment.id, month });
-        const gatewayOrder = await prisma.paymentGatewayOrder.create({
-          data: {
-            provider: "CASHFREE",
-            status: "PENDING",
-            paymentId: payment.id,
-            studentId,
-            teacherAdminId,
-            amount: student.monthlyFee,
-            currency: "INR",
-            month,
-            academicYear,
-            cashfreeOrderId,
-            paymentMethodHint: preferredMethod,
-            notifyUrl: getNotifyUrl(),
-            metadata: {
-              preferredMethod,
-              cashfreeEnvironment: currentCashfreeEnvironment,
-            },
-          },
-        });
-
-        const returnUrl = getReturnUrl({
-          paymentId: payment.id,
-          gatewayOrderId: gatewayOrder.id,
-          cashfreeOrderId,
-        });
-
-        console.info("CASHFREE CREATE ORDER START", {
-          paymentId: payment.id,
-          gatewayOrderId: gatewayOrder.id,
-          studentId,
-          month,
-          academicYear,
-        });
-        logCashfreeDebug("CASHFREE_ENVIRONMENT =", process.env.CASHFREE_ENVIRONMENT);
-        logCashfreeDebug("RETURN_URL =", process.env.CASHFREE_RETURN_URL);
-
-        try {
-          const cashfreeResponse = await createCashfreeOrder({
-            orderId: cashfreeOrderId,
-            amount: student.monthlyFee,
-            customer: {
-              customer_id: `student_${student.id}`,
-              customer_name: student.name,
-              customer_email: student.email,
-              customer_phone: student.phone,
-            },
-            returnUrl,
-            notifyUrl: getNotifyUrl(),
-            paymentMethods: resolveCashfreePaymentMethods(preferredMethod),
+        if (!providerOrder) {
+          providerOrder = await createCashfreeOrder({
+            orderId: cashfreeOrderId, amount: gatewayOrder.amount, currency: gatewayOrder.currency,
+            customer: { customer_id: `student_${student.id}`, customer_name: student.name, customer_email: student.email, customer_phone: student.phone },
+            returnUrl, notifyUrl: getNotifyUrl(),
+            paymentMethods: resolveCashfreePaymentMethods(gatewayOrder.paymentMethodHint || preferredMethod),
             orderNote: `Flowlytiks fee payment for ${month} ${academicYear}`,
-            orderTags: {
-              paymentId: String(payment.id),
-              studentId: String(student.id),
-              month,
-              academicYear: String(academicYear),
-            },
-            idempotencyKey: gatewayOrder.id,
+            orderTags: { paymentId: String(payment.id), studentId: String(student.id), month, academicYear: String(academicYear) },
+            idempotencyKey: gatewayOrder.id, ...networkOptions(),
           });
-
-          logCashfreeDebug(
-            "Cashfree create order raw response =",
-            JSON.stringify(cashfreeResponse?.data || cashfreeResponse, null, 2)
-          );
-
-          const normalizedOrderResponse = extractCashfreeOrderResponse(cashfreeResponse);
-          const payment_session_id = normalizedOrderResponse.paymentSessionId;
-          const cf_order_id = normalizedOrderResponse.cfOrderId;
-
-          if (!payment_session_id) {
-            console.error(
-              "Cashfree order response missing payment_session_id",
-              cashfreeResponse?.data || cashfreeResponse
-            );
-            const missingSessionError = new Error(
-              "Cashfree did not return payment_session_id"
-            );
-            missingSessionError.status = 500;
-            throw missingSessionError;
-          }
-
-          const updatedGatewayOrder = await prisma.paymentGatewayOrder.update({
-            where: { id: gatewayOrder.id },
-            data: {
-              status: "INITIATED",
-              cashfreeCfOrderId: cf_order_id,
-              paymentSessionId: payment_session_id,
-              orderStatus: normalizedOrderResponse.orderStatus || "ACTIVE",
-              orderExpiryTime: normalizedOrderResponse.orderExpiryTime,
-              returnUrl,
-              notifyUrl: getNotifyUrl(),
-              rawCreateResponse: normalizedOrderResponse.raw,
-            },
-          });
-
-          await prisma.payment.update({
-            where: { id: payment.id },
-            data: {
-              status: "created",
-              paymentProvider: "CASHFREE",
-            },
-          });
-
-          console.info("CASHFREE CREATE ORDER SUCCESS", {
-            paymentId: payment.id,
-            gatewayOrderId: updatedGatewayOrder.id,
-            cashfreeOrderId,
-          });
-          logCashfreeDebug("Sending payment_session_id to frontend =", payment_session_id);
-
-          return { gatewayOrder: updatedGatewayOrder };
-        } catch (error) {
-          await prisma.paymentGatewayOrder.update({
-            where: { id: gatewayOrder.id },
-            data: {
-              status: "FAILED",
-              orderStatus: "CREATE_FAILED",
-              rawCreateResponse: error?.gatewayPayload || {
-                message: error?.message || "Cashfree order creation failed",
-              },
-              returnUrl,
-              notifyUrl: getNotifyUrl(),
-            },
-          });
-
-          console.error("CASHFREE CREATE ORDER FAILURE", {
-            paymentId: payment.id,
-            gatewayOrderId: gatewayOrder.id,
-            message: error?.message || error,
-          });
-          throw error;
         }
-      },
-      {
-        onLocked: () => ({ locked: true }),
+        const normalized = extractCashfreeOrderResponse(providerOrder);
+        if (normalized.orderStatus === "PAID") {
+          const payments = await fetchCashfreePaymentsForOrder(cashfreeOrderId, networkOptions());
+          await finalizeCashfreeState({ gatewayOrder, order: providerOrder, payments, source: "create-order-recovery" });
+          result = await finishCashfreeCheckout(prisma, reservation, {});
+          break;
+        }
+        const expired = normalized.orderStatus === "EXPIRED" ||
+          (normalized.orderExpiryTime && normalized.orderExpiryTime <= new Date());
+        if (!expired && !normalized.paymentSessionId) {
+          const error = new Error("Cashfree did not return payment_session_id");
+          error.status = 502; throw error;
+        }
+        result = await finishCashfreeCheckout(prisma, reservation, {
+          status: expired ? "EXPIRED" : "INITIATED",
+          paymentSessionId: normalized.paymentSessionId,
+          cashfreeCfOrderId: normalized.cfOrderId || gatewayOrder.cashfreeCfOrderId,
+          orderStatus: normalized.orderStatus || "ACTIVE",
+          orderExpiryTime: normalized.orderExpiryTime, returnUrl, notifyUrl: getNotifyUrl(),
+          rawCreateResponse: normalized.raw,
+        });
+        if (!result?.expired) break;
+      } catch (error) {
+        // The provider may have accepted an order whose response was lost.
+        // Never mint another order merely because this request failed.
+        await finishCashfreeCheckout(prisma, reservation, {
+          status: "PENDING", orderStatus: "CREATE_UNKNOWN",
+        }).catch(persistError => logError("cashfree.checkout_reservation_release_failed", { error: persistError }));
+        throw error;
       }
-    );
+    }
 
     if (result?.locked) {
       return jsonError(
@@ -877,13 +681,10 @@ export const createCashfreeHostedOrder = async (req, res) => {
     }
 
     const responsePayload = formatCreateOrderResponse(gatewayOrder);
-    logCashfreeDebug(
-      "Sending payment_session_id to frontend =",
-      responsePayload.payment_session_id
-    );
+    logCashfreeDebug("cashfree.checkout_ready", { gatewayOrderId: gatewayOrder.id });
     return jsonSuccess(res, responsePayload);
   } catch (error) {
-    console.error("CASHFREE CREATE ORDER ERROR:", error?.message || error);
+    logError("cashfree.checkout_failed", { error });
     const status = Number(error?.status || error?.statusCode || 500);
     return jsonError(
       res,
@@ -896,6 +697,9 @@ export const createCashfreeHostedOrder = async (req, res) => {
 };
 
 export const verifyCashfreePayment = async (req, res) => {
+  if (!["admin", "student"].includes(req.userRole)) {
+    return jsonError(res, req.userRole ? 403 : 401, "Forbidden.");
+  }
   try {
     const source = req.method === "GET" ? req.query : req.body;
     const paymentId = source?.paymentId ? Number(source.paymentId) : null;
@@ -944,7 +748,7 @@ export const verifyCashfreePayment = async (req, res) => {
       paidAt: normalized.paidAt,
     });
   } catch (error) {
-    console.error("CASHFREE VERIFY ERROR:", error?.message || error);
+    logError("cashfree.verify_failed", { error });
     const status = Number(error?.status || error?.statusCode || 500);
     return jsonError(
       res,
@@ -1063,7 +867,7 @@ export const handleCashfreeWebhook = async (req, res) => {
 
     return res.status(200).json({ success: true });
   } catch (error) {
-    console.error("CASHFREE WEBHOOK ERROR:", error?.message || error);
+    logError("cashfree.webhook_failed", { error });
     return jsonError(res, 500, "Webhook processing failed.");
   }
 };

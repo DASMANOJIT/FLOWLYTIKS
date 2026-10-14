@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import "./page.css";
-import Link from "next/link";
+import BackToDashboard from "../components/admin/BackToDashboard";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard } from "../components/motion/primitives.jsx";
-import { clearAuthSession, getAuthRole, getAuthToken } from "../../lib/authStorage.js";
+import { clearAuthSessionForUnauthorizedResponse, getAuthRole, getAuthToken } from "../../lib/authStorage.js";
 import { getApiBaseUrl } from "../../lib/api.js";
 
 const API_BASE = getApiBaseUrl();
@@ -40,7 +40,6 @@ export default function PaymentsPage() {
       return;
     }
     if (role && role !== "admin") {
-      clearAuthSession();
       window.location.href = "/login";
       return;
     }
@@ -76,8 +75,7 @@ export default function PaymentsPage() {
         .then(async (res) => {
           const data = await res.json();
           if (!res.ok) {
-            if (res.status === 401 || res.status === 403) {
-              clearAuthSession();
+            if (clearAuthSessionForUnauthorizedResponse(res.status, token, "admin")) {
               window.location.href = "/login";
               return;
             }
@@ -127,8 +125,7 @@ export default function PaymentsPage() {
         }
 
         if (!res.ok) {
-          if (res.status === 401 || res.status === 403) {
-            clearAuthSession();
+          if (clearAuthSessionForUnauthorizedResponse(res.status, token, "admin")) {
             window.location.href = "/login";
             return [];
           }
@@ -233,7 +230,6 @@ export default function PaymentsPage() {
     const token = getAuthToken();
     const role = getAuthRole();
     if (!token || (role && role !== "admin")) {
-      clearAuthSession();
       window.location.href = "/login";
       return;
     }
@@ -257,8 +253,7 @@ export default function PaymentsPage() {
       const data = await res.json();
 
       if (!res.ok) {
-        if (res.status === 401 || res.status === 403) {
-          clearAuthSession();
+        if (clearAuthSessionForUnauthorizedResponse(res.status, token, "admin")) {
           window.location.href = "/login";
           return;
         }
@@ -289,7 +284,6 @@ export default function PaymentsPage() {
     const token = getAuthToken();
     const role = getAuthRole();
     if (!token || (role && role !== "admin")) {
-      clearAuthSession();
       window.location.href = "/login";
       return;
     }
@@ -313,8 +307,7 @@ export default function PaymentsPage() {
       const data = await res.json();
 
       if (!res.ok) {
-        if (res.status === 401 || res.status === 403) {
-          clearAuthSession();
+        if (clearAuthSessionForUnauthorizedResponse(res.status, token, "admin")) {
           window.location.href = "/login";
           return;
         }
@@ -338,9 +331,7 @@ export default function PaymentsPage() {
     >
 
       {/* BACK BUTTON */}
-      <Link href="/admin" className="back-btn">
-        ← Back to Dashboard
-      </Link>
+      <BackToDashboard />
 
       <h1 className="payment-title">Cash Payment Entry</h1>
 

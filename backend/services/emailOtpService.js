@@ -21,7 +21,7 @@ const generateOtp = () => {
   return String(num).padStart(6, "0");
 };
 
-export const sendEmailOtp = async ({ email, purpose = "login" }) => {
+export const sendEmailOtp = async ({ email, purpose = "login", db = prisma, deliver = sendOtpEmail, preserveAttempts = false, quiet = false }) => {
   const trimmed = normalizeEmail(email);
   if (!isValidEmail(trimmed)) {
     const err = new Error("Invalid email address.");
@@ -30,7 +30,7 @@ export const sendEmailOtp = async ({ email, purpose = "login" }) => {
   }
 
   const now = new Date();
-  const existing = await prisma.emailOtp.findUnique({
+  const existing = await db.emailOtp.findUnique({
     where: {
       EmailOtp_email_purpose_key: {
         email: trimmed,
@@ -54,7 +54,7 @@ export const sendEmailOtp = async ({ email, purpose = "login" }) => {
   const otpHash = await bcrypt.hash(otp, 10);
   const expiresAt = new Date(Date.now() + OTP_EXPIRY_MS);
 
-  await prisma.emailOtp.upsert({
+  await db.emailOtp.upsert({
     where: {
       EmailOtp_email_purpose_key: {
         email: trimmed,
@@ -64,7 +64,7 @@ export const sendEmailOtp = async ({ email, purpose = "login" }) => {
     update: {
       otpHash,
       expiresAt,
-      attempts: 0,
+      attempts: preserveAttempts && existing?.expiresAt > now ? existing.attempts : 0,
       lockedUntil: null,
     },
     create: {
@@ -78,28 +78,25 @@ export const sendEmailOtp = async ({ email, purpose = "login" }) => {
   });
 
   try {
-    await sendOtpEmail(trimmed, otp);
+    await deliver(trimmed, otp);
   } catch (err) {
-    await prisma.emailOtp
-      .delete({
+    await db.emailOtp
+      .deleteMany({
         where: {
-          EmailOtp_email_purpose_key: {
-            email: trimmed,
-            purpose,
-          },
+          email: trimmed, purpose, otpHash,
         },
       })
       .catch(() => {});
     throw err;
   }
 
-  if (process.env.NODE_ENV !== "production" || process.env.DEBUG_AUTH === "1") {
+  if (!quiet && (process.env.NODE_ENV !== "production" || process.env.DEBUG_AUTH === "1")) {
     console.log("OTP sent for", maskEmail(trimmed), "purpose:", purpose);
   }
   return { maskedEmail: maskEmail(trimmed) };
 };
 
-export const verifyEmailOtp = async ({ email, purpose = "login", code }) => {
+export const verifyEmailOtp = async ({ email, purpose = "login", code, db = prisma, quiet = false }) => {
   const trimmed = normalizeEmail(email);
   if (!isValidEmail(trimmed)) {
     const err = new Error("Invalid email address.");
@@ -113,7 +110,7 @@ export const verifyEmailOtp = async ({ email, purpose = "login", code }) => {
     throw err;
   }
 
-  const record = await prisma.emailOtp.findUnique({
+  const record = await db.emailOtp.findUnique({
     where: {
       EmailOtp_email_purpose_key: {
         email: trimmed,
@@ -139,9 +136,9 @@ export const verifyEmailOtp = async ({ email, purpose = "login", code }) => {
     throw err;
   }
 
-  if (record.expiresAt < now) {
-    await prisma.emailOtp.delete({
-      where: { id: record.id },
+  if (record.expiresAt <= now) {
+    await db.emailOtp.deleteMany({
+      where: { id: record.id, otpHash: record.otpHash },
     });
     const err = new Error("OTP expired");
     err.status = 410;
@@ -150,21 +147,23 @@ export const verifyEmailOtp = async ({ email, purpose = "login", code }) => {
 
   const valid = await bcrypt.compare(normalizeOtp(code), record.otpHash);
   if (!valid) {
-    const attempts = record.attempts + 1;
-    const data = { attempts };
+    const changed = await db.emailOtp.updateMany({
+      where: { id: record.id, otpHash: record.otpHash, attempts: { lt: MAX_ATTEMPTS } },
+      data: { attempts: { increment: 1 } },
+    });
+    const current = await db.emailOtp.findUnique({ where: { id: record.id } });
     let status = 400;
     let message = "Invalid OTP";
-    if (attempts >= MAX_ATTEMPTS) {
-      data.lockedUntil = new Date(now.getTime() + LOCK_DURATION_MS);
+    if (current?.otpHash === record.otpHash && current.attempts >= MAX_ATTEMPTS) {
+      await db.emailOtp.updateMany({
+        where: { id: record.id, otpHash: record.otpHash, attempts: { gte: MAX_ATTEMPTS }, lockedUntil: null },
+        data: { lockedUntil: new Date(now.getTime() + LOCK_DURATION_MS) },
+      });
       status = 429;
       message =
         "Too many OTP verification attempts for this email. Please try again after 10 minutes.";
     }
-    await prisma.emailOtp.update({
-      where: { id: record.id },
-      data,
-    });
-    const err = new Error(message);
+    const err = new Error(changed.count || status === 429 ? message : "Invalid OTP.");
     err.status = status;
     if (status === 429) {
       err.retryAfter = Math.ceil(LOCK_DURATION_MS / 1000);
@@ -172,18 +171,19 @@ export const verifyEmailOtp = async ({ email, purpose = "login", code }) => {
     throw err;
   }
 
-  await prisma.emailOtp.delete({
-    where: { id: record.id },
+  const consumed = await db.emailOtp.deleteMany({
+    where: { id: record.id, otpHash: record.otpHash, expiresAt: { gt: new Date() }, attempts: { lt: MAX_ATTEMPTS }, OR: [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }] },
   });
-  if (process.env.NODE_ENV !== "production" || process.env.DEBUG_AUTH === "1") {
+  if (!consumed.count) throw Object.assign(new Error("Invalid OTP or verification request already consumed."), { status: 400 });
+  if (!quiet && (process.env.NODE_ENV !== "production" || process.env.DEBUG_AUTH === "1")) {
     console.log("OTP verified for", maskEmail(trimmed), "purpose:", purpose);
   }
   return { success: true };
 };
 
-export const purgeExpiredEmailOtps = async () => {
+export const purgeExpiredEmailOtps = async (db = prisma) => {
   const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  await prisma.emailOtp.deleteMany({
+  await db.emailOtp.deleteMany({
     where: {
       OR: [
         {

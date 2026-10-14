@@ -16,7 +16,7 @@ export default function useSessionChatHistory({
 }) {
   const initialMessagesRef = useRef(trimMessages(initialMessages, maxMessages));
   const loadedStorageKeyRef = useRef("");
-  const [messages, setMessagesState] = useState(initialMessagesRef.current);
+  const [messages, setMessagesState] = useState(() => trimMessages(initialMessages, maxMessages));
 
   useEffect(() => {
     initialMessagesRef.current = trimMessages(initialMessages, maxMessages);

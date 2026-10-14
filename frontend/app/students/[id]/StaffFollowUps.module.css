@@ -1,0 +1,8 @@
+.section { margin-top: 25px; border-top: 1px solid #dbe4ef; padding-top: 20px; }
+.section header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.section button { border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 12px; background: white; color: #1d4ed8; cursor: pointer; }
+.thread { list-style: none; padding: 0; display: grid; gap: 14px; }
+.thread li { padding: 14px 16px; background: #eff6ff; border: 1px solid #dbeafe; border-radius: 8px; }
+.thread li > div { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.thread time { color: #64748b; font-size: 13px; }
+.thread p { white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: 0; color: #0f172a; }

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { prismaStringId } from "./idSchemas.js";
 
-export const workLedgerShifts = ["MORNING", "AFTERNOON", "EVENING"];
+export const workLedgerShifts = ["DAILY", "MORNING", "AFTERNOON", "EVENING"];
 
 const emptyToNull = (value) => {
   if (value === undefined || value === null) return null;
@@ -13,7 +13,7 @@ const dateOnly = z.preprocess((value) => {
   const text = emptyToNull(value);
   if (!text) return value;
   const date = new Date(`${text}T00:00:00.000Z`);
-  return Number.isNaN(date.getTime()) ? value : date;
+  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text ? value : date;
 }, z.date({ error: "Date is required." }));
 
 export const workLedgerIdParamSchema = z.object({
@@ -31,14 +31,14 @@ export const workLedgerFacultyParamSchema = z.object({
 export const workLedgerBodySchema = z.object({
   facultyId: prismaStringId("Faculty member is required."),
   date: dateOnly,
-  shift: z.enum(workLedgerShifts, { error: "Shift is required." }),
-  amount: z.coerce.number().min(0, "Amount cannot be negative."),
+  shift: z.enum(workLedgerShifts).optional().default("DAILY"),
+  amount: z.coerce.number().min(0, "Amount cannot be negative.").optional(),
   remarks: z.preprocess(emptyToNull, z.string().max(1000).nullable().optional()),
 });
 
 export const workLedgerAttendancePatchSchema = z.object({
   isPresent: z.boolean().optional().default(true),
-  amount: z.coerce.number().min(0, "Amount cannot be negative.").optional().default(0),
+  amount: z.coerce.number().min(0, "Amount cannot be negative.").optional(),
   remarks: z.preprocess(emptyToNull, z.string().max(1000).nullable().optional()),
 });
 

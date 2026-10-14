@@ -1,4 +1,5 @@
 import prisma from "../prisma/client.js";
+import { attendanceDate, setDailyAttendance } from "../services/dailyAttendanceService.js";
 import { createAuditLog } from "../services/auditLogService.js";
 
 const ATTENDANCE_LOCK_MESSAGE = "Attendance for this week is locked because payout has already been processed.";
@@ -192,118 +193,22 @@ const isFacultyWeekPayoutLocked = async (facultyId, weekStart, weekEnd) => {
 };
 
 const updateAttendanceFromChat = async ({ req, res, message }) => {
-  const shift = parseShift(message);
-  if (!shift) {
-    return actionResponse(res, "Please mention the shift: morning, afternoon, or evening.", "ATTENDANCE_NEEDS_CLARIFICATION");
-  }
-
-  const attendanceDate = parseDateFromMessage(message);
-  if (attendanceDate === undefined) {
-    return actionResponse(res, "Please mention the exact date for attendance.", "ATTENDANCE_NEEDS_CLARIFICATION");
-  }
-  if (!attendanceDate) {
-    return actionResponse(res, "Please mention a valid exact date for attendance.", "ATTENDANCE_NEEDS_CLARIFICATION");
-  }
-
+  const date = parseDateFromMessage(message, attendanceDate(new Date()));
+  if (!date) return actionResponse(res, "Please mention a valid exact date for attendance.", "ATTENDANCE_NEEDS_CLARIFICATION");
   const present = parseStatus(message);
-  if (present === null) {
-    return actionResponse(res, "Please mention whether the attendance is Present or Absent.", "ATTENDANCE_NEEDS_CLARIFICATION");
+  if (present === null) return actionResponse(res, "Please mention whether attendance is Present or Absent.", "ATTENDANCE_NEEDS_CLARIFICATION");
+  if (/\b(amount|amt|charge|rs|inr|rupees)\b/i.test(message) && parseAmount(message) !== null) return actionResponse(res, "Daily attendance amounts are calculated automatically; no amount is needed.", "ATTENDANCE_NEEDS_CLARIFICATION");
+  try {
+    const result = await setDailyAttendance({ role: "faculty", actorId: req.user.id, date, present, actor: {
+      updatedBy: String(req.user.id), updatedByRole: "FACULTY", updatedByName: req.user.fullName || "Faculty",
+      updatedByFacultyId: String(req.user.id), updatedByAdminId: null,
+    } });
+    await createAuditLog({ req, action: "FACULTY_CHATBOT_ATTENDANCE_UPDATE", entityType: "WorkLedgerEntry", entityId: result.entry?.id, metadata: { date: toDateKey(date), present } });
+    return actionResponse(res, `Done, marked your daily attendance ${present ? "Present" : "Absent"} for ${formatDate(date)} with ${formatMoney(result.entry?.amount || 0)}.`, "ATTENDANCE_UPDATED", { date: toDateKey(date), present, amount: moneyNumber(result.entry?.amount || 0) });
+  } catch (error) {
+    if (error.status) return actionResponse(res, error.message, "ATTENDANCE_BLOCKED");
+    throw error;
   }
-
-  const amount = parseAmount(message);
-  if (Number.isNaN(amount)) {
-    return actionResponse(res, "Amount must be numeric and cannot be negative.", "ATTENDANCE_NEEDS_CLARIFICATION");
-  }
-  if (present && amount === null) {
-    const existing = await prisma.workLedgerEntry.findUnique({
-      where: { facultyId_date_shift: { facultyId: String(req.user.id), date: attendanceDate, shift } },
-      select: { amount: true },
-    });
-    if (!existing) {
-      return actionResponse(res, "Please mention the amount for this Present attendance.", "ATTENDANCE_NEEDS_CLARIFICATION");
-    }
-  }
-
-  const weekStart = fridayWeekStart(attendanceDate);
-  const weekEnd = weekEndThursday(weekStart);
-  const lockedStatus = await isFacultyWeekPayoutLocked(String(req.user.id), weekStart, weekEnd);
-  if (lockedStatus) {
-    const processing = lockedStatus === "PROCESSING";
-    const reply = processing
-      ? `Payout for this week has already been initiated for ${formatDate(weekStart)} to ${formatDate(weekEnd)}. Attendance editing is locked.`
-      : `This week is already paid for ${formatDate(weekStart)} to ${formatDate(weekEnd)}. Attendance editing is locked for this week.`;
-    return actionResponse(res, reply, "ATTENDANCE_BLOCKED_LOCKED_WEEK", {
-      weekStart: toDateKey(weekStart),
-      weekEnd: toDateKey(weekEnd),
-    });
-  }
-
-  const actorName = req.user?.fullName || req.user?.email || "Faculty";
-  if (!present) {
-    await prisma.workLedgerEntry.deleteMany({
-      where: { facultyId: String(req.user.id), date: attendanceDate, shift },
-    });
-    await createAuditLog({
-      req,
-      action: "FACULTY_CHATBOT_ATTENDANCE_UPDATE",
-      entityType: "WorkLedgerEntry",
-      description: "Faculty marked attendance absent through chatbot.",
-      metadata: { date: toDateKey(attendanceDate), shift, present: false },
-    });
-    return actionResponse(
-      res,
-      `Done, I marked your ${SHIFT_LABELS[shift]} as Absent for ${formatDate(attendanceDate)}.`,
-      "ATTENDANCE_UPDATED",
-      { date: toDateKey(attendanceDate), shift, present: false, amount: 0 }
-    );
-  }
-
-  const data = {
-    facultyId: String(req.user.id),
-    date: attendanceDate,
-    shift,
-    classesTaken: 1,
-    hoursWorked: 1,
-    amount: amount === null ? undefined : amount,
-    createdBy: String(req.user.id),
-    updatedBy: String(req.user.id),
-    updatedByRole: "FACULTY",
-    updatedByName: actorName,
-    updatedByFacultyId: String(req.user.id),
-    updatedByAdminId: null,
-  };
-
-  const entry = await prisma.workLedgerEntry.upsert({
-    where: { facultyId_date_shift: { facultyId: String(req.user.id), date: attendanceDate, shift } },
-    update: {
-      ...(amount === null ? {} : { amount }),
-      updatedBy: data.updatedBy,
-      updatedByRole: data.updatedByRole,
-      updatedByName: data.updatedByName,
-      updatedByFacultyId: data.updatedByFacultyId,
-      updatedByAdminId: data.updatedByAdminId,
-    },
-    create: {
-      ...data,
-      amount: amount === null ? 0 : amount,
-    },
-  });
-
-  await createAuditLog({
-    req,
-    action: "FACULTY_CHATBOT_ATTENDANCE_UPDATE",
-    entityType: "WorkLedgerEntry",
-    entityId: entry.id,
-    description: "Faculty updated attendance through chatbot.",
-    metadata: { date: toDateKey(attendanceDate), shift, present: true, amount: moneyNumber(entry.amount) },
-  });
-
-  return actionResponse(
-    res,
-    `Done, I marked your ${SHIFT_LABELS[shift]} attendance as Present for ${formatDate(attendanceDate)} with ${formatMoney(entry.amount)}.`,
-    "ATTENDANCE_UPDATED",
-    { id: entry.id, date: toDateKey(attendanceDate), shift, present: true, amount: moneyNumber(entry.amount) }
-  );
 };
 
 const payoutStatus = async ({ req, res, message }) => {

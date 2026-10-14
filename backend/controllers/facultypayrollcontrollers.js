@@ -477,6 +477,18 @@ export const generateFacultyPayroll = async (req, res) => {
   }
 };
 
+const lockMutableCycle = async (tx, id) => {
+  const period = await tx.payrollCycle.findUnique({ where: { id } });
+  if (!period) throw Object.assign(new Error("Payroll cycle not found."), { statusCode: 404 });
+  const key = `weekly-pay:${toDateKey(period.startDate)}:${toDateKey(period.endDate)}`;
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${key})::bigint)::text`;
+  const cycle = await tx.payrollCycle.findUniqueOrThrow({ where: { id }, include: { payrolls: { include: { payouts: true } } } });
+  if (cycle.status === "PAID" || cycle.payrolls.some(row => row.status === "PAID" || row.payouts.some(payout => payoutStatuses.active.includes(payout.status)))) {
+    throw Object.assign(new Error("Paid payroll or an active payout cannot be changed. Reconcile the payout first."), { statusCode: 400 });
+  }
+  return cycle;
+};
+
 export const approveFacultyPayroll = async (req, res) => {
   try {
     if (!requireAdmin(req, res)) return null;
@@ -484,7 +496,7 @@ export const approveFacultyPayroll = async (req, res) => {
     const approvedAt = new Date();
 
     const cycle = await prisma.$transaction(async (tx) => {
-      const existing = await tx.payrollCycle.findUnique({ where: { id: payrollCycleId } });
+      const existing = await lockMutableCycle(tx, payrollCycleId);
       if (!existing) {
         const error = new Error("Payroll cycle not found.");
         error.statusCode = 404;
@@ -531,10 +543,7 @@ export const processFacultyPayroll = async (req, res) => {
     const paidAt = new Date();
 
     const cycle = await prisma.$transaction(async (tx) => {
-      const existing = await tx.payrollCycle.findUnique({
-        where: { id: payrollCycleId },
-        include: { payrolls: true },
-      });
+      const existing = await lockMutableCycle(tx, payrollCycleId);
       if (!existing) {
         const error = new Error("Payroll cycle not found.");
         error.statusCode = 404;
@@ -596,6 +605,7 @@ export const rejectFacultyPayroll = async (req, res) => {
     const payrollCycleId = req.body.payrollCycleId || req.params.id;
     const remarks = req.body.remarks || "Rejected by admin.";
     const cycle = await prisma.$transaction(async (tx) => {
+      await lockMutableCycle(tx, payrollCycleId);
       await tx.facultyEarningsPayroll.updateMany({
         where: { payrollCycleId },
         data: { status: "REJECTED", remarks, updatedBy: actorKey(req) },
@@ -616,10 +626,13 @@ export const unlockFacultyPayrollLedger = async (req, res) => {
   try {
     if (!requireAdmin(req, res)) return null;
     const payrollCycleId = req.body.payrollCycleId || req.params.id;
-    const cycle = await prisma.payrollCycle.update({
-      where: { id: payrollCycleId },
-      data: { ledgerLocked: false, updatedBy: actorKey(req) },
-      include: { payrolls: payrollIncludeFull },
+    const cycle = await prisma.$transaction(async tx => {
+      await lockMutableCycle(tx, payrollCycleId);
+      return tx.payrollCycle.update({
+        where: { id: payrollCycleId },
+        data: { ledgerLocked: false, updatedBy: actorKey(req) },
+        include: { payrolls: payrollIncludeFull },
+      });
     });
     return res.json({ success: true, message: "Payroll ledger unlocked for edits.", batch: toCycleDto(cycle) });
   } catch (error) {

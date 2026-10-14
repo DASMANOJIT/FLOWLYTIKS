@@ -1,5 +1,7 @@
 "use client";
 
+import Modal from "../../components/ui/Modal";
+
 import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -219,7 +221,7 @@ export default function FacultyOwnProfilePage() {
         </section>
       </div>
       {showPayoutModal ? (
-        <div className="faculty-modal-backdrop">
+        <Modal className="faculty-modal-backdrop" role="dialog" aria-modal="true">
           <section className="faculty-modal">
             <div className="faculty-modal-header">
               <h2>Update Payout Details</h2>
@@ -243,7 +245,7 @@ export default function FacultyOwnProfilePage() {
               </div>
             </form>
           </section>
-        </div>
+        </Modal>
       ) : null}
     </FacultyPortalLayout>
   );

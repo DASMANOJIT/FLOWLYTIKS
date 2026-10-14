@@ -1,19 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Minus, Plus } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Eye, Pencil, X } from "lucide-react";
+import Modal from "../../components/ui/Modal";
 import { apiCall } from "../../../lib/api.js";
 import { getFacultyAuthToken } from "../../../lib/authStorage.js";
 import PremiumLoader from "../../components/ui/PremiumLoader";
 import FacultyPortalLayout from "../FacultyPortalLayout";
 import "../../admin/faculty/faculty.css";
+import OnlineClassSummary from "./OnlineClassSummary";
+import CopySetsForm from "./CopySetsForm";
+import styles from "./copy-sets.module.css";
 
 type ApiCall = <T = unknown>(endpoint: string, method?: string, body?: unknown, token?: string | null) => Promise<T>;
 const callApi = apiCall as ApiCall;
 
-type IncentiveType = { id: string; name: string; rate: number };
+type IncentiveType = { id: string; name: string; rate: number; onlineClassWorkflow?: boolean };
+const isOnline = (type: IncentiveType) => type.onlineClassWorkflow || type.name.trim().replace(/\s+/g, " ").toUpperCase() === "ONLINE DOUBT CLASS";
+const actionLabel = (type: IncentiveType) => `${isOnline(type) ? "View Records" : "Edit"} ${type.name}`;
 type IncentiveLine = { incentiveTypeId: string; name: string; quantity: number; rate: number; amount: number };
-type IncentiveEntry = { id: string; name: string; quantityChange: number; rate: number; amount: number; status: string; createdAt: string };
+type IncentiveEntry = { id: string; name: string; quantityChange: number; rate: number; amount: number; note?: string | null; status: string; createdAt: string };
 type IncentivePayment = {
   id: string;
   totalAmount: number;
@@ -28,8 +34,8 @@ type IncentivePayment = {
   summary: IncentiveLine[];
 };
 
-const money = (value: number) =>
-  new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value || 0);
+const money = (value: number, maximumFractionDigits = 0) =>
+  new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits }).format(value || 0);
 
 const formatDate = (value?: string | null) => {
   if (!value) return "-";
@@ -47,6 +53,9 @@ export default function FacultyExtraIncentivesPage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState("");
   const [error, setError] = useState("");
+  const [editing, setEditing] = useState<{ type: IncentiveType; quantity: number; amount: number } | null>(null);
+  const submitting = useRef(false);
+  const editButtons = useRef(new Map<string, HTMLButtonElement>());
 
   const loadData = useCallback(async () => {
     if (!token) {
@@ -77,19 +86,19 @@ export default function FacultyExtraIncentivesPage() {
     loadData();
   }, [loadData]);
 
-  const adjust = async (typeId: string, action: "increment" | "decrement") => {
-    if (!token || busyId) return;
-    setBusyId(`${typeId}:${action}`);
-    setError("");
-    try {
-      await callApi(`/faculty-extra-incentives/my/${typeId}/${action}`, "POST", {}, token);
-      await loadData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update incentive count.");
-    } finally {
-      setBusyId("");
-    }
+  const closeEdit = () => {
+    if (submitting.current) return;
+    const id = editing?.type.id;
+    setEditing(null);
+    if (id) requestAnimationFrame(() => {
+      const type = types.find(type => type.id === id);
+      const label = type ? actionLabel(type) : "";
+      const button = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')]
+        .find(element => element.getAttribute("aria-label") === label && element.getClientRects().length);
+      button?.focus({ preventScroll: true });
+    });
   };
+  const onlineClassEdit = editing && isOnline(editing.type);
 
   const pendingByType = useMemo(() => {
     const map = new Map<string, IncentiveLine>();
@@ -105,10 +114,9 @@ export default function FacultyExtraIncentivesPage() {
         <div className="faculty-section-heading">
           <div>
             <h2>Available Incentives</h2>
-            <p>Use plus or minus to adjust your own pending count.</p>
           </div>
         </div>
-        <div className="faculty-table-wrap">
+        <div className={`faculty-table-wrap ${styles.desktopList}`}>
           <table className="faculty-table">
             <thead><tr><th>Incentive</th><th>Rate</th><th>Pending Count</th><th>Pending Amount</th><th>Actions</th></tr></thead>
             <tbody>
@@ -123,11 +131,10 @@ export default function FacultyExtraIncentivesPage() {
                     <td>{pending?.quantity || 0}</td>
                     <td>{money(pending?.amount || 0)}</td>
                     <td>
-                      <button className="faculty-icon-button" onClick={() => adjust(type.id, "decrement")} disabled={!pending?.quantity || Boolean(busyId)} title="Decrease">
-                        <Minus size={16} />
-                      </button>
-                      <button className="faculty-icon-button" onClick={() => adjust(type.id, "increment")} disabled={Boolean(busyId)} title="Increase">
-                        <Plus size={16} />
+                      <button ref={element => { if (element) editButtons.current.set(type.id, element); else editButtons.current.delete(type.id); }} className="faculty-button faculty-button--ghost" disabled={Boolean(busyId)} onClick={() => {
+                        setEditing({ type, quantity: pending?.quantity || 0, amount: pending?.amount || 0 });
+                      }} aria-label={actionLabel(type)}>
+                        {isOnline(type) ? <Eye size={16} /> : <Pencil size={16} />} {isOnline(type) ? "View Records" : "Edit"}
                       </button>
                     </td>
                   </tr>
@@ -138,7 +145,22 @@ export default function FacultyExtraIncentivesPage() {
             </tbody>
           </table>
         </div>
+        <ul className={styles.mobileList}>
+          {loading ? <li><PremiumLoader label="Loading incentives" compact /></li> : types.length ? types.map(type => {
+            const pending = pendingByType.get(type.id);
+            return <li key={type.id}><div><strong>{type.name}</strong><dl><div><dt>Rate</dt><dd>{money(type.rate)}</dd></div><div><dt>Pending Count</dt><dd>{pending?.quantity || 0}</dd></div><div><dt>Pending Amount</dt><dd>{money(pending?.amount || 0)}</dd></div></dl></div><button className="faculty-button faculty-button--ghost" disabled={Boolean(busyId)} aria-label={actionLabel(type)} onClick={event => {
+              editButtons.current.set(type.id, event.currentTarget);
+              setEditing({ type, quantity: pending?.quantity || 0, amount: pending?.amount || 0 });
+            }}>{isOnline(type) ? <Eye size={16} /> : <Pencil size={16} />} {isOnline(type) ? "View Records" : "Edit"}</button></li>;
+          }) : <li>No incentive types are active yet.</li>}
+        </ul>
       </section>
+      {editing ? <Modal onClose={closeEdit}>
+        <div className={`faculty-modal ${onlineClassEdit ? "" : styles.copyModal}`}>
+          <div className="faculty-modal-header"><h2>{onlineClassEdit ? "Online Doubt Class" : editing.type.name}</h2><button className="faculty-icon-button" type="button" onClick={closeEdit} disabled={Boolean(busyId)} aria-label="Close"><X size={18} /></button></div>
+          {onlineClassEdit ? <OnlineClassSummary token={token} incentiveTypeId={editing.type.id} /> : <CopySetsForm token={token} incentiveTypeId={editing.type.id} rate={types.find(type => type.id === editing.type.id)?.rate ?? editing.type.rate} pendingCount={pendingByType.get(editing.type.id)?.quantity || 0} pendingAmount={pendingByType.get(editing.type.id)?.amount || 0} onChanged={loadData} onBusy={busy => { submitting.current = busy; setBusyId(busy ? editing.type.id : ""); }} />}
+        </div>
+      </Modal> : null}
 
       <section className="faculty-panel faculty-table-card">
         <div className="faculty-section-heading"><h2>Recent Records</h2></div>

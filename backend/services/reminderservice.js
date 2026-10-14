@@ -17,6 +17,7 @@ export const runDailyFeeReminderJob = async ({
   jobId = null,
   payload = {},
   onProgress = null,
+  beforeStudent = null,
 } = {}) => {
   if (!isWhatsAppConfigured()) {
     console.log("WhatsApp reminder skipped: config missing.");
@@ -74,6 +75,7 @@ export const runDailyFeeReminderJob = async ({
         summary.batchesProcessed = meta.batchNumber;
 
         for (const student of students) {
+          if (beforeStudent) await beforeStudent();
           const paidMonths = student.payments.map((payment) => payment.month);
           const dueMonths = getDueMonthsForReminder({ paidMonths });
 

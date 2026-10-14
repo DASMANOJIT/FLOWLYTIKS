@@ -1,0 +1,14 @@
+.root { min-width: 0; }
+.filters { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; min-width: 0; }
+.filters input, .filters select, .filters button { min-height: 44px; padding: 10px 12px; border: 1px solid #bfdbfe; border-radius: 8px; background: #fff; color: #1d4ed8; font: inherit; max-width: 100%; box-sizing: border-box; }
+.filters button { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.filters button:disabled { opacity: .6; cursor: wait; }
+.period { font-size: 14px; color: #475569; }
+.grid.grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.card h3 { letter-spacing: 0; }
+.card p { font-size: 26px; letter-spacing: 0; overflow-wrap: anywhere; }
+.card small { display: block; margin-top: 10px; line-height: 1.5; color: #475569; overflow-wrap: anywhere; }
+.error { color: #991b1b; background: #fef2f2; padding: 12px; border-left: 3px solid #dc2626; }
+@media (max-width: 1100px) { .grid.grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .grid.grid { grid-template-columns: minmax(0, 1fr); } .field { flex: 1 1 150px; } .filters input, .filters select { width: 100%; } }

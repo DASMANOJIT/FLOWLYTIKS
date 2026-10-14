@@ -61,8 +61,7 @@ const resolveBackendBaseUrl = () => {
     return configured;
   }
 
-  const isRenderBuild = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
-  if (process.env.NODE_ENV === "production" && isRenderBuild) {
+  if (process.env.NODE_ENV === "production") {
     throw new Error(
       "BACKEND_URL, NEXT_PUBLIC_BACKEND_URL, or NEXT_PUBLIC_API_URL must be set for production frontend rewrites."
     );

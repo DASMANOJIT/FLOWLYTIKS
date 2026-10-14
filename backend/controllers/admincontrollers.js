@@ -1,4 +1,14 @@
 import prisma from "../prisma/client.js";
+import { readAdminDashboard } from "../services/adminDashboardService.js";
+
+export const getAdminDashboardSummary = async (req, res) => {
+  try {
+    return res.json(await readAdminDashboard(req.query));
+  } catch (error) {
+    console.error("Admin dashboard summary failed", { code: error?.code || "SUMMARY_ERROR" });
+    return res.status(error.status || 503).json({ success: false, message: error.status === 400 ? error.message : "Dashboard summary is unavailable. Please try again." });
+  }
+};
 
 export const getAdminHealthCheck = async (req, res) => {
   try {

@@ -4,12 +4,14 @@ import cors from "cors";
 import helmet from "helmet";
 import prisma from "./prisma/client.js";
 import { validateEnv } from "./config/env.js";
-import { logError, logInfo } from "./utils/appLogger.js";
+import { getRequestPath, logError, logInfo } from "./utils/appLogger.js";
 import { verifyRequiredSchemaColumns } from "./utils/schemaGuard.js";
 import { getFacultyPayoutEmailConfigStatus } from "./services/emailNotificationService.js";
+import { startMeetPollingWorker } from "./services/meetVerificationService.js";
 
 // Import routes
 import authRoutes from "./routes/authroute.js";
+import staffRoutes from "./routes/staffroute.js";
 import studentRoutes from "./routes/studentroute.js";
 import paymentRoutes from "./routes/paymentroute.js";
 import settingsRoutes from "./routes/settingsroute.js";
@@ -163,18 +165,22 @@ async function ensureAppSettings() {
   }
 }
 
+let stopMeetWorker = null;
+let shuttingDown = false;
 const initDatabase = async () => {
   const maxAttempts = 5;
   let attempt = 0;
   let warned = false;
 
   const tryConnect = async () => {
+    if (shuttingDown) return;
     attempt += 1;
     try {
       await prisma.$connect();
       await verifyRequiredSchemaColumns();
       await ensureAppSettings();
       logInfo("server.database_connected");
+      if (!shuttingDown && !stopMeetWorker) stopMeetWorker = startMeetPollingWorker();
     } catch (err) {
       if (err?.code === "SCHEMA_MISMATCH") {
         logError("server.schema_mismatch", {
@@ -212,12 +218,13 @@ const initDatabase = async () => {
 };
 
 initDatabase();
-logInfo("server.background_jobs_disabled");
+logInfo("server.jobs_configuration", { generalBackgroundJobs: false, meetPolling: process.env.ENABLE_MEET_POLLING !== "false" });
 
 // ================================
 // Routes
 // ================================
 app.use("/api/auth", authRoutes);
+app.use("/api/staff", staffRoutes);
 app.use("/api/students", studentRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/admin-assistant", adminAssistantRoutes);
@@ -278,7 +285,7 @@ app.use((err, req, res, next) => {
     500;
   logError("server.request_failed", {
     method: req.method,
-    path: req.originalUrl || req.url,
+    path: getRequestPath(req.originalUrl || req.url),
     ip: req.ip,
     status,
     message: err?.message || err,
@@ -303,8 +310,25 @@ app.use((err, req, res, next) => {
 
 // Start server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   logInfo("server.started", { port: PORT });
 });
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGUSR2"]) {
+  process.once(signal, async () => {
+    shuttingDown = true;
+    logInfo("server.shutting_down", { signal });
+    const deadline = setTimeout(() => process.exit(0), 15000);
+    deadline.unref();
+    try {
+      await Promise.all([new Promise(resolve => server.close(resolve)), stopMeetWorker?.()]);
+      await prisma.$disconnect();
+    } finally {
+      clearTimeout(deadline);
+      if (signal === "SIGUSR2") process.kill(process.pid, signal);
+      else process.exit(0);
+    }
+  });
+}
 
 export default app;

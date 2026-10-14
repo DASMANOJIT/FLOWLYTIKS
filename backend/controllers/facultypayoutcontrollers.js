@@ -162,13 +162,14 @@ export const handleCashfreePayoutWebhook = async (req, res) => {
       payload?.test === true;
     const config = getCashfreePayoutConfig();
 
-    if (!isTestPayload && config.webhookSecret && !verifyCashfreePayoutWebhookSignature(req)) {
-      return res.status(401).json({ success: false, message: "Invalid payout webhook signature." });
-    }
-    if (!config.webhookSecret) {
+    if (!config.webhookSecret && !config.clientSecret) {
       logWarn("cashfree_payout.webhook_secret_missing", {
-        message: "Payout webhook accepted without signature verification because no webhook secret is configured.",
+        message: "Payout webhook rejected because no signing secret is configured.",
       });
+      return res.status(503).json({ success: false, message: "Payout webhook verification is unavailable." });
+    }
+    if (!verifyCashfreePayoutWebhookSignature(req)) {
+      return res.status(401).json({ success: false, message: "Invalid payout webhook signature." });
     }
     if (isTestPayload) {
       return res.json({ success: true, message: "Cashfree payout webhook received.", result: { test: true } });
@@ -187,7 +188,7 @@ export const getCashfreePayoutWebhookHealth = (req, res) => {
     success: true,
     message: "Cashfree payout webhook route is active.",
     environment: config.environment,
-    signatureVerification: Boolean(config.webhookSecret),
+    signatureVerification: Boolean(config.webhookSecret || config.clientSecret),
   });
 };
 

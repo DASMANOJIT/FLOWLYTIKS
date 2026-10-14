@@ -23,7 +23,7 @@ export const startJobs = async () => {
 
 process.on("SIGTERM", async () => {
   if (typeof stopBackgroundWorker === "function") {
-    stopBackgroundWorker();
+    await stopBackgroundWorker();
   }
   await prisma.$disconnect().catch(() => {});
   process.exit(0);
@@ -31,7 +31,7 @@ process.on("SIGTERM", async () => {
 
 process.on("SIGINT", async () => {
   if (typeof stopBackgroundWorker === "function") {
-    stopBackgroundWorker();
+    await stopBackgroundWorker();
   }
   await prisma.$disconnect().catch(() => {});
   process.exit(0);

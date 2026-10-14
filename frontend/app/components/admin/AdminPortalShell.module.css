@@ -1,0 +1,32 @@
+.shell { --admin-sidebar-width: 260px; min-width: 0; display: flex; flex-direction: column; flex: 1; }
+.collapsed { --admin-sidebar-width: 76px; }
+.sidebar, .drawer { display: flex; flex-direction: column; background: #fff; color: #1f2937; padding: 20px 14px; border-right: 1px solid #e2e8f0; box-sizing: border-box; }
+.sidebar { position: fixed; inset: 0 auto 0 0; width: var(--admin-sidebar-width); height: 100dvh; z-index: 1000; }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-shrink: 0; }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand img { flex-shrink: 0; object-fit: contain; }
+.brand strong { display: block; font-size: 17px; }
+.brand span { display: block; font-size: 12px; color: #64748b; margin-top: 3px; }
+.sidebar button, .drawer button, .mobileHeader button { cursor: pointer; }
+.top button, .mobileHeader button { display: grid; place-items: center; border: 1px solid #e2e8f0; background: #fff; border-radius: 6px; color: #475569; width: 32px; height: 32px; flex-shrink: 0; }
+.nav { display: flex; flex-direction: column; gap: 6px; margin-top: 28px; flex: 1; min-height: 0; overflow-y: auto; }
+.nav a, .logout { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 6px; color: #475569; text-decoration: none; font-size: 14px; min-height: 44px; box-sizing: border-box; }
+.nav svg, .logout svg { flex-shrink: 0; }
+.nav a:hover { background: #f1f5f9; }
+.nav a.active { background: #eaf2ff; color: #2563eb; font-weight: 600; }
+.logout { margin-top: 16px; border: 1px solid #e2e8f0; background: #fff; width: 100%; flex-shrink: 0; }
+.content { margin-left: var(--admin-sidebar-width); min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.footer { margin-left: var(--admin-sidebar-width); min-width: 0; }
+.collapsed .sidebar .brand div, .collapsed .sidebar .nav span, .collapsed .sidebar .logout span { display: none; }
+.collapsed .sidebar .top { flex-direction: column; }
+.collapsed .sidebar .nav a, .collapsed .sidebar .logout { justify-content: center; padding: 12px 0; }
+.mobileHeader, .drawer, .overlay { display: none; }
+.sidebar a:focus-visible, .sidebar button:focus-visible, .drawer a:focus-visible, .drawer button:focus-visible, .mobileHeader button:focus-visible { outline: 2px solid #2563eb; outline-offset: 3px; }
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .content, .footer { margin-left: 0; }
+  .mobileHeader { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: #fff; border-bottom: 1px solid #e2e8f0; }
+  .top button, .mobileHeader button { width: 44px; height: 44px; }
+  .overlay { display: block; position: fixed; inset: 0; border: 0; background: rgba(15, 23, 42, .45); z-index: 20000; }
+  .drawer { display: flex; position: fixed; inset: 0 auto 0 0; height: 100dvh; width: min(320px, 88vw); z-index: 20001; padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+}

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  clearAuthSession,
+  clearAuthSessionForUnauthorizedResponse,
   getAuthToken,
 } from "../../../lib/authStorage.js";
 import {
@@ -150,11 +150,10 @@ export default function WhatsAppReminderButton({
 
       const data = await res.json().catch(() => ({}));
 
-      if (res.status === 401 || res.status === 403) {
+      if (clearAuthSessionForUnauthorizedResponse(res.status, token, "admin")) {
         if (popupWindow && !popupWindow.closed) {
           popupWindow.close();
         }
-        clearAuthSession();
         window.location.href = "/login";
         return;
       }

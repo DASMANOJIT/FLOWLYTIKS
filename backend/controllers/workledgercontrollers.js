@@ -1,7 +1,9 @@
 import prisma from "../prisma/client.js";
 import { buildRequestLogMeta, logError, logInfo } from "../utils/appLogger.js";
 
-const SHIFT_ORDER = ["MORNING", "AFTERNOON", "EVENING"];
+import { attendanceWeek, attendancePayoutLocked, assertAttendanceDeadline, assertAttendanceMutable, refreshDraftAttendancePayroll, lockAttendanceDates, setDailyAttendance } from "../services/dailyAttendanceService.js";
+
+const SHIFT_ORDER = ["DAILY", "MORNING", "AFTERNOON", "EVENING"];
 const DAY_LABELS = ["Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday"];
 
 const entrySelect = {
@@ -49,12 +51,7 @@ const addDays = (date, days) => {
   return next;
 };
 
-const getFridayWeekStart = (value = new Date()) => {
-  const date = parseDateOnly(toDateKey(value)) || new Date();
-  const day = date.getUTCDay();
-  const daysSinceFriday = (day + 2) % 7;
-  return addDays(date, -daysSinceFriday);
-};
+export const getFridayWeekStart = (value = new Date()) => attendanceWeek(value).start;
 
 const resolveMonthRange = (month) => {
   const [year, monthNumber] = String(month).split("-").map(Number);
@@ -90,125 +87,14 @@ const assertLedgerRole = (req, res) => {
 const canMutateEntry = (req, entry) =>
   isAdmin(req) || (isFacultyActor(req) && String(entry.facultyId) === String(req.user?.id));
 
-const findLockedPayrollCycle = async (tx, date) => {
-  const lockedCycle = await tx.payrollCycle.findFirst({
-    where: {
-      startDate: { lte: date },
-      endDate: { gte: date },
-      OR: [
-        { ledgerLocked: true },
-        { status: { in: ["APPROVED", "PAID", "LOCKED"] } },
-      ],
-    },
-    select: { cycleNumber: true, startDate: true, endDate: true, status: true },
-  });
-  if (lockedCycle) return lockedCycle;
-
-  const lockedPayout = await tx.facultyPayout.findFirst({
-    where: {
-      status: { in: ["PROCESSING", "SUCCESS", "FAILED"] },
-      payroll: {
-        payrollCycle: {
-          startDate: { lte: date },
-          endDate: { gte: date },
-        },
-      },
-    },
-    select: {
-      id: true,
-      status: true,
-      payroll: {
-        select: {
-          payrollCycle: {
-            select: { cycleNumber: true, startDate: true, endDate: true },
-          },
-        },
-      },
-    },
-  });
-
-  if (!lockedPayout) return null;
-  return {
-    cycleNumber: lockedPayout.payroll?.payrollCycle?.cycleNumber || "Payroll cycle",
-    startDate: lockedPayout.payroll?.payrollCycle?.startDate || date,
-    endDate: lockedPayout.payroll?.payrollCycle?.endDate || date,
-    status: lockedPayout.status,
-  };
+const getWeekLockState = async (start) => {
+  const isLocked = await attendancePayoutLocked(prisma, null, start);
+  return { isLocked, lockReason: isLocked ? "This week's payroll is approved, settled or processing. Attendance editing is locked." : null };
 };
 
-const getWeekLockState = async (start, end) => {
-  const startDate = parseDateOnly(start);
-  const endDate = parseDateOnly(end);
-  if (!startDate || !endDate) {
-    return { isLocked: false, lockReason: null };
-  }
-  try {
-    const lockedCycle = await prisma.payrollCycle.findFirst({
-      where: {
-        startDate,
-        endDate,
-        OR: [
-          { ledgerLocked: true },
-          { status: { in: ["APPROVED", "PAID", "LOCKED"] } },
-        ],
-      },
-      select: { id: true },
-    });
-
-    const lockedPayout = lockedCycle
-      ? null
-      : await prisma.facultyPayout.findFirst({
-          where: {
-            status: { in: ["PROCESSING", "SUCCESS", "FAILED"] },
-            payroll: {
-              payrollCycle: {
-                startDate,
-                endDate,
-              },
-            },
-          },
-          select: { id: true },
-        });
-
-    const isLocked = Boolean(lockedCycle || lockedPayout);
-    return {
-      isLocked,
-      lockReason: isLocked
-        ? "This week’s payout has already been processed. Attendance editing is locked."
-        : null,
-    };
-  } catch (error) {
-    logError("work_ledger.lock_check.error", {
-      rangeStart: toDateKey(startDate),
-      rangeEnd: toDateKey(endDate),
-      error: error?.message || String(error),
-    });
-    return { isLocked: false, lockReason: null };
-  }
-};
-
-const assertLedgerUnlocked = async (tx, res, dates) => {
-  for (const date of dates) {
-    const parsedDate = parseDateOnly(date);
-    if (!parsedDate) continue;
-    let lockedCycle = null;
-    try {
-      lockedCycle = await findLockedPayrollCycle(tx, parsedDate);
-    } catch (error) {
-      logError("work_ledger.mutation_lock_check.error", {
-        date: toDateKey(parsedDate),
-        error: error?.message || String(error),
-      });
-      continue;
-    }
-    if (lockedCycle) {
-      res.status(403).json({
-        success: false,
-        message: `${lockedCycle.cycleNumber} is ${String(lockedCycle.status).toLowerCase()} and locked. Unlock payroll before editing this week's ledger.`,
-      });
-      return false;
-    }
-  }
+const assertLedgerUnlocked = async (tx, req, facultyId, dates) => {
+  await lockAttendanceDates(tx, facultyId, dates.filter(Boolean));
+  for (const date of dates.filter(Boolean)) await assertAttendanceMutable(tx, req.userRole, facultyId, date);
   return true;
 };
 
@@ -409,6 +295,7 @@ const buildCalendarRows = (entries, rangeStart, rangeEnd) =>
   });
 
 const handleLedgerError = (res, error) => {
+  if (error?.status) return res.status(error.status).json({ success: false, message: error.message });
   if (error?.code === "P2025") {
     return res.status(404).json({ success: false, message: "Ledger entry not found." });
   }
@@ -427,58 +314,13 @@ const isMissingColumnOrTableError = (error) =>
   error?.code === "P2022" ||
   /does not exist|column .* does not exist|relation .* does not exist/i.test(String(error?.message || ""));
 
-const emptyLedgerResponse = (start, end) => {
-  const safeStart = parseDateOnly(start) || getFridayWeekStart();
-  const safeEnd = parseDateOnly(end) || addDays(safeStart, 6);
-  const summary = buildSummary([], safeStart, safeEnd);
-  return {
-    success: true,
-    weekStart: toDateKey(safeStart),
-    weekEnd: toDateKey(safeEnd),
-    isLocked: false,
-    lockReason: null,
-    entries: [],
-    days: buildDayGrid([], safeStart, safeEnd),
-    calendarRows: buildCalendarRows([], safeStart, safeEnd),
-    summary,
-    topFaculty: [],
-    facultySummary: [],
-  };
-};
-
 export const createWorkLedgerEntry = async (req, res) => {
   try {
     if (!assertLedgerRole(req, res)) return null;
-    if (isFacultyActor(req) && String(req.body.facultyId) !== String(req.user?.id)) {
-      return res.status(403).json({ success: false, message: "Faculty members can only create their own entries." });
-    }
-
-    const entry = await prisma.$transaction(async (tx) => {
-      if (!(await assertLedgerUnlocked(tx, res, [req.body.date]))) return null;
-      const created = await tx.workLedgerEntry.create({
-        data: {
-          ...req.body,
-          createdBy: actorKey(req),
-          ...actorMetadata(req),
-        },
-        select: entrySelect,
-      });
-      await tx.workLedgerEntryAudit.create({
-        data: {
-          entryId: created.id,
-          action: "CREATE",
-          changedBy: actorKey(req),
-          newData: serializableEntry(created),
-        },
-      });
-      return created;
-    });
-
-    if (!entry) return null;
-    return res.status(201).json({ success: true, entry: toEntryDto(entry) });
-  } catch (error) {
-    return handleLedgerError(res, error);
-  }
+    if (req.body.shift && req.body.shift !== "DAILY") return res.status(400).json({ success: false, message: "New attendance entries must be daily." });
+    const result = await setDailyAttendance({ ...req.body, role: req.userRole, actorId: req.user?.id, present: true, actor: actorMetadata(req) });
+    return res.status(201).json({ success: true, entry: toEntryDto(result.entry) });
+  } catch (error) { return handleLedgerError(res, error); }
 };
 
 export const getWorkLedgerEntries = async (req, res) => {
@@ -494,7 +336,7 @@ export const getWorkLedgerEntries = async (req, res) => {
     const entries = await prisma.workLedgerEntry.findMany({
       where,
       orderBy: [{ date: "asc" }, { shift: "asc" }, { createdAt: "asc" }],
-      take: limit,
+      ...(req.query.week ? {} : { take: limit }),
       select: entrySelect,
     });
 
@@ -524,11 +366,10 @@ export const getWorkLedgerEntries = async (req, res) => {
     });
   } catch (error) {
     if (isMissingColumnOrTableError(error)) {
-      const { start, end } = buildDateRange(req.query);
       logError("work_ledger.fetch.schema_missing", buildRequestLogMeta(req, {
-        error: error?.message || String(error),
+        code: error?.code,
       }));
-      return res.json(emptyLedgerResponse(start, end));
+      return res.status(503).json({ success: false, message: "Work ledger database setup is incomplete. Please contact admin." });
     }
     return handleLedgerError(res, error);
   }
@@ -553,7 +394,7 @@ export const getWorkLedgerEntryById = async (req, res) => {
 export const updateWorkLedgerEntry = async (req, res) => {
   try {
     if (!assertLedgerRole(req, res)) return null;
-    const existing = await prisma.workLedgerEntry.findUnique({
+    let existing = await prisma.workLedgerEntry.findUnique({
       where: { id: req.params.id },
       select: entrySelect,
     });
@@ -563,16 +404,21 @@ export const updateWorkLedgerEntry = async (req, res) => {
     if (!canMutateEntry(req, existing)) {
       return res.status(403).json({ success: false, message: "You can only edit your own ledger entries." });
     }
-    if (isFacultyActor(req) && String(req.body.facultyId) !== String(existing.facultyId)) {
-      return res.status(403).json({ success: false, message: "Faculty members cannot move entries to another faculty member." });
+    if (String(req.body.facultyId) !== String(existing.facultyId) || toDateKey(req.body.date) !== toDateKey(existing.date) || (req.body.shift !== existing.shift && !(req.body.shift === "DAILY" && existing.shift !== "DAILY"))) {
+      return res.status(403).json({ success: false, message: "Attendance entries cannot be moved to another faculty, date or entry type." });
     }
 
+    if (isFacultyActor(req) && req.body.amount !== undefined) return res.status(400).json({ success: false, message: "Only admins can override attendance amounts." });
     const entry = await prisma.$transaction(async (tx) => {
-      if (!(await assertLedgerUnlocked(tx, res, [existing.date, req.body.date]))) return null;
+      await assertLedgerUnlocked(tx, req, existing.facultyId, [existing.date]);
+      existing = await tx.workLedgerEntry.findUnique({ where: { id: existing.id }, select: entrySelect });
+      if (!existing) throw Object.assign(new Error("Ledger entry not found."), { status: 404 });
+      assertAttendanceDeadline(req.userRole, existing.date);
       const updated = await tx.workLedgerEntry.update({
         where: { id: req.params.id },
         data: {
           ...req.body,
+          shift: existing.shift,
           ...actorMetadata(req),
         },
         select: entrySelect,
@@ -586,6 +432,7 @@ export const updateWorkLedgerEntry = async (req, res) => {
           newData: serializableEntry(updated),
         },
       });
+      await refreshDraftAttendancePayroll(tx, existing.facultyId, existing.date);
       return updated;
     });
 
@@ -601,7 +448,7 @@ export const updateWorkLedgerAttendanceEntry = async (req, res) => {
     if (!isAdmin(req)) {
       return res.status(403).json({ success: false, message: "Only admins can edit attendance from work ledger." });
     }
-    const existing = await prisma.workLedgerEntry.findUnique({
+    let existing = await prisma.workLedgerEntry.findUnique({
       where: { id: req.params.attendanceId },
       select: entrySelect,
     });
@@ -610,7 +457,9 @@ export const updateWorkLedgerAttendanceEntry = async (req, res) => {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      if (!(await assertLedgerUnlocked(tx, res, [existing.date]))) return null;
+      await assertLedgerUnlocked(tx, req, existing.facultyId, [existing.date]);
+      existing = await tx.workLedgerEntry.findUnique({ where: { id: existing.id }, select: entrySelect });
+      if (!existing) throw Object.assign(new Error("Ledger entry not found."), { status: 404 });
 
       if (req.body.isPresent === false) {
         await tx.workLedgerEntryAudit.create({
@@ -621,14 +470,17 @@ export const updateWorkLedgerAttendanceEntry = async (req, res) => {
             previousData: serializableEntry(existing),
           },
         });
+        assertAttendanceDeadline(req.userRole, existing.date);
         await tx.workLedgerEntry.delete({ where: { id: existing.id } });
+        await refreshDraftAttendancePayroll(tx, existing.facultyId, existing.date);
         return { deleted: true, attendance: null };
       }
 
+      assertAttendanceDeadline(req.userRole, existing.date);
       const updated = await tx.workLedgerEntry.update({
         where: { id: existing.id },
         data: {
-          amount: Number(req.body.amount || 0),
+          ...(req.body.amount === undefined ? {} : { amount: Number(req.body.amount) }),
           remarks: req.body.remarks ?? null,
           ...actorMetadata(req),
         },
@@ -643,6 +495,7 @@ export const updateWorkLedgerAttendanceEntry = async (req, res) => {
           newData: serializableEntry(updated),
         },
       });
+      await refreshDraftAttendancePayroll(tx, existing.facultyId, existing.date);
       return { deleted: false, attendance: updated };
     });
 
@@ -663,7 +516,7 @@ export const updateWorkLedgerAttendanceEntry = async (req, res) => {
 export const deleteWorkLedgerEntry = async (req, res) => {
   try {
     if (!assertLedgerRole(req, res)) return null;
-    const existing = await prisma.workLedgerEntry.findUnique({
+    let existing = await prisma.workLedgerEntry.findUnique({
       where: { id: req.params.id },
       select: entrySelect,
     });
@@ -675,7 +528,9 @@ export const deleteWorkLedgerEntry = async (req, res) => {
     }
 
     await prisma.$transaction(async (tx) => {
-      if (!(await assertLedgerUnlocked(tx, res, [existing.date]))) return null;
+      await assertLedgerUnlocked(tx, req, existing.facultyId, [existing.date]);
+      existing = await tx.workLedgerEntry.findUnique({ where: { id: existing.id }, select: entrySelect });
+      if (!existing) throw Object.assign(new Error("Ledger entry not found."), { status: 404 });
       await tx.workLedgerEntryAudit.create({
         data: {
           entryId: existing.id,
@@ -684,7 +539,9 @@ export const deleteWorkLedgerEntry = async (req, res) => {
           previousData: serializableEntry(existing),
         },
       });
+      assertAttendanceDeadline(req.userRole, existing.date);
       await tx.workLedgerEntry.delete({ where: { id: existing.id } });
+      await refreshDraftAttendancePayroll(tx, existing.facultyId, existing.date);
     });
 
     if (res.headersSent) return null;
@@ -716,15 +573,17 @@ export const exportWorkLedgerCsv = async (req, res) => {
     if (!isAdmin(req)) {
       return res.status(403).json({ success: false, message: "Only admins can export work ledger data." });
     }
-    const { where } = buildWhere(req.query);
+    const { where, start, end } = buildWhere(req.query.week ? { week: req.query.week } : req.query);
     const entries = await prisma.workLedgerEntry.findMany({
       where,
       orderBy: [{ date: "asc" }, { shift: "asc" }, { createdAt: "asc" }],
       select: entrySelect,
     });
     const rows = [
-      ["Date", "Shift", "Faculty ID", "Faculty Name", "Status", "Amount", "Remarks", "Created By", "Updated By", "Updated By Role", "Created At", "Updated At"],
+      ["Week Start", "Week End", "Date", "Entry Type", "Faculty ID", "Faculty Name", "Status", "Amount", "Remarks", "Created By", "Updated By", "Updated By Role", "Created At", "Updated At"],
       ...entries.map((entry) => [
+        toDateKey(start),
+        toDateKey(end),
         toDateKey(entry.date),
         entry.shift,
         entry.faculty?.facultyId || "",
@@ -739,6 +598,8 @@ export const exportWorkLedgerCsv = async (req, res) => {
         entry.updatedAt?.toISOString?.() || "",
       ]),
     ];
+    for (const day of buildDayGrid(entries, start, end)) rows.push([toDateKey(start), toDateKey(end), day.date, "DAILY TOTAL", "", "", "", day.dailyTotal]);
+    rows.push([toDateKey(start), toDateKey(end), "TOTAL", "", "", "", "", entries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0)]);
     const csv = rows.map((row) => row.map(safeCsvCell).join(",")).join("\n");
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="faculty-work-ledger-${Date.now()}.csv"`);
@@ -746,4 +607,13 @@ export const exportWorkLedgerCsv = async (req, res) => {
   } catch (error) {
     return handleLedgerError(res, error);
   }
+};
+
+export const exportWorkLedgerReport = async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ success: false, message: "Only admins can export work ledger data." });
+    const { where, start, end } = buildWhere({ week: req.query.week || toDateKey(getFridayWeekStart()) });
+    const entries = (await prisma.workLedgerEntry.findMany({ where, select: entrySelect, orderBy: [{ date: "asc" }, { createdAt: "asc" }, { id: "asc" }] })).map(toEntryDto);
+    return res.json({ success: true, weekStart: toDateKey(start), weekEnd: toDateKey(end), entries, days: buildDayGrid(entries, start, end), summary: buildSummary(entries, start, end) });
+  } catch (error) { return handleLedgerError(res, error); }
 };

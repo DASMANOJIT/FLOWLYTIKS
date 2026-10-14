@@ -50,12 +50,9 @@ const activeSessionWhere = (role, userId) => ({
 const makeFallbackKey = (role, userId) => `${role}:${String(userId)}`;
 
 const shouldUseFallbackSessionStore = (error) => {
-  const message = String(error?.message || "");
-  return (
-    error?.name === "PrismaClientInitializationError" ||
-    /does not exist|The table .* does not exist|Unknown argument/i.test(message) ||
-    /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|Can't reach database server/i.test(message)
-  );
+  // Only support the legacy development setup without a session table.
+  // Connection failures must propagate, not impersonate an expired session.
+  return error?.code === "P2021" && /UserSession/i.test(String(error?.meta?.table || error?.message || ""));
 };
 
 const pruneFallbackSessions = (key) => {
@@ -353,9 +350,9 @@ export const removeSession = async (role, userId, tokenId, reason = "LOGOUT") =>
   }
 };
 
-export const clearUserSessions = async (role, userId, reason = "PASSWORD_CHANGED") => {
+export const clearUserSessions = async (role, userId, reason = "PASSWORD_CHANGED", db = prisma) => {
   try {
-    return await prisma.userSession.updateMany({
+    return await db.userSession.updateMany({
       where: {
         role,
         userId: normalizeSessionUserId(userId),
@@ -386,13 +383,13 @@ export const isSessionActive = async (role, userId, tokenId) => {
   );
 };
 
-export const purgeExpiredSessions = async () => {
+export const purgeExpiredSessions = async (db = prisma) => {
   const now = nowDate();
   const idleCutoff = new Date(Date.now() - getSessionIdleTimeoutMs());
   const oldRevokedCutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
 
   try {
-    await prisma.userSession.updateMany({
+    await db.userSession.updateMany({
       where: {
         isActive: true,
         revokedAt: null,
@@ -405,7 +402,7 @@ export const purgeExpiredSessions = async () => {
       },
     });
 
-    await prisma.userSession.deleteMany({
+    await db.userSession.deleteMany({
       where: {
         revokedAt: {
           lt: oldRevokedCutoff,

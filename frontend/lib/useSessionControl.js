@@ -2,8 +2,7 @@
 
 import { useEffect } from "react";
 import {
-  clearAuthSession,
-  clearFacultyAuthSession,
+  clearAuthSessionForUnauthorizedResponse,
   getAuthRole,
   getAuthToken,
   getFacultyAuthToken,
@@ -17,14 +16,6 @@ const resolveToken = (role) => {
   return getAuthToken();
 };
 
-const clearRoleSession = (role) => {
-  if (role === "faculty") {
-    clearFacultyAuthSession();
-    return;
-  }
-  clearAuthSession();
-};
-
 export default function useSessionControl(role) {
   useEffect(() => {
     const expectedRole = String(role || "").trim();
@@ -32,24 +23,28 @@ export default function useSessionControl(role) {
     const currentRole = getAuthRole();
 
     if (!token || (expectedRole && currentRole && currentRole !== expectedRole)) {
-      clearRoleSession(expectedRole);
       window.location.href = LOGIN_ROUTE;
       return undefined;
     }
 
+    const controller = new AbortController();
+    let pending = false;
     const sendHeartbeat = () => {
+      if (pending || getAuthToken() !== token) return;
+      pending = true;
       fetch("/api/auth/heartbeat", {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",
+        signal: controller.signal,
       })
         .then((res) => {
-          if (res.status === 401 || res.status === 403) {
-            clearRoleSession(expectedRole);
+          if (!controller.signal.aborted && clearAuthSessionForUnauthorizedResponse(res.status, token, expectedRole)) {
             window.location.href = LOGIN_ROUTE;
           }
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => { pending = false; });
     };
 
     sendHeartbeat();
@@ -57,6 +52,7 @@ export default function useSessionControl(role) {
 
     return () => {
       window.clearInterval(intervalId);
+      controller.abort();
     };
   }, [role]);
 }

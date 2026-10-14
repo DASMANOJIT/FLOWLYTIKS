@@ -42,6 +42,7 @@ model Student {
   payments           Payment[]
   gatewayOrders      PaymentGatewayOrder[]
   feeReminderLogs    FeeReminderLog[]
+  staffFollowUps     StaffStudentFollowUp[]
 
   @@index([adminId])
   @@index([class])
@@ -102,6 +103,48 @@ model EmailOtp {
   @@unique([email, purpose], name: "EmailOtp_email_purpose_key")
 }
 
+model Staff {
+  id               String   @id @default(cuid())
+  name             String
+  email            String   @unique
+  passwordHash     String
+  role             String   @default("STAFF")
+  isActive         Boolean  @default(true)
+  verifiedAt       DateTime
+  createdByAdminId  Int
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  studentFollowUps StaffStudentFollowUp[]
+}
+
+model StaffStudentFollowUp {
+  id        String   @id @default(cuid())
+  studentId Int
+  staffId   String
+  note      String
+  createdAt DateTime @default(now())
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  staff     Staff    @relation(fields: [staffId], references: [id], onDelete: Restrict)
+
+  @@index([studentId, createdAt])
+  @@index([staffId])
+}
+
+model StaffCreationRequest {
+  id               String    @id @default(cuid())
+  email            String    @unique
+  name             String
+  passwordHash     String
+  adminId          Int
+  otpHash          String
+  attempts         Int       @default(0)
+  expiresAt        DateTime
+  lastSentAt       DateTime  @default(now())
+  consumedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+
 model AuthRateLimitEvent {
   id        String   @id @default(cuid())
   namespace String
@@ -138,6 +181,7 @@ model UserSession {
 }
 
 model Faculty {
+  extraIncentiveOperationLock FacultyExtraIncentiveOperationLock?
   id                     String                         @id @default(cuid())
   adminId                Int?
   facultyId              String                         @unique
@@ -170,12 +214,49 @@ model Faculty {
   paymentRecords         FacultyPaymentRecord[]
   extraIncentiveEntries  FacultyExtraIncentiveEntry[]
   extraIncentivePayments FacultyExtraIncentivePayment[]
+  onlineClasses          FacultyOnlineClass[]
+  googleConnection       FacultyGoogleConnection?
+  googleOAuthStates      FacultyGoogleOAuthState[]
   notifications          Notification[]
   profilePictures        ProfilePicture[]
 
   @@index([adminId])
   @@index([status])
   @@index([createdAt])
+}
+
+model FacultyGoogleConnection {
+  facultyId             String @id
+  googleSubject         String?
+  identityVerifiedAt    DateTime?
+  accessTokenEncrypted  String?
+  refreshTokenEncrypted String?
+  meetBackoffUntil       DateTime?
+  expiresAt             DateTime?
+  scope                 String
+  status                String @default("CONNECTED")
+  connectedAt           DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  faculty               Faculty @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+}
+
+model FacultyGoogleOAuthState {
+  id                    String @id @default(cuid())
+  facultyId             String
+  launchTokenHash       String @unique
+  stateHash             String? @unique
+  browserNonceHash      String?
+  oidcNonceHash         String?
+  codeVerifierEncrypted String?
+  expiresAt             DateTime
+  launchedAt            DateTime?
+  consumedAt            DateTime?
+  cancelledAt           DateTime?
+  createdAt             DateTime @default(now())
+  faculty               Faculty @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+
+  @@index([facultyId])
+  @@index([expiresAt])
 }
 
 model WorkLedgerEntry {
@@ -564,16 +645,24 @@ model Notification {
 }
 
 model ExtraIncentiveType {
-  id        String                       @id @default(cuid())
-  name      String
-  rate      Decimal                      @db.Decimal(12, 2)
-  isActive  Boolean                      @default(true)
-  createdAt DateTime                     @default(now())
-  updatedAt DateTime                     @updatedAt
-  entries   FacultyExtraIncentiveEntry[]
+  id            String                       @id @default(cuid())
+  name          String
+  rate          Decimal                      @db.Decimal(12, 2)
+  isActive      Boolean                      @default(true)
+  createdAt     DateTime                     @default(now())
+  updatedAt     DateTime                     @updatedAt
+  entries       FacultyExtraIncentiveEntry[]
+  onlineClasses FacultyOnlineClass[]
 
   @@index([isActive])
   @@index([createdAt])
+}
+
+model FacultyExtraIncentiveOperationLock {
+  facultyId String @id
+  leaseId String
+  expiresAt DateTime
+  faculty Faculty @relation(fields: [facultyId], references: [id], onDelete: Cascade)
 }
 
 model FacultyExtraIncentiveEntry {
@@ -593,12 +682,98 @@ model FacultyExtraIncentiveEntry {
   faculty         Faculty                       @relation(fields: [facultyId], references: [id], onDelete: Restrict)
   incentiveType   ExtraIncentiveType            @relation(fields: [incentiveTypeId], references: [id], onDelete: Restrict)
   paymentRecord   FacultyExtraIncentivePayment? @relation(fields: [paymentRecordId], references: [id], onDelete: SetNull)
+  onlineClass     FacultyOnlineClass?
 
   @@index([facultyId])
   @@index([incentiveTypeId])
   @@index([status])
   @@index([paymentRecordId])
   @@index([createdAt])
+}
+
+model FacultyOnlineClass {
+  id               String                      @id @default(cuid())
+  facultyId        String
+  incentiveTypeId  String
+  requestId        String
+  batchName        String
+  className        String
+  directoryGradeId String?
+  topic            String
+  message          String?
+  startsAt         DateTime
+  endsAt           DateTime
+  meetUrl          String
+  status           String                      @default("SCHEDULED")
+  completedAt      DateTime?
+  cancelledAt      DateTime?
+  deletedAt        DateTime?
+  incentiveEntryId String?                     @unique
+  trackingEnabled  Boolean                     @default(false)
+  conferenceName   String?                     @unique
+  conferenceSpace  String?
+  actualStartAt    DateTime?
+  actualEndAt      DateTime?
+  conferenceExpiresAt DateTime?
+  verificationStatus String                    @default("LEGACY")
+  verificationError String?
+  teacherGoogleUserId String?
+  attendanceEvidence Json?
+  attendanceCompleteAt DateTime?
+  lastCheckedAt    DateTime?
+  nextCheckAt      DateTime?
+  pollAttempts     Int                         @default(0)
+  pollLeaseToken   String?
+  pollLeaseUntil   DateTime?
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
+  faculty          Faculty                     @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+  incentiveType    ExtraIncentiveType          @relation(fields: [incentiveTypeId], references: [id], onDelete: Restrict)
+  incentiveEntry   FacultyExtraIncentiveEntry? @relation(fields: [incentiveEntryId], references: [id], onDelete: SetNull)
+  directoryGrade   OnlineClassGrade?           @relation(fields: [directoryGradeId], references: [id], onDelete: Restrict)
+  batches          FacultyOnlineClassBatch[]
+
+  @@unique([facultyId, requestId])
+  @@index([facultyId, startsAt, id])
+  @@index([incentiveTypeId])
+  @@index([directoryGradeId])
+  @@index([trackingEnabled, nextCheckAt])
+}
+
+model OnlineClassBatch {
+  id             String             @id @default(cuid())
+  name           String
+  normalizedName String             @unique
+  isActive       Boolean            @default(true)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  grades         OnlineClassGrade[]
+  sessions       FacultyOnlineClassBatch[]
+}
+
+model FacultyOnlineClassBatch {
+  classId String
+  batchId String
+  nameSnapshot String
+  onlineClass FacultyOnlineClass @relation(fields: [classId], references: [id], onDelete: Cascade)
+  batch OnlineClassBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+
+  @@id([classId, batchId])
+  @@index([batchId])
+}
+
+model OnlineClassGrade {
+  id             String               @id @default(cuid())
+  batchId        String
+  name           String
+  normalizedName String
+  isActive       Boolean              @default(true)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  batch          OnlineClassBatch     @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  onlineClasses  FacultyOnlineClass[]
+
+  @@unique([batchId, normalizedName])
 }
 
 model FacultyExtraIncentivePayment {
@@ -829,6 +1004,7 @@ enum FacultyStatus {
 }
 
 enum WorkLedgerShift {
+  DAILY
   MORNING
   AFTERNOON
   EVENING

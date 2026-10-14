@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Bell, Bot, CalendarDays, ChevronLeft, ChevronRight, Gauge, Gift, LogOut, Menu, UserRound, WalletCards, X } from "lucide-react";
+import { Bell, Bot, CalendarDays, ChevronLeft, ChevronRight, Gauge, Gift, LogOut, Menu, UserRound, Video, WalletCards, X } from "lucide-react";
 import { clearFacultyAuthSession, getFacultyAuthToken } from "../../lib/authStorage.js";
 import useSessionControl from "../../lib/useSessionControl.js";
 
@@ -14,39 +14,42 @@ const navItems = [
   { href: "/faculty/attendance", label: "Attendance", icon: CalendarDays },
   { href: "/faculty/payroll", label: "Payroll", icon: WalletCards },
   { href: "/faculty/extra-incentives", label: "Extra Incentives", icon: Gift },
+  { href: "/faculty/online-classes", label: "Online Classes", icon: Video },
   { href: "/faculty/notifications", label: "Notifications", icon: Bell },
   { href: "/faculty/assistant", label: "Assistant", icon: Bot },
 ];
 
 const MAIN_LOGIN_ROUTE = "/login";
+const subscribeSidebar = (notify: () => void) => {
+  window.addEventListener("storage", notify);
+  return () => window.removeEventListener("storage", notify);
+};
+const readCollapsed = () => {
+  try { return window.localStorage.getItem("facultySidebarCollapsed") === "1"; }
+  catch { return false; }
+};
+const expandedOnServer = () => false;
 
 export default function FacultyPortalLayout({
   title,
   subtitle,
+  headerAction,
   children,
 }: {
   title: string;
   subtitle?: string;
+  headerAction?: React.ReactNode;
   children: React.ReactNode;
 }) {
   useSessionControl("faculty");
   const pathname = usePathname();
   const router = useRouter();
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem("facultySidebarCollapsed");
-      if (stored === "1") setCollapsed(true);
-    } catch {
-      // Keep expanded when storage is unavailable.
-    }
-  }, []);
-
-  useEffect(() => {
-    setMobileMenuOpen(false);
-  }, [pathname]);
+  const storedCollapsed = useSyncExternalStore(subscribeSidebar, readCollapsed, expandedOnServer);
+  const [collapsedOverride, setCollapsed] = useState<boolean | null>(null);
+  const collapsed = collapsedOverride ?? storedCollapsed;
+  const [mobileMenuPath, setMobileMenuPath] = useState<string | null>(null);
+  const mobileMenuOpen = mobileMenuPath === pathname;
+  if (mobileMenuPath !== null && mobileMenuPath !== pathname) setMobileMenuPath(null);
 
   useEffect(() => {
     if (!mobileMenuOpen) {
@@ -55,7 +58,7 @@ export default function FacultyPortalLayout({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setMobileMenuOpen(false);
+        setMobileMenuPath(null);
       }
     };
 
@@ -77,15 +80,13 @@ export default function FacultyPortalLayout({
   }, [mobileMenuOpen]);
 
   const toggleSidebar = () => {
-    setCollapsed((current) => {
-      const next = !current;
-      try {
-        window.localStorage.setItem("facultySidebarCollapsed", next ? "1" : "0");
-      } catch {
-        // Ignore storage failures; the visual toggle still works.
-      }
-      return next;
-    });
+    const next = !collapsed;
+    setCollapsed(next);
+    try {
+      window.localStorage.setItem("facultySidebarCollapsed", next ? "1" : "0");
+    } catch {
+      // Ignore storage failures; the visual toggle still works.
+    }
   };
 
   const logout = () => {
@@ -96,7 +97,7 @@ export default function FacultyPortalLayout({
         headers: { Authorization: `Bearer ${token}` },
       }).catch(() => {});
     }
-    setMobileMenuOpen(false);
+    setMobileMenuPath(null);
     clearFacultyAuthSession();
     router.push(MAIN_LOGIN_ROUTE);
   };
@@ -128,7 +129,7 @@ export default function FacultyPortalLayout({
         <button
           type="button"
           className="faculty-mobile-menu-toggle"
-          onClick={() => setMobileMenuOpen((current) => !current)}
+          onClick={() => setMobileMenuPath(mobileMenuOpen ? null : pathname)}
           aria-label={mobileMenuOpen ? "Close faculty menu" : "Open faculty menu"}
           aria-expanded={mobileMenuOpen}
         >
@@ -139,7 +140,7 @@ export default function FacultyPortalLayout({
         type="button"
         className="faculty-mobile-drawer-overlay"
         aria-label="Close faculty menu"
-        onClick={() => setMobileMenuOpen(false)}
+        onClick={() => setMobileMenuPath(null)}
       />
       <aside className="faculty-mobile-drawer" aria-hidden={!mobileMenuOpen}>
         <div className="faculty-mobile-drawer-header">
@@ -155,7 +156,7 @@ export default function FacultyPortalLayout({
           <button
             type="button"
             className="faculty-mobile-menu-toggle"
-            onClick={() => setMobileMenuOpen(false)}
+            onClick={() => setMobileMenuPath(null)}
             aria-label="Close faculty menu"
           >
             <X size={22} />
@@ -200,6 +201,7 @@ export default function FacultyPortalLayout({
                 <h1>{title}</h1>
                 {subtitle ? <p>{subtitle}</p> : null}
               </div>
+              {headerAction}
             </header>
             {children}
           </div>

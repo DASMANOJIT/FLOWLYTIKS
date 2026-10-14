@@ -41,8 +41,10 @@ import { facultySelfBankUpdateSchema } from "../validation/facultyBankSchemas.js
 import { updateMyBankAccount } from "../controllers/facultypayoutbankcontrollers.js";
 import { auditAction } from "../services/auditLogService.js";
 import { facultyChatbotMessage } from "../controllers/facultychatbotcontroller.js";
+import facultyGoogleRoutes from "./facultygoogleroute.js";
 
 const router = express.Router();
+router.use("/google", facultyGoogleRoutes);
 
 router.get("/", protect, adminOnly, validateQuery(facultyListQuerySchema), getFaculty);
 router.get("/dashboard", protect, getFacultyDashboard);

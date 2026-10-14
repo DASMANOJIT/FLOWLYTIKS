@@ -88,6 +88,14 @@ export const getAuthRole = () => {
   return sessionStorageRef?.getItem(AUTH_ROLE_KEY)?.trim() || "";
 };
 
+export const clearAuthSessionForUnauthorizedResponse = (status, requestToken, expectedRole = "") => {
+  // Ignore permission failures and responses belonging to a previous login.
+  if (status !== 401 || !requestToken || getAuthToken() !== requestToken) return false;
+  if (expectedRole && getAuthRole() !== expectedRole) return false;
+  clearAuthSession();
+  return true;
+};
+
 export const storeFacultyAuthSession = ({ token, name }) => {
   storeAuthSession({ token, name, role: "faculty" });
 };

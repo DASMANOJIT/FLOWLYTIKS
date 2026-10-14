@@ -5,6 +5,7 @@ import {
   touchSessionActivity,
 } from "../utils/sessionStore.js";
 import prisma from "../prisma/client.js";
+import { withDatabaseRecovery } from "../utils/databaseRecovery.js";
 
 const authJson = (res, status, message) =>
   res.status(status).json({
@@ -34,21 +35,35 @@ export const protect = async (req, res, next) => {
 
     // Fetch user from DB
     let user = null;
-    if (decoded.role === "admin") {
-      user = await prisma.admin.findUnique({
+    if (decoded.role === "staff") {
+      // Staff can use only its own APIs and the shared session lifecycle endpoints.
+      const lifecycle = ["/api/auth/heartbeat", "/api/auth/logout", "/api/auth/session/close", "/api/auth/tab-close"];
+      const path = req.originalUrl.split("?")[0].replace(/\/$/, "");
+      if (!path.startsWith("/api/staff/") && !lifecycle.includes(path)) {
+        return authJson(res, 403, "You do not have permission to perform this action.");
+      }
+      user = await withDatabaseRecovery(() => prisma.staff.findUnique({
+        where: { id: decoded.id },
+        select: { id: true, name: true, email: true, role: true, isActive: true, verifiedAt: true, createdAt: true },
+      }), "auth.staff");
+      if (user && (!user.isActive || !user.verifiedAt || user.role !== "STAFF")) {
+        return authJson(res, 403, "Staff account is inactive. Please contact admin.");
+      }
+    } else if (decoded.role === "admin") {
+      user = await withDatabaseRecovery(() => prisma.admin.findUnique({
         where: { id: decoded.id },
         select: { id: true, name: true, email: true },
-      });
+      }), "auth.admin");
     } else if (decoded.role === "student") {
-      user = await prisma.student.findUnique({
+      user = await withDatabaseRecovery(() => prisma.student.findUnique({
         where: { id: decoded.id },
         select: { id: true, name: true, email: true, phone: true },
-      });
+      }), "auth.student");
     } else if (decoded.role === "faculty") {
-      user = await prisma.faculty.findUnique({
+      user = await withDatabaseRecovery(() => prisma.faculty.findUnique({
         where: { id: decoded.id },
         select: { id: true, fullName: true, email: true, phone: true, facultyId: true, status: true },
-      });
+      }), "auth.faculty");
     }
 
     if (!user) {
@@ -66,7 +81,7 @@ export const protect = async (req, res, next) => {
       return authJson(res, 401, "Session expired. Please login again.");
     }
 
-    const session = await getSessionState(decoded.role, decoded.id, decoded.jti);
+    const session = await withDatabaseRecovery(() => getSessionState(decoded.role, decoded.id, decoded.jti), "auth.session");
     const active =
       session &&
       session.matchesUser &&
@@ -80,7 +95,7 @@ export const protect = async (req, res, next) => {
       }
       return authJson(res, 401, "Session expired. Please login again.");
     }
-    await touchSessionActivity(decoded.role, decoded.id, decoded.jti);
+    await withDatabaseRecovery(() => touchSessionActivity(decoded.role, decoded.id, decoded.jti), "auth.activity");
 
     // Attach user to request
     req.user = user;
@@ -90,8 +105,13 @@ export const protect = async (req, res, next) => {
 
     next();
   } catch (error) {
-    console.error("Auth error:", error?.message || error);
-    return authJson(res, 401, "Session expired. Please login again.");
+    console.error("Auth error:", { name: error?.name, code: error?.code });
+    const tokenError = ["TokenExpiredError", "JsonWebTokenError", "NotBeforeError"].includes(error.name);
+    return res.status(tokenError ? 401 : 503).json({
+        success: false,
+        code: tokenError ? (req.originalUrl?.startsWith("/api/staff/") ? "ADMIN_AUTH_INVALID" : "AUTH_INVALID") : "AUTH_SERVICE_UNAVAILABLE",
+        message: tokenError ? "Session expired. Please login again." : "Authentication service unavailable. Please try again.",
+      });
   }
 };
 

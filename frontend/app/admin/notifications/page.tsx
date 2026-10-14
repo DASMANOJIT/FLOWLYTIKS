@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import BackToDashboard from "../../components/admin/BackToDashboard";
+import { RefreshCw } from "lucide-react";
 import { apiCall } from "../../../lib/api.js";
 import { getAuthToken } from "../../../lib/authStorage.js";
 import "../faculty/faculty.css";
@@ -81,7 +81,7 @@ export default function AdminNotificationsPage() {
       <div className="faculty-shell">
         <header className="faculty-header">
           <div className="faculty-title-block">
-            <Link href="/admin" className="faculty-back-link"><ArrowLeft size={18} /> Admin Dashboard</Link>
+            <BackToDashboard />
             <h1>Notifications</h1>
             <p>Email and WhatsApp alerts for payroll, payout, and ledger events.</p>
           </div>

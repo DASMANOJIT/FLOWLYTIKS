@@ -1,4 +1,5 @@
 "use client";
+import BackToDashboard from "../components/admin/BackToDashboard";
 
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
@@ -9,7 +10,7 @@ import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import { MotionButton, MotionCard, MotionSection, fadeUpItem, staggerContainer } from "../components/motion/primitives.jsx";
 import WhatsAppReminderButton from "../components/reminders/WhatsAppReminderButton.jsx";
 import {
-  clearAuthSession,
+  clearAuthSessionForUnauthorizedResponse,
   getAuthName,
   getAuthRole,
   getAuthToken,
@@ -123,7 +124,6 @@ export default function StudentsPage() {
       return;
     }
     if (role && role !== "admin") {
-      clearAuthSession();
       window.location.href = "/login";
       return;
     }
@@ -162,8 +162,7 @@ export default function StudentsPage() {
       .then(async (res) => {
         const data = await res.json();
         if (!res.ok) {
-          if (res.status === 401 || res.status === 403) {
-            clearAuthSession();
+          if (clearAuthSessionForUnauthorizedResponse(res.status, token, "admin")) {
             window.location.href = "/login";
             return;
           }
@@ -280,7 +279,6 @@ export default function StudentsPage() {
       return;
     }
     if (role && role !== "admin") {
-      clearAuthSession();
       window.location.href = "/login";
       return;
     }
@@ -294,8 +292,7 @@ export default function StudentsPage() {
       });
 
       if (!res.ok) {
-        if (res.status === 401 || res.status === 403) {
-          clearAuthSession();
+        if (clearAuthSessionForUnauthorizedResponse(res.status, token, "admin")) {
           window.location.href = "/login";
           return;
         }
@@ -371,9 +368,7 @@ export default function StudentsPage() {
         </MotionCard>
       </MotionSection>
 
-      <Link href="/admin" className="back-btn">
-        ← Back to Dashboard
-      </Link>
+      <BackToDashboard />
 
       {/* SEARCH */}
       <div className="students-search-box">

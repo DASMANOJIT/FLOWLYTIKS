@@ -96,7 +96,6 @@ export const validateEnv = () => {
   assertOptionalHttpUrls("BACKEND_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("ALLOWED_ORIGINS", { allowLocal: true });
   assertOptionalHttpUrls("CORS_ORIGIN", { allowLocal: true });
-  assertOptionalHttpUrls("PHONEPE_BASE_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("WHATSAPP_GRAPH_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("CASHFREE_RETURN_URL", { allowLocal: !isProduction });
   assertOptionalHttpUrls("CASHFREE_PAYOUT_API_BASE_URL", { allowLocal: !isProduction });

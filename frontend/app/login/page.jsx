@@ -1,11 +1,11 @@
 "use client";
 import { useEffect, useState } from "react";
+import Image from "next/image";
+import { Eye, EyeOff, Laptop, Code2, Cpu, Terminal } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import "./login.css";
-import Fall from "../animation/fallingword.jsx";
 import { MotionButton } from "../components/motion/primitives.jsx";
 import PremiumLoader from "../components/ui/PremiumLoader.jsx";
-import CompanyLink from "../components/company/CompanyLink.jsx";
 import { getApiBaseUrl, readApiResponse } from "../../lib/api.js";
 import {
   clearLegacyAuthStorage,
@@ -18,11 +18,19 @@ import {
   SCHOOL_OTHER_VALUE,
 } from "../../lib/studentOptions.js";
 import { isValidWhatsAppNumber } from "../../lib/whatsapp.js";
+import StaffPasswordReset from "./StaffPasswordReset";
+import staffResetStyles from "./StaffPasswordReset.module.css";
 
 export default function Login() {
   const OTP_RESEND_COOLDOWN_SECONDS = 15;
 
   const [selectedRole, setSelectedRole] = useState("student");
+  const [showStaffPassword, setShowStaffPassword] = useState(false);
+  const [staffEmail, setStaffEmail] = useState("");
+  const [staffPassword, setStaffPassword] = useState("");
+  const [staffLoading, setStaffLoading] = useState(false);
+  const [staffError, setStaffError] = useState("");
+  const [staffSuccess, setStaffSuccess] = useState("");
   const [activeForm, setActiveForm] = useState("login");
   const [forgotOtpSent, setForgotOtpSent] = useState(false);
   const [forgotOtpInput, setForgotOtpInput] = useState("");
@@ -79,6 +87,24 @@ export default function Login() {
   const [twoFaLoading, setTwoFaLoading] = useState(false);
 
   const API = getApiBaseUrl();
+
+  const handleStaffLogin = async (event) => {
+    event.preventDefault();
+    if (staffLoading) return;
+    setStaffLoading(true);
+    setStaffError("");
+    try {
+      const response = await fetch(`${API}/api/staff/login`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: staffEmail, password: staffPassword }),
+      });
+      const { ok, data, error } = await readApiResponse(response, "Staff login failed. Please try again.");
+      if (!ok || !data.token || data.role !== "staff") throw new Error(error);
+      storeAuthSession({ token: data.token, name: data.name, role: "staff" });
+      window.location.href = "/staff/dashboard";
+    } catch (error) { setStaffError(error.message || "Staff login failed."); }
+    finally { setStaffLoading(false); }
+  };
 
   const isStrongPassword = (password) =>
     /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/.test(
@@ -727,55 +753,53 @@ export default function Login() {
 
   return (
     <div className="login-container">
-      <Fall />
-
-      <motion.header
-        className="login-header"
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-      >
-        <h1>
-          WELCOME TO THE <br />{" "}
-          <CompanyLink type="institute">
-            SUBHO&apos;S COMPUTER INSTITUTE
-          </CompanyLink>
-        </h1>
-        <p className="login-subtitle">
-          Secure student access with a modern experience.
-        </p>
-      </motion.header>
-
+      <div className="login-code-art login-code-art--outer" aria-hidden="true">
+        <span>&lt;HTML&gt;</span><span>CLASS</span><span>DEF</span><span>010101</span>
+        <span>&lt;/&gt;</span><span>STATIC</span>
+        <Laptop /><Code2 /><Cpu /><Terminal />
+      </div>
       <motion.div
         className="auth-shell"
         initial={{ opacity: 0, y: 24, scale: 0.98 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1], delay: 0.08 }}
       >
+        <div className="auth-form-panel">
+        <div className="login-brand">Flowlytiks</div>
         <div className={`card-wrapper ${selectedRole === "student" ? activeForm : activeForm === "forgot" ? "forgot" : "login"} role-${selectedRole}`}>
-          <div className="auth-switch">
-            <MotionButton
-              type="button"
-              className={`switch-btn ${selectedRole === "admin" ? "active" : ""}`}
-              onClick={() => selectRole("admin")}
-            >
-              Administrator Login
-            </MotionButton>
-            <MotionButton
-              type="button"
-              className={`switch-btn ${selectedRole === "faculty" ? "active" : ""}`}
-              onClick={() => selectRole("faculty")}
-            >
-              Faculty Login
-            </MotionButton>
-            <MotionButton
-              type="button"
-              className={`switch-btn ${selectedRole === "student" ? "active" : ""}`}
-              onClick={() => selectRole("student")}
-            >
-              Student Login
-            </MotionButton>
+          <div className="auth-switch auth-switch--roles" aria-label="Choose your role">
+            {[
+              { role: "admin", label: "Admin", image: "admin-icon.png" },
+              { role: "student", label: "Students", image: "student-icon.png" },
+              { role: "faculty", label: "Faculty", image: "teacher-icon.png" },
+              { role: "staff", label: "Staff", image: "staff-icon.png" },
+            ].map(({ role, label, image }) => (
+              <MotionButton key={role} type="button" aria-pressed={selectedRole === role}
+                className={`switch-btn role-option ${selectedRole === role ? "active" : ""}`}
+                onClick={() => selectRole(role)}>
+                <Image src={`/${image}`} alt="" width={56} height={56} />
+                <span>{label}</span>
+              </MotionButton>
+            ))}
           </div>
+
+          {selectedRole === "staff" && activeForm === "forgot" && <StaffPasswordReset initialEmail={staffEmail} onBack={() => setActiveForm("login")} onComplete={(email, message) => { setStaffEmail(email); setStaffPassword(""); setStaffError(""); setStaffSuccess(message); setActiveForm("login"); }} />}
+          {selectedRole === "staff" && activeForm !== "forgot" ? (
+            <form className="card-form login-side" onSubmit={handleStaffLogin}>
+              <h2>Sign In</h2>
+              <input name="staffEmail" type="email" required aria-label="Staff email" placeholder="Email" className="form-input" autoComplete="email" value={staffEmail} onChange={(event) => setStaffEmail(event.target.value)} />
+              <div className="password-field">
+                <input name="staffPassword" required type={showStaffPassword ? "text" : "password"} aria-label="Staff password" placeholder="Password" className="form-input" autoComplete="current-password" value={staffPassword} onChange={(event) => setStaffPassword(event.target.value)} />
+                <button type="button" className="eye-btn" onClick={() => setShowStaffPassword((value) => !value)} aria-label={showStaffPassword ? "Hide password" : "Show password"}>
+                  {showStaffPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              <MotionButton className="form-btn" disabled={staffLoading}>{staffLoading ? renderLoadingLabel("Logging In") : "Sign In"}</MotionButton>
+              {staffError && <p className="staff-login-notice" role="alert">{staffError}</p>}
+              {staffSuccess && <p className="staff-login-notice" role="status">{staffSuccess}</p>}
+              <button type="button" className={staffResetStyles.link} disabled={staffLoading} onClick={() => { setStaffSuccess(""); setActiveForm("forgot"); }}>Forgot password?</button>
+            </form>
+          ) : null}
 
           {selectedRole === "student" ? (
             <div className="auth-switch auth-switch--student">
@@ -784,7 +808,7 @@ export default function Login() {
                 className={`switch-btn ${activeForm === "login" ? "active" : ""}`}
                 onClick={() => setActiveForm("login")}
               >
-                Login
+                Sign In
               </MotionButton>
               <MotionButton
                 type="button"
@@ -807,7 +831,7 @@ export default function Login() {
             <form className="card-form login-side" onSubmit={verifyRoleReset}>
               <h2>Reset Admin Password</h2>
               <input
-                placeholder="Admin Email"
+                aria-label="Admin Email" placeholder="Admin Email"
                 className="form-input"
                 value={roleResetForm.email}
                 inputMode="email"
@@ -820,7 +844,7 @@ export default function Login() {
               {roleResetOtpSent ? (
                 <>
                   <input
-                    placeholder="Enter OTP"
+                    aria-label="Enter OTP" placeholder="Enter OTP"
                     className="form-input"
                     value={roleResetForm.otp}
                     inputMode="numeric"
@@ -830,7 +854,7 @@ export default function Login() {
                   />
                   <input
                     type="password"
-                    placeholder="New Password"
+                    aria-label="New Password" placeholder="New Password"
                     className="form-input"
                     value={roleResetForm.newPassword}
                     autoComplete="new-password"
@@ -838,7 +862,7 @@ export default function Login() {
                   />
                   <input
                     type="password"
-                    placeholder="Confirm New Password"
+                    aria-label="Confirm New Password" placeholder="Confirm New Password"
                     className="form-input"
                     value={roleResetForm.confirmPassword}
                     autoComplete="new-password"
@@ -849,16 +873,16 @@ export default function Login() {
                   </MotionButton>
                 </>
               ) : null}
-              <p className="switch-link soft" onClick={() => setActiveForm("login")}>Back to Administrator Login</p>
+              <button type="button" className="switch-link soft" onClick={() => setActiveForm("login")}>Back to Administrator Login</button>
             </form>
           ) : null}
 
           {selectedRole === "admin" && activeForm !== "forgot" ? (
             <form className="card-form login-side" onSubmit={handleAdminLogin}>
-              <h2>Administrator Login</h2>
+              <h2>Sign In</h2>
               <input
                 name="adminEmail"
-                placeholder="Email"
+                aria-label="Email" placeholder="Email"
                 className="form-input"
                 value={adminEmail}
                 inputMode="email"
@@ -869,7 +893,7 @@ export default function Login() {
                 <input
                   name="adminPassword"
                   type={showAdminPassword ? "text" : "password"}
-                  placeholder="Password"
+                  aria-label="Password" placeholder="Password"
                   className="form-input"
                   value={adminPassword}
                   autoComplete="current-password"
@@ -885,9 +909,9 @@ export default function Login() {
                 </button>
               </div>
               <MotionButton className="form-btn" disabled={adminLoginLoading}>
-                {adminLoginLoading ? renderLoadingLabel("Logging In") : "Login as Administrator"}
+                {adminLoginLoading ? renderLoadingLabel("Logging In") : "Sign In"}
               </MotionButton>
-              <p className="switch-link soft" onClick={() => setActiveForm("forgot")}>Reset Password</p>
+              <button type="button" className="switch-link soft" onClick={() => setActiveForm("forgot")}>Reset Password</button>
             </form>
           ) : null}
 
@@ -895,7 +919,7 @@ export default function Login() {
             <form className="card-form login-side" onSubmit={verifyRoleReset}>
               <h2>Reset Faculty Password</h2>
               <input
-                placeholder="Faculty Email"
+                aria-label="Faculty Email" placeholder="Faculty Email"
                 className="form-input"
                 value={roleResetForm.email}
                 inputMode="email"
@@ -908,7 +932,7 @@ export default function Login() {
               {roleResetOtpSent ? (
                 <>
                   <input
-                    placeholder="Enter OTP"
+                    aria-label="Enter OTP" placeholder="Enter OTP"
                     className="form-input"
                     value={roleResetForm.otp}
                     inputMode="numeric"
@@ -918,7 +942,7 @@ export default function Login() {
                   />
                   <input
                     type="password"
-                    placeholder="New Password"
+                    aria-label="New Password" placeholder="New Password"
                     className="form-input"
                     value={roleResetForm.newPassword}
                     autoComplete="new-password"
@@ -926,7 +950,7 @@ export default function Login() {
                   />
                   <input
                     type="password"
-                    placeholder="Confirm New Password"
+                    aria-label="Confirm New Password" placeholder="Confirm New Password"
                     className="form-input"
                     value={roleResetForm.confirmPassword}
                     autoComplete="new-password"
@@ -937,16 +961,16 @@ export default function Login() {
                   </MotionButton>
                 </>
               ) : null}
-              <p className="switch-link soft" onClick={() => setActiveForm("login")}>Back to Faculty Login</p>
+              <button type="button" className="switch-link soft" onClick={() => setActiveForm("login")}>Back to Faculty Login</button>
             </form>
           ) : null}
 
           {selectedRole === "faculty" && activeForm !== "forgot" ? (
             <form className="card-form login-side" onSubmit={handleFacultyLogin}>
-              <h2>Faculty Login</h2>
+              <h2>Sign In</h2>
               <input
                 name="facultyEmail"
-                placeholder="Email"
+                aria-label="Email" placeholder="Email"
                 className="form-input"
                 value={facultyEmail}
                 inputMode="email"
@@ -957,7 +981,7 @@ export default function Login() {
                 <input
                   name="facultyPassword"
                   type={showFacultyPassword ? "text" : "password"}
-                  placeholder="Password"
+                  aria-label="Password" placeholder="Password"
                   className="form-input"
                   value={facultyPassword}
                   autoComplete="current-password"
@@ -973,9 +997,9 @@ export default function Login() {
                 </button>
               </div>
               <MotionButton className="form-btn" disabled={facultyLoginLoading}>
-                {facultyLoginLoading ? renderLoadingLabel("Logging In") : "Login as Faculty"}
+                {facultyLoginLoading ? renderLoadingLabel("Logging In") : "Sign In"}
               </MotionButton>
-              <p className="switch-link soft" onClick={() => setActiveForm("forgot")}>Reset Password</p>
+              <button type="button" className="switch-link soft" onClick={() => setActiveForm("forgot")}>Reset Password</button>
             </form>
           ) : null}
 
@@ -991,12 +1015,12 @@ export default function Login() {
               handlePasswordLogin(e);
             }}
           >
-            <h2>{twoFaRequired ? "Verify OTP" : loginMode === "otp" ? "Login with OTP" : "Login"}</h2>
+            <h2>{twoFaRequired ? "Verify OTP" : loginMode === "otp" ? "Sign In with OTP" : "Sign In"}</h2>
 
             {twoFaRequired ? (
               <>
                 <input
-                  placeholder="Enter OTP"
+                  aria-label="Enter OTP" placeholder="Enter OTP"
                   className="form-input"
                   value={twoFaOtp}
                   onChange={(e) => setTwoFaOtp(e.target.value)}
@@ -1012,7 +1036,7 @@ export default function Login() {
                 >
                   {twoFaLoading ? renderLoadingLabel("Verifying") : "Verify OTP"}
                 </MotionButton>
-                <p
+                <button type="button"
                   className="switch-link soft"
                   onClick={() => {
                     setTwoFaRequired(false);
@@ -1021,12 +1045,12 @@ export default function Login() {
                   }}
                 >
                   Back to login
-                </p>
+                </button>
               </>
             ) : loginMode === "otp" ? (
               <>
                 <input
-                  placeholder="Email"
+                  aria-label="Email" placeholder="Email"
                   className="form-input"
                   value={otpLoginEmail}
                   inputMode="email"
@@ -1061,7 +1085,7 @@ export default function Login() {
                       style={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}
                     >
                       <input
-                        placeholder="Enter OTP"
+                        aria-label="Enter OTP" placeholder="Enter OTP"
                         className="form-input"
                         value={otpLoginOtp}
                         onChange={(e) => setOtpLoginOtp(e.target.value)}
@@ -1075,12 +1099,12 @@ export default function Login() {
                         onClick={verifyOtpLogin}
                         disabled={otpLoginLoading}
                       >
-                        {otpLoginLoading ? renderLoadingLabel("Logging In") : "Login"}
+                        {otpLoginLoading ? renderLoadingLabel("Logging In") : "Sign In"}
                       </MotionButton>
                     </motion.div>
                   )}
                 </AnimatePresence>
-                <p
+                <button type="button"
                   className="switch-link soft"
                   onClick={() => {
                     setLoginMode("password");
@@ -1092,13 +1116,13 @@ export default function Login() {
                   }}
                 >
                   Use email + password instead
-                </p>
+                </button>
               </>
             ) : (
               <>
                 <input
                   name="email"
-                  placeholder="Email"
+                  aria-label="Email" placeholder="Email"
                   className="form-input"
                   value={loginEmail}
                   inputMode="email"
@@ -1109,7 +1133,7 @@ export default function Login() {
                   <input
                     name="password"
                     type={showLoginPassword ? "text" : "password"}
-                    placeholder="Password"
+                    aria-label="Password" placeholder="Password"
                     className="form-input"
                     value={loginPassword}
                     autoComplete="current-password"
@@ -1124,8 +1148,8 @@ export default function Login() {
                     {showLoginPassword ? "🙈" : "👁"}
                   </button>
                 </div>
-                <MotionButton className="form-btn">Login</MotionButton>
-                <p
+                <MotionButton className="form-btn">Sign In</MotionButton>
+                <button type="button"
                   className="switch-link soft"
                   onClick={() => {
                     setLoginMode("otp");
@@ -1137,7 +1161,7 @@ export default function Login() {
                   }}
                 >
                   Login with OTP instead
-                </p>
+                </button>
               </>
             )}
           </form>
@@ -1149,7 +1173,7 @@ export default function Login() {
             <h2>Sign Up</h2>
             <input
               name="name"
-              placeholder="Full Name"
+              aria-label="Full Name" placeholder="Full Name"
               className="form-input"
               required
               value={signupName}
@@ -1157,6 +1181,7 @@ export default function Login() {
               onChange={(e) => setSignupName(e.target.value)}
             />
             <select
+              aria-label="School"
               name="school"
               className="form-input"
               required
@@ -1179,7 +1204,7 @@ export default function Login() {
               <input
                 type="text"
                 name="customSchool"
-                placeholder="Enter your school name"
+                aria-label="Enter your school name" placeholder="Enter your school name"
                 className="form-input"
                 required
                 value={signupCustomSchool}
@@ -1188,6 +1213,7 @@ export default function Login() {
               />
             )}
             <select
+              aria-label="Class"
               name="class"
               className="form-input"
               required
@@ -1203,7 +1229,7 @@ export default function Login() {
             </select>
             <input
               name="phone"
-              placeholder="Enter WhatsApp number"
+              aria-label="Enter WhatsApp number" placeholder="Enter WhatsApp number"
               className="form-input"
               required
               value={signupPhone}
@@ -1216,7 +1242,7 @@ export default function Login() {
             </p>
             <input
               name="email"
-              placeholder="Email"
+              aria-label="Email" placeholder="Email"
               className="form-input"
               required
               value={signupEmail}
@@ -1253,7 +1279,7 @@ export default function Login() {
                   style={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}
                 >
                   <input
-                    placeholder="Enter OTP"
+                    aria-label="Enter OTP" placeholder="Enter OTP"
                     className="form-input"
                     required
                     value={signupOtpInput}
@@ -1281,7 +1307,7 @@ export default function Login() {
               <input
                 name="password"
                 type={showSignupPassword ? "text" : "password"}
-                placeholder="Password"
+                aria-label="Password" placeholder="Password"
                 className="form-input"
                 required
                 value={signupPassword}
@@ -1315,9 +1341,9 @@ export default function Login() {
             >
               {signupLoading ? renderLoadingLabel("Creating Account") : "Sign Up"}
             </MotionButton>
-            <p className="switch-link soft" onClick={() => setActiveForm("login")}>
+            <button type="button" className="switch-link soft" onClick={() => setActiveForm("login")}>
               Already have an account?
-            </p>
+            </button>
           </form>
           ) : null}
 
@@ -1327,7 +1353,7 @@ export default function Login() {
             <h2>Reset Password</h2>
             <input
               name="email"
-              placeholder="Email"
+              aria-label="Email" placeholder="Email"
               className="form-input"
               value={forgotEmail}
               inputMode="email"
@@ -1366,7 +1392,7 @@ export default function Login() {
                   style={{ display: "flex", flexDirection: "column", gap: 10, overflow: "hidden" }}
                 >
                   <input
-                    placeholder="Enter OTP"
+                    aria-label="Enter OTP" placeholder="Enter OTP"
                     className="form-input"
                     value={forgotOtpInput}
                     onChange={(e) => setForgotOtpInput(e.target.value)}
@@ -1378,7 +1404,7 @@ export default function Login() {
                     <input
                       name="newPassword"
                       type={showResetPassword ? "text" : "password"}
-                      placeholder="New Password"
+                      aria-label="New Password" placeholder="New Password"
                     className="form-input"
                     value={forgotNewPassword}
                     autoComplete="new-password"
@@ -1402,6 +1428,38 @@ export default function Login() {
           </form>
           ) : null}
         </div>
+        </div>
+        <aside className="auth-welcome-panel">
+          <div className="welcome-art" aria-hidden="true"><span /><span /><span /></div>
+          <div className="login-code-art login-code-art--panel" aria-hidden="true">
+            <span>&lt;BODY&gt;</span><span>PUBLIC</span><span>VOID</span><span>PRINT</span>
+            <span>FOR</span><span>IF</span><span>101010</span><span>&lt;/&gt;</span>
+            <Laptop /><Code2 /><Cpu /><Terminal />
+          </div>
+          <div className="welcome-content">
+            <h1>
+              <span>WELCOME TO</span>
+              <a className="welcome-logo-link" href="https://subhoscomputerinstitute.com/" target="_blank" rel="noopener noreferrer">
+                <Image src="/logo.png" alt="Subho’s Computer Institute" width={1280} height={720} />
+              </a>
+              <span>PORTAL</span>
+            </h1>
+            <div className="welcome-social">
+              <p>FOLLOW US ON</p>
+              <div className="welcome-social-links">
+                <a href="https://www.facebook.com/subhoscomputerinstitute" target="_blank" rel="noopener noreferrer" aria-label="Subho’s Computer Institute on Facebook">
+                  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14 22v-9h3l.5-4H14V7c0-1.2.4-2 2-2h2V1.5A25 25 0 0 0 15 1c-3 0-5 1.8-5 5v3H7v4h3v9z" /></svg>
+                </a>
+                <a href="https://www.instagram.com/subhoscomputerinstitute/" target="_blank" rel="noopener noreferrer" aria-label="Subho’s Computer Institute on Instagram">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5" /><circle cx="12" cy="12" r="4" /><circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none" /></svg>
+                </a>
+                <a href="https://www.youtube.com/@subhabratadatta2889" target="_blank" rel="noopener noreferrer" aria-label="Subho’s Computer Institute on YouTube">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="4" /><path d="m10 9 5 3-5 3z" fill="currentColor" stroke="none" /></svg>
+                </a>
+              </div>
+            </div>
+          </div>
+        </aside>
       </motion.div>
     </div>
   );

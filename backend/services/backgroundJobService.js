@@ -3,7 +3,7 @@ import {
   getAcademicYear,
   getPromotionDateGate,
 } from "../utils/academicYear.js";
-import { withPgAdvisoryLock } from "../utils/dbLocks.js";
+import { withPgTransactionLock } from "../utils/dbLocks.js";
 import { forEachStudentBatch } from "../utils/studentBatching.js";
 import { runDailyFeeReminderJob } from "./reminderservice.js";
 import { markPaidForStudent, sendReminderToStudent } from "./feeOpsService.js";
@@ -65,7 +65,7 @@ export const createBackgroundJob = async ({
   requestedByUserId = null,
   payload = null,
   dedupeKey = null,
-}) => {
+}, db = prisma) => {
   const reviveFailedJobIfNeeded = async (existingJob) => {
     if (!existingJob || existingJob.status !== BACKGROUND_JOB_STATUS.FAILED) {
       return { job: existingJob, requeued: false };
@@ -76,7 +76,7 @@ export const createBackgroundJob = async ({
         ? existingJob.result
         : null;
 
-    const job = await prisma.backgroundJob.update({
+    const job = await db.backgroundJob.update({
       where: { id: existingJob.id },
       data: {
         status: BACKGROUND_JOB_STATUS.PENDING,
@@ -107,7 +107,7 @@ export const createBackgroundJob = async ({
   };
 
   if (dedupeKey) {
-    const existing = await prisma.backgroundJob.findUnique({
+    const existing = await db.backgroundJob.findUnique({
       where: { dedupeKey },
     });
     if (existing) {
@@ -117,7 +117,7 @@ export const createBackgroundJob = async ({
   }
 
   try {
-    const job = await prisma.backgroundJob.create({
+    const job = await db.backgroundJob.create({
       data: {
         type,
         source,
@@ -138,7 +138,7 @@ export const createBackgroundJob = async ({
     return { job, created: true, requeued: false };
   } catch (error) {
     if (dedupeKey && error?.code === "P2002") {
-      const existing = await prisma.backgroundJob.findUnique({
+      const existing = await db.backgroundJob.findUnique({
         where: { dedupeKey },
       });
       if (existing) {
@@ -172,46 +172,23 @@ export const getBackgroundJobStatus = async (jobId) => {
   });
 };
 
-const updateBackgroundJobProgress = async (jobId, patch = {}) => {
-  return prisma.backgroundJob.update({
-    where: { id: jobId },
-    data: {
-      ...patch,
-      lastHeartbeatAt: new Date(),
-    },
-  });
+const assertBackgroundJobClaim = async (jobId, claimStartedAt) => {
+  if (!claimStartedAt) return;
+  const owned = await prisma.backgroundJob.findFirst({ where: { id: jobId, status: BACKGROUND_JOB_STATUS.RUNNING, startedAt: claimStartedAt }, select: { id: true } });
+  if (!owned) throw new Error("Background job claim was lost.");
 };
 
-const completeBackgroundJob = async (jobId, result = {}) => {
-  const completedAt = new Date();
-  await prisma.backgroundJob.update({
-    where: { id: jobId },
-    data: {
-      status: BACKGROUND_JOB_STATUS.COMPLETED,
-      result,
-      completedAt,
-      lastHeartbeatAt: completedAt,
-    },
+const updateBackgroundJobProgress = async (jobId, patch = {}, claimStartedAt) => {
+  const result = await prisma.backgroundJob.updateMany({
+    where: { id: jobId, ...(claimStartedAt ? { status: BACKGROUND_JOB_STATUS.RUNNING, startedAt: claimStartedAt } : {}) },
+    data: { ...patch, lastHeartbeatAt: new Date() },
   });
+  if (!result.count) throw new Error("Background job claim was lost.");
 };
 
-const failBackgroundJob = async (jobId, error, patch = {}) => {
-  const completedAt = new Date();
-  await prisma.backgroundJob.update({
-    where: { id: jobId },
-    data: {
-      status: BACKGROUND_JOB_STATUS.FAILED,
-      errorMessage: safeErrorMessage(error),
-      completedAt,
-      lastHeartbeatAt: completedAt,
-      ...patch,
-    },
-  });
-};
-
-const requeueStaleRunningJobs = async () => {
+const requeueStaleRunningJobs = async (db) => {
   const staleBefore = new Date(Date.now() - WORKER_STALE_MINUTES * 60_000);
-  const staleJobs = await prisma.backgroundJob.findMany({
+  const staleJobs = await db.backgroundJob.findMany({
     where: {
       status: BACKGROUND_JOB_STATUS.RUNNING,
       lastHeartbeatAt: {
@@ -231,8 +208,8 @@ const requeueStaleRunningJobs = async () => {
         ? job.result
         : null;
 
-    await prisma.backgroundJob.update({
-      where: { id: job.id },
+    await db.backgroundJob.updateMany({
+      where: { id: job.id, status: BACKGROUND_JOB_STATUS.RUNNING, lastHeartbeatAt: { lt: staleBefore } },
       data: {
         status: BACKGROUND_JOB_STATUS.PENDING,
         totalItems: 0,
@@ -253,17 +230,21 @@ const requeueStaleRunningJobs = async () => {
   }
 };
 
-const claimNextPendingJob = async () => {
-  const nextJob = await prisma.backgroundJob.findFirst({
-    where: { status: BACKGROUND_JOB_STATUS.PENDING },
-    orderBy: { createdAt: "asc" },
+export const claimNextBackgroundJob = async (db = prisma, jobId = null) => withPgTransactionLock(db, "background-job-dispatcher", async tx => {
+  await requeueStaleRunningJobs(tx);
+  // Retain the existing single-dispatcher behavior without a session lock or
+  // a transaction spanning job execution. RUNNING is the persisted lease.
+  if (await tx.backgroundJob.findFirst({ where: { status: BACKGROUND_JOB_STATUS.RUNNING }, select: { id: true } })) return null;
+  const nextJob = await tx.backgroundJob.findFirst({
+    where: { status: BACKGROUND_JOB_STATUS.PENDING, ...(jobId ? { id: jobId } : {}) },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
 
   if (!nextJob) {
     return null;
   }
 
-  const claimed = await prisma.backgroundJob.updateMany({
+  const claimed = await tx.backgroundJob.updateMany({
     where: {
       id: nextJob.id,
       status: BACKGROUND_JOB_STATUS.PENDING,
@@ -280,12 +261,12 @@ const claimNextPendingJob = async () => {
     return null;
   }
 
-  return prisma.backgroundJob.findUnique({
+  return tx.backgroundJob.findUnique({
     where: { id: nextJob.id },
   });
-};
+});
 
-const runAnnualPromotionJob = async ({ jobId, payload }) => {
+const runAnnualPromotionJob = async ({ jobId, payload, claimStartedAt }) => {
   const gate = getPromotionDateGate();
   const targetAcademicYear = Number(
     payload?.targetAcademicYear ?? gate.academicYear ?? NaN
@@ -330,7 +311,7 @@ const runAnnualPromotionJob = async ({ jobId, payload }) => {
     ],
   };
 
-  await updateBackgroundJobProgress(jobId, { totalItems });
+  await updateBackgroundJobProgress(jobId, { totalItems }, claimStartedAt);
 
   if (!gate.allowed || Number(gate.academicYear) !== targetAcademicYear) {
     return summary;
@@ -346,6 +327,7 @@ const runAnnualPromotionJob = async ({ jobId, payload }) => {
       summary.batchesProcessed = meta.batchNumber;
 
       for (const student of students) {
+        await assertBackgroundJobClaim(jobId, claimStartedAt);
         try {
           const normalizedStudentId = Number(student.id);
 
@@ -409,7 +391,7 @@ const runAnnualPromotionJob = async ({ jobId, payload }) => {
           class12ManualReviewStudentIds: summary.class12ManualReviewStudentIds,
           alreadyPromotedStudentIds: [],
         },
-      });
+      }, claimStartedAt);
 
       backgroundJobLog("promotion-batch", {
         jobId,
@@ -423,7 +405,7 @@ const runAnnualPromotionJob = async ({ jobId, payload }) => {
   return summary;
 };
 
-const runAssistantBulkReminderJob = async ({ jobId, payload }) => {
+const runAssistantBulkReminderJob = async ({ jobId, payload, claimStartedAt }) => {
   const academicYear = Number(payload?.academicYear || getAcademicYear());
   const month = payload?.month || null;
   const monthlyFee = Number(payload?.monthlyFee || 0);
@@ -439,7 +421,7 @@ const runAssistantBulkReminderJob = async ({ jobId, payload }) => {
     month,
   };
 
-  await updateBackgroundJobProgress(jobId, { totalItems });
+  await updateBackgroundJobProgress(jobId, { totalItems }, claimStartedAt);
 
   const batchSize = parsePositiveInt(payload?.batchSize, DEFAULT_BATCH_SIZE, 500);
 
@@ -465,6 +447,7 @@ const runAssistantBulkReminderJob = async ({ jobId, payload }) => {
       summary.batchesProcessed = meta.batchNumber;
 
       for (const student of students) {
+        await assertBackgroundJobClaim(jobId, claimStartedAt);
         try {
           const result = await sendReminderToStudent({
             student,
@@ -490,7 +473,7 @@ const runAssistantBulkReminderJob = async ({ jobId, payload }) => {
         succeededItems: summary.succeededItems,
         failedItems: summary.failedItems,
         totalItems: summary.totalItems,
-      });
+      }, claimStartedAt);
 
       backgroundJobLog("reminder-batch", {
         jobId,
@@ -503,7 +486,7 @@ const runAssistantBulkReminderJob = async ({ jobId, payload }) => {
   return summary;
 };
 
-const runAssistantBulkMarkPaidJob = async ({ jobId, payload, requestedByUserId }) => {
+const runAssistantBulkMarkPaidJob = async ({ jobId, payload, requestedByUserId, claimStartedAt }) => {
   const academicYear = Number(payload?.academicYear || getAcademicYear());
   const month = payload?.month;
   const monthlyFee = Number(payload?.monthlyFee || 0);
@@ -523,7 +506,7 @@ const runAssistantBulkMarkPaidJob = async ({ jobId, payload, requestedByUserId }
     throw new Error("Bulk mark-paid job is missing a month.");
   }
 
-  await updateBackgroundJobProgress(jobId, { totalItems });
+  await updateBackgroundJobProgress(jobId, { totalItems }, claimStartedAt);
 
   const batchSize = parsePositiveInt(payload?.batchSize, DEFAULT_BATCH_SIZE, 500);
 
@@ -539,6 +522,7 @@ const runAssistantBulkMarkPaidJob = async ({ jobId, payload, requestedByUserId }
       summary.batchesProcessed = meta.batchNumber;
 
       for (const student of students) {
+        await assertBackgroundJobClaim(jobId, claimStartedAt);
         try {
           const result = await markPaidForStudent({
             student,
@@ -566,7 +550,7 @@ const runAssistantBulkMarkPaidJob = async ({ jobId, payload, requestedByUserId }
         succeededItems: summary.succeededItems,
         failedItems: summary.failedItems,
         totalItems: summary.totalItems,
-      });
+      }, claimStartedAt);
 
       backgroundJobLog("mark-paid-batch", {
         jobId,
@@ -586,22 +570,26 @@ const executeBackgroundJob = async (job) => {
         jobId: job.id,
         payload: job.payload || {},
         onProgress: async (progress) => {
-          await updateBackgroundJobProgress(job.id, progress);
+          await updateBackgroundJobProgress(job.id, progress, job.startedAt);
         },
+        beforeStudent: () => assertBackgroundJobClaim(job.id, job.startedAt),
       });
     case BACKGROUND_JOB_TYPES.ANNUAL_STUDENT_PROMOTION:
       return runAnnualPromotionJob({
         jobId: job.id,
+        claimStartedAt: job.startedAt,
         payload: job.payload || {},
       });
     case BACKGROUND_JOB_TYPES.ASSISTANT_BULK_REMINDER:
       return runAssistantBulkReminderJob({
         jobId: job.id,
+        claimStartedAt: job.startedAt,
         payload: job.payload || {},
       });
     case BACKGROUND_JOB_TYPES.ASSISTANT_BULK_MARK_PAID:
       return runAssistantBulkMarkPaidJob({
         jobId: job.id,
+        claimStartedAt: job.startedAt,
         payload: job.payload || {},
         requestedByUserId: job.requestedByUserId,
       });
@@ -610,55 +598,47 @@ const executeBackgroundJob = async (job) => {
   }
 };
 
-export const processPendingBackgroundJobs = async ({ maxJobs = 3 } = {}) => {
-  return withPgAdvisoryLock(
-    prisma,
-    "background-job-dispatcher",
-    async () => {
-      await requeueStaleRunningJobs();
-
-      let processed = 0;
-      while (processed < maxJobs) {
-        const job = await claimNextPendingJob();
-        if (!job) break;
-
-        backgroundJobLog("started", {
-          jobId: job.id,
-          type: job.type,
-          source: job.source,
-        });
-
-        try {
-          const result = await executeBackgroundJob(job);
-          await completeBackgroundJob(job.id, result);
-          backgroundJobLog("completed", {
-            jobId: job.id,
-            type: job.type,
-            processedItems: result?.processedItems ?? 0,
-            succeededItems: result?.succeededItems ?? 0,
-            failedItems: result?.failedItems ?? 0,
-          });
-        } catch (error) {
-          await failBackgroundJob(job.id, error);
-          backgroundJobLog("failed", {
-            jobId: job.id,
-            type: job.type,
-            error: safeErrorMessage(error),
-          });
-        }
-
-        processed += 1;
-      }
-
-      return processed;
-    },
-    { onLocked: () => 0 }
-  );
+export const processPendingBackgroundJobs = async ({ maxJobs = 3, db = prisma, execute = executeBackgroundJob, jobId = null } = {}) => {
+  let processed = 0;
+  while (processed < maxJobs) {
+    const job = await claimNextBackgroundJob(db, jobId);
+    if (!job) break;
+    const owned = { id: job.id, status: BACKGROUND_JOB_STATUS.RUNNING, startedAt: job.startedAt };
+    let renewing = null;
+    let leaseLost = false;
+    const renew = async () => {
+      try {
+        const result = await db.backgroundJob.updateMany({ where: owned, data: { lastHeartbeatAt: new Date() } });
+        if (!result.count) leaseLost = true;
+      } catch { leaseLost = true; }
+    };
+    const timer = setInterval(() => {
+      if (!renewing) renewing = renew().finally(() => { renewing = null; });
+    }, Math.min(30000, WORKER_STALE_MINUTES * 20000));
+    timer.unref?.();
+    backgroundJobLog("started", { jobId: job.id, type: job.type, source: job.source });
+    try {
+      const result = await execute(job);
+      clearInterval(timer); await renewing;
+      if (leaseLost) throw new Error("Background job claim was lost.");
+      const completedAt = new Date();
+      const saved = await db.backgroundJob.updateMany({ where: owned, data: { status: BACKGROUND_JOB_STATUS.COMPLETED, result, completedAt, lastHeartbeatAt: completedAt } });
+      if (saved.count) backgroundJobLog("completed", { jobId: job.id, type: job.type, processedItems: result?.processedItems ?? 0 });
+    } catch (error) {
+      clearInterval(timer); await renewing;
+      const completedAt = new Date();
+      await db.backgroundJob.updateMany({ where: owned, data: { status: BACKGROUND_JOB_STATUS.FAILED, errorMessage: safeErrorMessage(error), completedAt, lastHeartbeatAt: completedAt } });
+      backgroundJobLog("failed", { jobId: job.id, type: job.type, error: safeErrorMessage(error) });
+    } finally { clearInterval(timer); await renewing; }
+    processed += 1;
+  }
+  return processed;
 };
 
 export const startBackgroundJobWorker = () => {
   let stopped = false;
   let timer = null;
+  let active;
 
   const runLoop = async () => {
     if (stopped) return;
@@ -671,17 +651,18 @@ export const startBackgroundJobWorker = () => {
       });
     } finally {
       if (!stopped) {
-        timer = setTimeout(runLoop, WORKER_POLL_INTERVAL_MS);
+        timer = setTimeout(() => { active = runLoop(); }, WORKER_POLL_INTERVAL_MS);
       }
     }
   };
 
-  void runLoop();
+  active = runLoop();
 
-  return () => {
+  return async () => {
     stopped = true;
     if (timer) {
       clearTimeout(timer);
     }
+    await active;
   };
 };

@@ -37,7 +37,7 @@ export const getCashfreePayoutConfig = () => {
   };
 };
 
-const assertPayoutConfig = () => {
+export const assertPayoutConfig = () => {
   const config = getCashfreePayoutConfig();
   const allowed =
     config.environment === "sandbox" ? config.sandboxEnabled : config.realPayoutsEnabled;
@@ -65,6 +65,7 @@ const cashfreeRequest = async (path, { method = "GET", body, requestId = crypto.
     method,
     headers: cashfreeHeaders(config, requestId),
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(30000),
   });
   const text = await response.text();
   const data = text ? JSON.parse(text) : {};
@@ -179,7 +180,8 @@ export const initiatePayoutTransfer = async (payoutId, opts = {}) => {
     error.statusCode = 404;
     throw error;
   }
-  if (PAID_STATUSES.has(payout.status) || PROCESSING_STATUSES.has(payout.status)) {
+  if (PAID_STATUSES.has(payout.status) || payout.status === "PROCESSING" ||
+      (payout.status === "PENDING" && payout.cashfreeTransferId)) {
     return payout;
   }
   if (money(payout.amount) <= 0) {
@@ -187,7 +189,7 @@ export const initiatePayoutTransfer = async (payoutId, opts = {}) => {
     error.statusCode = 400;
     throw error;
   }
-
+  assertPayoutConfig();
   const beneficiaryId = await createOrGetBeneficiary(payout.faculty);
   const referenceId =
     payout.cashfreeReferenceId ||
@@ -202,8 +204,8 @@ export const initiatePayoutTransfer = async (payoutId, opts = {}) => {
     remarks: `Flowlytiks faculty payout ${referenceId}`,
   };
 
-  await prisma.facultyPayout.update({
-    where: { id: payout.id },
+  const claimed = await prisma.facultyPayout.updateMany({
+    where: { id: payout.id, status: payout.status, updatedAt: payout.updatedAt },
     data: {
       status: "PROCESSING",
       cashfreeReferenceId: referenceId,
@@ -214,6 +216,7 @@ export const initiatePayoutTransfer = async (payoutId, opts = {}) => {
       failureReason: null,
     },
   });
+  if (!claimed.count) return getPayoutWithFaculty(payout.id);
 
   try {
     const result = await cashfreeRequest("/transfers", {
@@ -223,8 +226,8 @@ export const initiatePayoutTransfer = async (payoutId, opts = {}) => {
     });
     const rawStatus = result?.status || result?.transfer_status || result?.data?.status;
     const mappedStatus = mapCashfreePayoutStatus(rawStatus);
-    return prisma.facultyPayout.update({
-      where: { id: payout.id },
+    await prisma.facultyPayout.updateMany({
+      where: { id: payout.id, status: "PROCESSING", cashfreeTransferId: transferId },
       data: {
         status: mappedStatus,
         cashfreeStatus: rawStatus || mappedStatus,
@@ -237,20 +240,22 @@ export const initiatePayoutTransfer = async (payoutId, opts = {}) => {
         unpaidAmount: mappedStatus === "SUCCESS" ? 0 : payout.amount,
       },
     });
+    return getPayoutWithFaculty(payout.id);
   } catch (error) {
-    if (Number(error.cashfreeStatus) >= 500) {
-      logWarn("cashfree_payout.transfer_unknown_after_5xx", { payoutId: payout.id, referenceId });
-      return prisma.facultyPayout.update({
-        where: { id: payout.id },
+    if (!error.cashfreeStatus || Number(error.cashfreeStatus) >= 500) {
+      logWarn("cashfree_payout.transfer_response_unknown", { payoutId: payout.id });
+      await prisma.facultyPayout.updateMany({
+        where: { id: payout.id, status: "PROCESSING", cashfreeTransferId: transferId },
         data: {
           status: "PROCESSING",
-          cashfreeStatus: "UNKNOWN_AFTER_5XX",
-          failureReason: "Cashfree returned a temporary error. Check transfer status before retrying.",
+          cashfreeStatus: "UNKNOWN_AFTER_REQUEST",
+          failureReason: "Transfer response is uncertain. Check transfer status before retrying.",
         },
       });
+      return getPayoutWithFaculty(payout.id);
     }
-    await prisma.facultyPayout.update({
-      where: { id: payout.id },
+    const failed = await prisma.facultyPayout.updateMany({
+      where: { id: payout.id, status: "PROCESSING", cashfreeTransferId: transferId },
       data: {
         status: "FAILED",
         cashfreeStatus: "FAILED",
@@ -259,6 +264,7 @@ export const initiatePayoutTransfer = async (payoutId, opts = {}) => {
         unpaidAmount: payout.amount,
       },
     });
+    if (!failed.count) return getPayoutWithFaculty(payout.id);
     throw error;
   }
 };
@@ -270,7 +276,7 @@ export const getTransferStatus = async (transferIdOrReferenceId) => {
     error.statusCode = 400;
     throw error;
   }
-  return cashfreeRequest(`/transfers/${id}`);
+  return cashfreeRequest(`/transfers?transfer_id=${id}`);
 };
 
 const extractWebhookData = (payload = {}) => payload?.data?.transfer || payload?.data || payload || {};
@@ -306,14 +312,16 @@ export const updatePayoutFromCashfreePayload = async (payload = {}) => {
   const rawStatus = data.status || data.transfer_status || payload.status || payload.event;
   const nextStatus = mapCashfreePayoutStatus(rawStatus);
   const now = new Date();
-  if (payout.status === nextStatus && ["SUCCESS", "FAILED"].includes(nextStatus)) {
-    return { ignored: true, reason: "duplicate_final_status", payoutId: payout.id, status: nextStatus };
+  const isReversal = clean(rawStatus).toUpperCase() === "REVERSED" || clean(payload.type || payload.event).toUpperCase() === "TRANSFER_REVERSED";
+  if (payout.status === "SUCCESS" && nextStatus !== "SUCCESS" && !isReversal) {
+    return { ignored: true, reason: "stale_after_success", payoutId: payout.id, status: payout.status };
   }
+  const duplicateFinal = payout.status === nextStatus && ["SUCCESS", "FAILED"].includes(nextStatus);
 
   const transactionId = clean(data.utr || data.transaction_id || data.cf_transfer_id || data.transfer_id);
   const failureReason = clean(data.reason || data.failure_reason || data.status_description);
-  const updated = await prisma.facultyPayout.update({
-    where: { id: payout.id },
+  const changed = duplicateFinal ? { count: 1 } : await prisma.facultyPayout.updateMany({
+    where: { id: payout.id, updatedAt: payout.updatedAt, status: payout.status },
     data: {
       status: nextStatus,
       cashfreeStatus: rawStatus || nextStatus,
@@ -331,6 +339,12 @@ export const updatePayoutFromCashfreePayload = async (payload = {}) => {
       unpaidAmount: nextStatus === "SUCCESS" ? 0 : payout.unpaidAmount,
     },
   });
+  if (!changed.count) {
+    const current = await prisma.facultyPayout.findUnique({ where: { id: payout.id } });
+    if (current?.status === "SUCCESS" && !isReversal) return { ignored: true, reason: "already_successful", payoutId: payout.id, status: "SUCCESS" };
+    throw Object.assign(new Error("Payout changed during verification. Retry reconciliation."), { statusCode: 503 });
+  }
+  const updated = await prisma.facultyPayout.findUniqueOrThrow({ where: { id: payout.id } });
 
   await prisma.facultyPayoutEvent
     .create({
@@ -354,6 +368,8 @@ export const updatePayoutFromCashfreePayload = async (payload = {}) => {
       logWarn("cashfree_payout.weekly_record_sync_failed", { payoutId: payout.id, message: error?.message })
     );
   }
+
+  await refreshExtraPaymentFromPayout(updated);
 
   if (nextStatus === "SUCCESS") {
     const completedPayout = await prisma.facultyPayout
@@ -418,6 +434,22 @@ export const updatePayoutFromCashfreePayload = async (payload = {}) => {
   return { payoutId: payout.id, status: nextStatus };
 };
 
+export const refreshExtraPaymentFromPayout = async (payout) => {
+  if (!["SUCCESS", "FAILED"].includes(payout?.status)) return null;
+  return prisma.$transaction(async tx => {
+    const payment = await tx.facultyExtraIncentivePayment.findFirst({ where: { facultyPayoutId: payout.id } });
+    if (!payment) return null;
+    const changed = await tx.facultyExtraIncentivePayment.updateMany({
+      where: { id: payment.id, status: "PROCESSING" },
+      data: { status: payout.status === "SUCCESS" ? "PAID" : "FAILED", cashfreeTransferId: payout.cashfreeTransferId, cashfreeReferenceId: payout.cashfreeReferenceId, transactionId: payout.transactionId, utr: payout.utr, failureReason: payout.failureReason, ...(payout.paidAt ? { paidAt: payout.paidAt } : {}) },
+    });
+    if (changed.count && payout.status === "FAILED") {
+      await tx.facultyExtraIncentiveEntry.updateMany({ where: { paymentRecordId: payment.id }, data: { status: "PENDING", paymentRecordId: null } });
+    }
+    return payment.id;
+  });
+};
+
 export const handlePayoutWebhook = async (payload, headers = {}) =>
   updatePayoutFromCashfreePayload(payload, headers);
 
@@ -462,38 +494,44 @@ export const retryFailedPayout = async (payoutId, opts = {}) => {
 };
 
 export const verifyCashfreePayoutWebhookSignature = (req) => {
-  const secret = getCashfreePayoutConfig().webhookSecret;
-  if (!secret) return true;
-  const signature =
-    req.headers["x-webhook-signature"] ||
-    req.headers["x-cf-signature"] ||
-    req.headers["x-cashfree-signature"] ||
-    req.headers["cashfree-signature"];
-  if (!signature) return false;
-
-  const rawBody = req.rawBody || JSON.stringify(req.body || {});
-  const digest = crypto.createHmac("sha256", secret).update(rawBody).digest("base64");
-  const hexDigest = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
-  return [digest, hexDigest].some((candidate) => {
-    try {
-      return crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(String(signature)));
-    } catch {
-      return false;
-    }
-  });
+  const config = getCashfreePayoutConfig();
+  const secret = config.webhookSecret || config.clientSecret;
+  const signature = req.headers["x-webhook-signature"];
+  const timestamp = req.headers["x-webhook-timestamp"];
+  if (!secret || typeof signature !== "string" || typeof timestamp !== "string" || !timestamp || !req.rawBody) return false;
+  const digest = crypto.createHmac("sha256", secret).update(timestamp + req.rawBody).digest("base64");
+  try {
+    return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(signature));
+  } catch {
+    return false;
+  }
 };
 
-const refreshWeeklyRecordFromPayout = async (payout) => {
+export const refreshWeeklyRecordFromPayout = async (payout, db = prisma) => {
   if (!payout?.payrollId || !prisma.weeklyFacultyPaymentRecord) return null;
-  const full = await prisma.facultyPayout.findUnique({
+  const full = await db.facultyPayout.findUnique({
     where: { id: payout.id },
     include: { payroll: { include: { payrollCycle: true } } },
   });
   const cycle = full?.payroll?.payrollCycle;
   if (!cycle) return null;
-  const payouts = await prisma.facultyPayout.findMany({
-    where: { payroll: { payrollCycleId: cycle.id } },
+  if (db === prisma) return prisma.$transaction(async tx => {
+    const key = `weekly-pay:${cycle.startDate.toISOString().slice(0, 10)}:${cycle.endDate.toISOString().slice(0, 10)}`;
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${key})::bigint)::text`;
+    return refreshWeeklyRecordFromPayout(payout, tx);
   });
+  const attempts = await db.facultyPayout.findMany({
+    where: { payroll: { payrollCycleId: cycle.id } },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+  });
+  // Retried transfers are history for the same bill, not additional payroll.
+  const effective = new Map();
+  const priority = row => row.status === "SUCCESS" ? 2 : ["PENDING", "PROCESSING"].includes(row.status) ? 1 : 0;
+  for (const row of attempts) {
+    const previous = effective.get(row.payrollId);
+    if (!previous || priority(row) > priority(previous)) effective.set(row.payrollId, row);
+  }
+  const payouts = [...effective.values()];
   const allPaid = payouts.length > 0 && payouts.every((row) => row.status === "SUCCESS");
   const anyProcessing = payouts.some((row) => row.status === "PROCESSING");
   const allFailed = payouts.length > 0 && payouts.every((row) => FAILED_STATUSES.has(row.status));
@@ -503,12 +541,12 @@ const refreshWeeklyRecordFromPayout = async (payout) => {
     .reduce((sum, row) => sum + money(row.amount), 0);
   const totalAmount = payouts.reduce((sum, row) => sum + money(row.amount), 0);
 
-  const record = await prisma.weeklyFacultyPaymentRecord.findUnique({
+  const record = await db.weeklyFacultyPaymentRecord.findUnique({
     where: { weekStart_weekEnd: { weekStart: cycle.startDate, weekEnd: cycle.endDate } },
   });
   if (!record) return null;
 
-  await prisma.weeklyFacultyPaymentRecord.update({
+  await db.weeklyFacultyPaymentRecord.update({
     where: { id: record.id },
     data: {
       status,
@@ -520,7 +558,7 @@ const refreshWeeklyRecordFromPayout = async (payout) => {
 
   await Promise.all(
     payouts.map((row) =>
-      prisma.facultyPaymentRecord.updateMany({
+      db.facultyPaymentRecord.updateMany({
         where: { weeklyPaymentRecordId: record.id, facultyId: row.facultyId },
         data: {
           status: row.status === "SUCCESS" ? "PAID" : row.status === "FAILED" ? "FAILED" : row.status,
@@ -536,7 +574,7 @@ const refreshWeeklyRecordFromPayout = async (payout) => {
   );
 
   if (["PAID", "PROCESSING"].includes(status)) {
-    await prisma.payrollCycle
+    await db.payrollCycle
       .update({ where: { id: cycle.id }, data: { ledgerLocked: true } })
       .catch(() => null);
   }

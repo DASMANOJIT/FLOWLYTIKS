@@ -3,7 +3,8 @@
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import FacultyActions from "../FacultyActions";
+import BackToDashboard from "../../../components/admin/BackToDashboard";
 import { getAuthToken, getAuthRole } from "../../../../lib/authStorage.js";
 import { apiCall } from "../../../../lib/api.js";
 import PremiumLoader from "../../../components/ui/PremiumLoader";
@@ -120,51 +121,11 @@ export default function FacultyProfilePage() {
     void loadFaculty(storedToken);
   }, [loadFaculty, router]);
 
-  const deleteFacultyConfirm = useCallback(async () => {
-    if (!hasMounted || role !== "admin") return;
-
-    const ok = window.confirm(
-      "This will permanently delete this faculty member from the database. Continue?"
-    );
-    if (!ok) return;
-
-    const effectiveToken = token || getAuthToken();
-    if (!effectiveToken) {
-      setError("Your admin session is missing. Please log in again.");
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setError("");
-      await callApi(`/faculty/${params.id}/permanent`, "DELETE", null, effectiveToken);
-      // Redirect back to faculty list on success
-      router.push("/admin/faculty");
-    } catch (err) {
-      // Do not clear auth or redirect to login for regular failures.
-      setError(err instanceof Error ? err.message : "Failed to delete faculty member.");
-    } finally {
-      setLoading(false);
-    }
-  }, [hasMounted, role, params.id, router, token]);
-
   return (
     <main className="faculty-page">
       <div className="faculty-shell">
         <header className="faculty-header">
-          <button className="faculty-button faculty-button--ghost" onClick={() => router.back()}>
-            <ArrowLeft size={18} />
-            Back
-          </button>
-          {hasMounted && role === "admin" && (
-            <button
-              className="faculty-button faculty-button--danger"
-              onClick={deleteFacultyConfirm}
-              disabled={loading}
-            >
-              Delete Faculty
-            </button>
-          )}
+          <BackToDashboard href="/admin/faculty" label="Back" />
           <div className="faculty-title-block">
             <h1>{faculty?.fullName || "Faculty Profile"}</h1>
             <p>{faculty ? `${faculty.facultyId} · ${faculty.status === "ACTIVE" ? "Active" : "Inactive"}` : "Faculty record details"}</p>
@@ -179,6 +140,7 @@ export default function FacultyProfilePage() {
           <section className="faculty-panel faculty-empty">Faculty member not found.</section>
         ) : (
           <div className="faculty-profile-grid">
+            {hasMounted && role === "admin" && <FacultyActions selectedFaculty={faculty} onSaved={loadFaculty} onDeleted={() => router.push("/admin/faculty")} />}
             <ProfileSection title="Personal Information">
               <Detail label="Name" value={faculty.fullName} />
               <Detail label="Phone" value={faculty.phone} />

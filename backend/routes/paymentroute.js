@@ -31,11 +31,6 @@ import {
   reversePaymentBodySchema,
   revenueQuerySchema,
 } from "../validation/paymentSchemas.js";
-import {
-  initiatePhonePePayment,
-  phonePeCallback,
-  getPhonePePaymentStatus,
-} from "../controllers/phonepecontroller.js";
 
 const router = express.Router();
 
@@ -69,11 +64,6 @@ router.post(
   reversePayment
 );
 router.get("/revenue", protect, adminOnly, validateQuery(revenueQuerySchema), getTotalRevenue);
-
-// PHONEPE
-router.post("/phonepe/initiate", protect, initiatePhonePePayment);
-router.post("/phonepe/callback", phonePeCallback);
-router.get("/phonepe/status/:transactionId", protect, getPhonePePaymentStatus);
 
 // MANUAL UPI
 router.post(

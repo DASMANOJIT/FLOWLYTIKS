@@ -1,0 +1,9 @@
+.daily-attendance-card { min-width: 0; }
+.daily-attendance-card .faculty-table { min-width: 660px; }
+.daily-attendance-card .ledger-nav { flex-wrap: wrap; margin: 0; }
+.daily-attendance-card .faculty-shift-meta { white-space: normal; max-width: 300px; }
+@media (max-width: 700px) {
+  .daily-attendance-card .faculty-header { align-items: flex-start; flex-direction: column; }
+  .daily-attendance-card .ledger-nav { justify-content: flex-start; width: 100%; gap: 8px; }
+  .daily-attendance-card .ledger-nav button { flex: 1 1 120px; }
+}

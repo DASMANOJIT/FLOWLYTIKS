@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import {
   BarElement,
@@ -17,6 +17,7 @@ import { apiCall } from "../../../lib/api.js";
 import { getFacultyAuthToken, getFacultyAuthRole } from "../../../lib/authStorage.js";
 import FacultyPortalLayout from "../FacultyPortalLayout";
 import PremiumLoader from "../../components/ui/PremiumLoader.jsx";
+import GoogleAccountButton from "../extra-incentives/GoogleAccountButton";
 import "../../admin/faculty/faculty.css";
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Tooltip, Legend);
@@ -80,11 +81,12 @@ type Dashboard = {
 
 const money = (value: number) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value || 0);
+const subscribe = () => () => {};
+const serverToken = () => "";
 
 export default function FacultyDashboardPage() {
   const router = useRouter();
-  const [hasMounted, setHasMounted] = useState(false);
-  const [token, setToken] = useState("");
+  const token = useSyncExternalStore(subscribe, getFacultyAuthToken, serverToken);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [error, setError] = useState("");
 
@@ -95,14 +97,12 @@ export default function FacultyDashboardPage() {
   }, []);
 
   useEffect(() => {
-    setHasMounted(true);
     const storedToken = getFacultyAuthToken();
     const role = getFacultyAuthRole();
     if (!storedToken || role !== "faculty") {
       router.push("/login");
       return;
     }
-    setToken(storedToken);
   }, [router]);
 
   useEffect(() => {
@@ -110,16 +110,18 @@ export default function FacultyDashboardPage() {
     void loadDashboard(token);
   }, [loadDashboard, token]);
 
-  if (!hasMounted || (!dashboard && !error)) {
+  const googleAction = <GoogleAccountButton token={token} />;
+
+  if (!dashboard && !error) {
     return <FacultyPortalLayout title="Dashboard"><section className="faculty-panel faculty-loading"><PremiumLoader label="Loading dashboard" /></section></FacultyPortalLayout>;
   }
 
   if (error) {
-    return <FacultyPortalLayout title="Dashboard"><div className="faculty-toast--error">{error}</div></FacultyPortalLayout>;
+    return <FacultyPortalLayout title="Dashboard" headerAction={googleAction}><div className="faculty-toast--error">{error}</div></FacultyPortalLayout>;
   }
 
   if (!dashboard) {
-    return <FacultyPortalLayout title="Dashboard"><section className="faculty-panel faculty-empty">No dashboard data available.</section></FacultyPortalLayout>;
+    return <FacultyPortalLayout title="Dashboard" headerAction={googleAction}><section className="faculty-panel faculty-empty">No dashboard data available.</section></FacultyPortalLayout>;
   }
 
   const weeklyChart = chartData("Weekly Income", dashboard.charts.weekly, "#2563eb");
@@ -135,6 +137,7 @@ export default function FacultyDashboardPage() {
         <PortalCard title="Total Earning" value={money(dashboard.summary.totalEarning)} meta={`${dashboard.summary.totalAttendanceEntries} attendance entries`} />
         <PortalCard title="Paid Amount" value={money(dashboard.summary.paidAmount)} meta="Marked paid by admin" />
         <PortalCard title="Pending Amount" value={money(dashboard.summary.unpaidAmount)} meta="Unpaid or pending" />
+        <GoogleAccountButton token={token} summary />
       </section>
 
       <section className="faculty-portal-chart-grid">

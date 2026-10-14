@@ -3,7 +3,7 @@ import prisma from "../prisma/client.js";
 import { purgeAuthRateLimitEvents } from "../middleware/security.js";
 import { purgeExpiredEmailOtps } from "./emailOtpService.js";
 import { purgeExpiredSessions } from "../utils/sessionStore.js";
-import { withPgAdvisoryLock } from "../utils/dbLocks.js";
+import { withPgTransactionLock } from "../utils/dbLocks.js";
 import { getAcademicYear, getPromotionDateGate } from "../utils/academicYear.js";
 import {
   BACKGROUND_JOB_TYPES,
@@ -46,10 +46,10 @@ export const registerScheduledJobs = () => {
 
       const promotionDate = schedulerDateKey();
 
-      await withPgAdvisoryLock(prisma, "annual-student-promotion", async () => {
+      await withPgTransactionLock(prisma, "annual-student-promotion", async (tx) => {
         const targetAcademicYear = Number(gate.academicYear);
         const activeJob = await findActivePromotionJobForAcademicYear(
-          targetAcademicYear
+          targetAcademicYear, tx
         );
 
         if (activeJob) {
@@ -73,7 +73,7 @@ export const registerScheduledJobs = () => {
             targetAcademicYear,
             scheduledDate: promotionDate,
           },
-        });
+        }, tx);
 
         console.log(
           created
@@ -99,7 +99,7 @@ export const registerScheduledJobs = () => {
   cron.schedule(
     process.env.REMINDER_CRON || "0 9 * * *",
     async () => {
-      await withPgAdvisoryLock(prisma, "daily-fee-reminders", async () => {
+      await withPgTransactionLock(prisma, "daily-fee-reminders", async (tx) => {
         const academicYear = getAcademicYear();
         const reminderDate = schedulerDateKey(
           process.env.REMINDER_TIMEZONE || "Asia/Kolkata"
@@ -111,7 +111,7 @@ export const registerScheduledJobs = () => {
           payload: {
             academicYear,
           },
-        });
+        }, tx);
 
         console.log(
           created
@@ -135,11 +135,11 @@ export const registerScheduledJobs = () => {
   );
 
   cron.schedule("0 * * * *", async () => {
-    await withPgAdvisoryLock(prisma, "hourly-auth-maintenance", async () => {
+    await withPgTransactionLock(prisma, "hourly-auth-maintenance", async (tx) => {
       await Promise.all([
-        purgeExpiredSessions(),
-        purgeExpiredEmailOtps(),
-        purgeAuthRateLimitEvents(),
+        purgeExpiredSessions(tx),
+        purgeExpiredEmailOtps(tx),
+        purgeAuthRateLimitEvents(tx),
       ]);
     }).catch((err) => {
       console.error("❌ Error during auth maintenance cron:", err?.message || err);

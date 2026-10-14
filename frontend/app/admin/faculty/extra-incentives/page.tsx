@@ -1,17 +1,20 @@
 "use client";
 
+import Modal from "../../../components/ui/Modal";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, Edit3, Gift, Plus, RotateCcw, X } from "lucide-react";
+import BackToDashboard from "../../../components/admin/BackToDashboard";
+import { Edit3, Gift, Plus, RotateCcw, X } from "lucide-react";
 import { apiCall } from "../../../../lib/api.js";
 import { getAuthRole, getAuthToken } from "../../../../lib/authStorage.js";
 import PremiumLoader from "../../../components/ui/PremiumLoader";
 import "../faculty.css";
+import styles from "./pending-breakdown.module.css";
 
 type ApiCall = <T = unknown>(endpoint: string, method?: string, body?: unknown, token?: string | null) => Promise<T>;
 const callApi = apiCall as ApiCall;
 
-type IncentiveType = { id: string; name: string; rate: number; isActive: boolean };
+type IncentiveType = { id: string; name: string; rate: number; isActive: boolean; onlineClassWorkflow?: boolean };
 type IncentiveLine = { incentiveTypeId: string; name: string; quantity: number; rate: number; amount: number };
 type FacultySummary = {
   facultyId: string;
@@ -20,6 +23,7 @@ type FacultySummary = {
   pendingSummary: IncentiveLine[];
   pendingCount: number;
   pendingAmount: number;
+  pendingEntries?: { id: string; incentiveTypeId: string; name: string; quantityChange: number; note: string | null; rate: number; amount: number; status: string; createdAt: string }[];
 };
 
 const money = (value: number) =>
@@ -43,6 +47,8 @@ export default function AdminFacultyExtraIncentivesPage() {
   const [editName, setEditName] = useState("");
   const [editRate, setEditRate] = useState("");
   const [selectedFaculty, setSelectedFaculty] = useState<FacultySummary | null>(null);
+  const [breakdownFaculty, setBreakdownFaculty] = useState<FacultySummary | null>(null);
+  const copyTypes = types.filter(type => !type.onlineClassWorkflow && type.name.trim().replace(/\s+/g, " ").toUpperCase() !== "ONLINE DOUBT CLASS");
   const [paymentMethod, setPaymentMethod] = useState<"CASH" | "CASHFREE">("CASH");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -164,15 +170,21 @@ export default function AdminFacultyExtraIncentivesPage() {
     () => facultySummaries.reduce((sum, item) => sum + Number(item.pendingAmount || 0), 0),
     [facultySummaries]
   );
+  const breakdown = useMemo(() => {
+    const totals = new Map<string, { name: string; quantity: number }>();
+    for (const item of breakdownFaculty?.pendingSummary || []) {
+      const current = totals.get(item.incentiveTypeId) || { name: item.name, quantity: 0 };
+      current.quantity += item.quantity;
+      totals.set(item.incentiveTypeId, current);
+    }
+    return [...totals.values()].filter(item => item.quantity > 0);
+  }, [breakdownFaculty]);
 
   return (
     <main className="faculty-page">
       <div className="faculty-shell">
         <header className="faculty-header">
-          <Link className="faculty-button faculty-button--ghost" href="/admin/faculty">
-            <ArrowLeft size={18} />
-            Back
-          </Link>
+          <BackToDashboard />
           <div className="faculty-title-block">
             <h1>Extra Incentives</h1>
             <p>Create incentive rates and pay faculty incentive amounts separately from weekly payroll.</p>
@@ -252,7 +264,7 @@ export default function AdminFacultyExtraIncentivesPage() {
               <p>Total pending: {money(totalPending)}</p>
             </div>
           </div>
-          <div className="faculty-table-wrap">
+          <div className={`faculty-table-wrap ${styles.pendingTable}`}>
             <table className="faculty-table">
               <thead>
                 <tr><th>Faculty ID</th><th>Faculty Name</th><th>Pending Summary</th><th>Pending Count</th><th>Pending Amount</th><th>Action</th></tr>
@@ -261,17 +273,21 @@ export default function AdminFacultyExtraIncentivesPage() {
                 {loading ? (
                   <tr><td colSpan={6}><PremiumLoader label="Loading faculty incentives" compact /></td></tr>
                 ) : facultySummaries.length ? facultySummaries.map((faculty) => (
-                  <tr key={faculty.facultyId}>
-                    <td>{faculty.facultyCode}</td>
-                    <td>{faculty.facultyName}</td>
-                    <td>{faculty.pendingSummary.map((item) => `${item.name}: ${item.quantity} x ${money(item.rate)}`).join(", ") || "-"}</td>
-                    <td>{faculty.pendingCount}</td>
-                    <td>{money(faculty.pendingAmount)}</td>
-                    <td>
+                  <tr key={faculty.facultyId} className={styles.clickable} tabIndex={0} aria-label={`View pending incentives for ${faculty.facultyName}`} onClick={event => {
+                    if (!(event.target as Element).closest("button")) setBreakdownFaculty(faculty);
+                  }} onKeyDown={event => {
+                    if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) { event.preventDefault(); setBreakdownFaculty(faculty); }
+                  }}>
+                    <td data-label="Faculty ID">{faculty.facultyCode}</td>
+                    <td data-label="Faculty Name">{faculty.facultyName}</td>
+                    <td data-label="Pending Summary">{faculty.pendingSummary.map((item) => `${item.name}: ${item.quantity} x ${money(item.rate)}`).join(", ") || "-"}</td>
+                    <td data-label="Pending Count">{faculty.pendingCount}</td>
+                    <td data-label="Pending Amount">{money(faculty.pendingAmount)}</td>
+                    <td data-label="Action">
                       <button
                         className="faculty-button faculty-button--primary"
                         disabled={faculty.pendingAmount <= 0 || payingFacultyId === faculty.facultyId}
-                        onClick={() => openPayment(faculty)}
+                        onClick={event => { event.stopPropagation(); openPayment(faculty); }}
                       >
                         <Gift size={16} />
                         Pay
@@ -286,8 +302,15 @@ export default function AdminFacultyExtraIncentivesPage() {
           </div>
         </section>
       </div>
+      {breakdownFaculty ? <Modal onClose={() => setBreakdownFaculty(null)}>
+        <section className={styles.card}>
+          <h2>Pending Incentives</h2>
+          {breakdown.length ? <ul>{breakdown.map(item => <li key={item.name}>{item.quantity} × {item.name}</li>)}</ul> : <p>No pending incentives</p>}
+          <button type="button" className="faculty-button faculty-button--ghost" onClick={() => setBreakdownFaculty(null)}>Close</button>
+        </section>
+      </Modal> : null}
       {editingType ? (
-        <div className="faculty-modal-backdrop" role="dialog" aria-modal="true">
+        <Modal className="faculty-modal-backdrop" role="dialog" aria-modal="true">
           <div className="faculty-modal">
             <div className="faculty-modal-header">
               <h2>Edit Incentive</h2>
@@ -310,10 +333,10 @@ export default function AdminFacultyExtraIncentivesPage() {
               </div>
             </form>
           </div>
-        </div>
+        </Modal>
       ) : null}
       {selectedFaculty ? (
-        <div className="faculty-modal-backdrop" role="dialog" aria-modal="true">
+        <Modal className="faculty-modal-backdrop" role="dialog" aria-modal="true">
           <div className="faculty-modal payroll-detail-modal">
             <div className="faculty-modal-header">
               <h2>Pay Extra Incentives</h2>
@@ -339,6 +362,10 @@ export default function AdminFacultyExtraIncentivesPage() {
                 </tbody>
               </table>
             </div>
+            {selectedFaculty.pendingEntries?.some(entry => copyTypes.some(type => type.id === entry.incentiveTypeId)) ? <div className="faculty-detail-list">
+              <h3>Pending Sets</h3>
+              {selectedFaculty.pendingEntries.filter(entry => copyTypes.some(type => type.id === entry.incentiveTypeId)).map(entry => <div key={entry.id}><span>{entry.name} - {entry.quantityChange} copies at {money(entry.rate)} - {money(entry.amount)} - {entry.status}<br />{new Date(entry.createdAt).toLocaleString("en-IN")}</span><strong style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{entry.note || "No remark recorded."}</strong></div>)}
+            </div> : null}
             <section className="faculty-panel">
               <div className="faculty-section-heading"><h3>Payment Method</h3></div>
               <label className="faculty-field">
@@ -359,7 +386,7 @@ export default function AdminFacultyExtraIncentivesPage() {
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       ) : null}
     </main>
   );

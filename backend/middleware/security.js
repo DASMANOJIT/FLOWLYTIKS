@@ -1,16 +1,11 @@
 import { normalizeEmail } from "../utils/authValidation.js";
 import prisma from "../prisma/client.js";
+import { getRequestIp, logError } from "../utils/appLogger.js";
 
 const fallbackBuckets = new Map();
 const canUseFallbackRateLimitStore = process.env.NODE_ENV !== "production";
 
-const getRequesterIp = (req) => {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string" && forwarded.trim()) {
-    return forwarded.split(",")[0].trim();
-  }
-  return req.ip || req.socket?.remoteAddress || "unknown";
-};
+const getRequesterIp = getRequestIp;
 
 export const createRateLimiter = ({
   namespace,
@@ -20,24 +15,16 @@ export const createRateLimiter = ({
   keyGenerator,
 }) => {
   return async (req, res, next) => {
-    const now = new Date();
     const suffix = keyGenerator ? keyGenerator(req) : getRequesterIp(req);
     const key = `${namespace}:${suffix || "unknown"}`;
-    const windowStart = new Date(now.getTime() - windowMs);
 
     try {
-      const requestCount = await prisma.authRateLimitEvent.count({
-        where: {
-          namespace,
-          key,
-          createdAt: {
-            gte: windowStart,
-          },
-        },
-      });
-
-      if (requestCount >= max) {
-        const oldestEvent = await prisma.authRateLimitEvent.findFirst({
+      // A transaction-scoped lock serializes each budget across all app replicas.
+      const retryAfter = await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${key})::bigint)::text AS locked`;
+        const now = new Date();
+        const windowStart = new Date(now.getTime() - windowMs);
+        const requestCount = await tx.authRateLimitEvent.count({
           where: {
             namespace,
             key,
@@ -45,19 +32,32 @@ export const createRateLimiter = ({
               gte: windowStart,
             },
           },
-          orderBy: {
-            createdAt: "asc",
-          },
-          select: {
-            createdAt: true,
-          },
         });
 
-        const oldestTime = oldestEvent?.createdAt?.getTime?.() || now.getTime();
-        const retryAfter = Math.max(
-          1,
-          Math.ceil((windowMs - (now.getTime() - oldestTime)) / 1000)
-        );
+        if (requestCount >= max) {
+          const oldestEvent = await tx.authRateLimitEvent.findFirst({
+            where: {
+              namespace,
+              key,
+              createdAt: {
+                gte: windowStart,
+              },
+            },
+            orderBy: { createdAt: "asc" },
+            select: { createdAt: true },
+          });
+
+          const oldestTime = oldestEvent?.createdAt?.getTime?.() || now.getTime();
+          return Math.max(
+            1,
+            Math.ceil((windowMs - (now.getTime() - oldestTime)) / 1000)
+          );
+        }
+        await tx.authRateLimitEvent.create({ data: { namespace, key } });
+        return null;
+      }, { isolationLevel: "ReadCommitted", maxWait: 5000, timeout: 10000 });
+
+      if (retryAfter !== null) {
         res.setHeader("Retry-After", String(retryAfter));
         const resolvedMessage = typeof message === "function" ? message(req) : message;
         return res.status(429).json({
@@ -68,12 +68,6 @@ export const createRateLimiter = ({
         });
       }
 
-      await prisma.authRateLimitEvent.create({
-        data: {
-          namespace,
-          key,
-        },
-      });
       return next();
     } catch (error) {
       if (canUseFallbackRateLimitStore && shouldUseFallbackRateLimitStore(error)) {
@@ -88,7 +82,7 @@ export const createRateLimiter = ({
           next,
         });
       }
-      console.error("RATE LIMIT ERROR:", error?.message || error);
+      logError("security.rate_limit_failed", { error });
       return res.status(503).json({
         success: false,
         error: "Rate limiter unavailable. Please try again.",
@@ -247,10 +241,10 @@ export const exportRateLimit = createRateLimiter({
   keyGenerator: (req) => getAuthenticatedRequester(req),
 });
 
-export const purgeAuthRateLimitEvents = async () => {
+export const purgeAuthRateLimitEvents = async (db = prisma) => {
   const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
   try {
-    await prisma.authRateLimitEvent.deleteMany({
+    await db.authRateLimitEvent.deleteMany({
       where: {
         createdAt: {
           lt: cutoff,

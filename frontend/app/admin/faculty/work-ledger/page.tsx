@@ -1,11 +1,12 @@
 "use client";
 
+import Modal from "../../../components/ui/Modal";
+
 import type React from "react";
+import BackToDashboard from "../../../components/admin/BackToDashboard";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { buildWorkLedgerPdf } from "../../../../lib/workLedgerPdf.js";
 import {
-  ArrowLeft,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
@@ -21,7 +22,7 @@ import { apiCall } from "../../../../lib/api.js";
 import PremiumLoader from "../../../components/ui/PremiumLoader";
 import "../faculty.css";
 
-type Shift = "MORNING" | "AFTERNOON" | "EVENING";
+type Shift = "DAILY" | "MORNING" | "AFTERNOON" | "EVENING";
 type Toast = { type: "success" | "error"; message: string } | null;
 
 type FacultyOption = {
@@ -98,29 +99,6 @@ type LedgerListResponse = {
   lockReason?: string | null;
 };
 
-type AttendanceCell = {
-  present: boolean;
-  id?: string;
-  amount: number;
-  updatedAt?: string | null;
-  updatedByName?: string | null;
-  updatedByRole?: string | null;
-};
-
-type AttendanceGridRow = {
-  id: string;
-  facultyId: string;
-  fullName: string;
-  canEdit: boolean;
-  weeklyTotal: number;
-  shifts: Record<string, AttendanceCell>;
-};
-
-type AttendanceGridResponse = {
-  days?: string[];
-  grid?: AttendanceGridRow[];
-};
-
 type WorkLedgerDay = {
   date: string;
   day: string;
@@ -174,6 +152,7 @@ type WeeklyPaymentStatus = {
 };
 
 const shifts: Array<{ value: Shift; label: string }> = [
+  { value: "DAILY", label: "Daily Attendance" },
   { value: "MORNING", label: "Morning" },
   { value: "AFTERNOON", label: "Afternoon" },
   { value: "EVENING", label: "Evening" },
@@ -199,8 +178,9 @@ const addDays = (date: Date, days: number) => {
 };
 
 const getFridayWeekStart = (value = new Date()) => {
-  const date = new Date(value);
-  date.setUTCHours(0, 0, 0, 0);
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(value);
+  const part = (type: string) => parts.find(item => item.type === type)?.value;
+  const date = new Date(`${part("year")}-${part("month")}-${part("day")}T00:00:00Z`);
   const daysSinceFriday = (date.getUTCDay() + 2) % 7;
   return addDays(date, -daysSinceFriday);
 };
@@ -229,6 +209,7 @@ const formatUpdatedAt = (value?: string | null) => {
 const buildLocalLedgerDays = (rows: LedgerEntry[], dateKeys: string[]): WorkLedgerDay[] =>
   dateKeys.map((dateKey) => {
     const shiftsByKey = {
+      DAILY: [] as LedgerEntry[],
       MORNING: [] as LedgerEntry[],
       AFTERNOON: [] as LedgerEntry[],
       EVENING: [] as LedgerEntry[],
@@ -270,7 +251,6 @@ const buildLocalCalendarRows = (rows: LedgerEntry[], dateKeys: string[]): WorkLe
     };
   });
 
-const monthKey = (date = new Date()) => date.toISOString().slice(0, 7);
 
 const emptySummary: LedgerSummary = {
   rangeStart: "",
@@ -284,24 +264,14 @@ const emptySummary: LedgerSummary = {
 };
 
 export default function FacultyWorkLedgerPage() {
-  const router = useRouter();
   const [weekStart, setWeekStart] = useState(() => getFridayWeekStart());
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [ledgerDays, setLedgerDays] = useState<WorkLedgerDay[]>([]);
   const [calendarRows, setCalendarRows] = useState<WorkLedgerCalendarRow[]>([]);
   const [isWeekLocked, setIsWeekLocked] = useState(false);
   const [lockReason, setLockReason] = useState<string | null>(null);
-  const [attendanceGrid, setAttendanceGrid] = useState<AttendanceGridRow[]>([]);
-  const [attendanceDays, setAttendanceDays] = useState<string[]>([]);
   const [faculty, setFaculty] = useState<FacultyOption[]>([]);
   const [summary, setSummary] = useState<LedgerSummary>(emptySummary);
-  const [search, setSearch] = useState("");
-  const [facultyFilter, setFacultyFilter] = useState("all");
-  const [shiftFilter, setShiftFilter] = useState("all");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
-  const [monthFilter, setMonthFilter] = useState("");
-  const [mode, setMode] = useState<"week" | "custom" | "month">("week");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [toast, setToast] = useState<Toast>(null);
@@ -320,7 +290,7 @@ export default function FacultyWorkLedgerPage() {
   const [form, setForm] = useState<EntryForm>({
     facultyId: "",
     date: toDateKey(weekStart),
-    shift: "MORNING",
+    shift: "DAILY",
     amount: "",
     remarks: "",
   });
@@ -362,23 +332,7 @@ export default function FacultyWorkLedgerPage() {
     }
   }, [role, token, userId]);
 
-  const queryString = useMemo(() => {
-    const params = new URLSearchParams({
-      facultyId: facultyFilter,
-      shift: shiftFilter,
-      search,
-      limit: "1000",
-    });
-    if (mode === "month" && monthFilter) {
-      params.set("month", monthFilter);
-    } else if (mode === "custom" && startDate && endDate) {
-      params.set("startDate", startDate);
-      params.set("endDate", endDate);
-    } else {
-      params.set("week", toDateKey(weekStart));
-    }
-    return params.toString();
-  }, [endDate, facultyFilter, mode, monthFilter, search, shiftFilter, startDate, weekStart]);
+  const queryString = useMemo(() => new URLSearchParams({ week: toDateKey(weekStart) }).toString(), [weekStart]);
 
   const loadEntries = useCallback(async () => {
     if (!token) {
@@ -401,22 +355,16 @@ export default function FacultyWorkLedgerPage() {
       setSummary(data.summary || emptySummary);
       setIsWeekLocked(Boolean(data.isLocked));
       setLockReason(data.lockReason || null);
-      if (mode === "week") {
-        setAttendanceGrid([]);
-        setAttendanceDays(weekDates);
-      } else {
-        setAttendanceGrid([]);
-        setAttendanceDays([]);
-      }
+
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load work ledger.");
     } finally {
       setLoading(false);
     }
-  }, [mode, queryString, token, weekDates, weekStart]);
+  }, [queryString, token, weekDates]);
 
   const loadPaymentStatus = useCallback(async () => {
-    if (!token || !isAdmin || mode !== "week") {
+    if (!token || !isAdmin) {
       setPaymentStatus(null);
       return;
     }
@@ -434,7 +382,7 @@ export default function FacultyWorkLedgerPage() {
     } finally {
       setPaymentLoading(false);
     }
-  }, [isAdmin, mode, token, weekEnd, weekStart]);
+  }, [isAdmin, token, weekEnd, weekStart]);
 
   useEffect(() => {
     // Read auth info only on client after mount to avoid hydration mismatch
@@ -555,8 +503,7 @@ export default function FacultyWorkLedgerPage() {
     const nextErrors: Record<string, string> = {};
     if (!form.facultyId) nextErrors.facultyId = "Faculty member is required.";
     if (!form.date) nextErrors.date = "Date is required.";
-    if (!form.shift) nextErrors.shift = "Shift is required.";
-    if (!form.amount || Number(form.amount) <= 0) nextErrors.amount = "Amount is required.";
+    if (isAdmin && (!form.amount || Number(form.amount) < 0)) nextErrors.amount = "Amount is required.";
     setFormErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   };
@@ -575,7 +522,7 @@ export default function FacultyWorkLedgerPage() {
           facultyId: form.facultyId,
           date: form.date,
           shift: form.shift,
-          amount: Number(form.amount),
+          ...(isAdmin ? { amount: Number(form.amount) } : {}),
           remarks: form.remarks,
         },
         token
@@ -662,7 +609,7 @@ export default function FacultyWorkLedgerPage() {
         token
       );
       setDetailsMessage({ type: "success", message: "Attendance updated successfully." });
-      await loadEntries();
+      await refreshLedgerAndPayment();
       setDetailsCell((current) =>
         current
           ? {
@@ -680,48 +627,7 @@ export default function FacultyWorkLedgerPage() {
     }
   };
 
-  const toggleAttendanceCell = async (
-    row: AttendanceGridRow,
-    date: string,
-    shift: Shift,
-    present: boolean
-  ) => {
-    if (!token || !row.canEdit) return;
-    try {
-      await callApi(
-        "/faculty/attendance",
-        "PATCH",
-        {
-          facultyId: row.id,
-          date,
-          shift,
-          present,
-        },
-        token
-      );
-      showToast({ type: "success", message: present ? "Attendance marked present." : "Attendance cleared." });
-      await loadEntries();
-    } catch (updateError) {
-      showToast({
-        type: "error",
-        message: updateError instanceof Error ? updateError.message : "Failed to update attendance.",
-      });
-    }
-  };
-
   const setCurrentWeek = () => {
-    setMode("week");
-    setWeekStart(getFridayWeekStart());
-  };
-
-  const resetFilters = () => {
-    setSearch("");
-    setFacultyFilter("all");
-    setShiftFilter("all");
-    setMonthFilter("");
-    setStartDate("");
-    setEndDate("");
-    setMode("week");
     setWeekStart(getFridayWeekStart());
   };
 
@@ -751,43 +657,43 @@ export default function FacultyWorkLedgerPage() {
     }
   };
 
-  const exportXlsx = () => {
-    if (!isAdmin) return;
-    const rows = entries.map((entry) => ({
-      Date: entry.date,
-      Shift: entry.shift,
-      "Faculty ID": entry.faculty?.facultyId || "",
-      "Faculty Name": entry.faculty?.fullName || "",
-      Status: "Present",
-      Amount: entry.amount,
-      Remarks: entry.remarks || "",
-      "Created By": entry.createdBy,
-      "Updated By": entry.updatedByName || entry.updatedBy || "",
-      "Updated By Role": entry.updatedByRole || "",
-      "Created At": entry.createdAt,
-      "Updated At": entry.updatedAt,
-    }));
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Work Ledger");
-    XLSX.writeFile(workbook, `faculty-work-ledger-${Date.now()}.xlsx`);
+  const [exporting, setExporting] = useState(false);
+  const exportReport = async (format: "xlsx" | "pdf") => {
+    if (!isAdmin || !token || exporting) return;
+    setExporting(true);
+    try {
+      const report = await callApi<LedgerListResponse & { weekStart: string; weekEnd: string }>(`/work-ledger/export.json?${queryString}`, "GET", null, token);
+      if (format === "pdf") {
+        (await buildWorkLedgerPdf(report)).save(`faculty-work-ledger-${report.weekStart}.pdf`);
+      } else {
+        const rows = (report.entries || []).map(entry => ({
+          Date: entry.date, "Entry Type": entry.shift, "Faculty ID": entry.faculty?.facultyId || "", "Faculty Name": entry.faculty?.fullName || "",
+          Attendance: "Present", Amount: entry.amount, Remarks: entry.remarks || "", "Updated By": entry.updatedByName || entry.updatedBy || "",
+          "Updated By Role": entry.updatedByRole || "", "Created At": entry.createdAt, "Updated At": entry.updatedAt,
+        }));
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), "Work Ledger");
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet((report.summary?.facultyTotals || []).map(row => ({ "Faculty Name": row.facultyName, "Attendance Entries": row.entries, "Total Amount": row.totalAmount }))), "Faculty Totals");
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([
+          { Date: "Week Start", Amount: report.weekStart }, { Date: "Week End", Amount: report.weekEnd },
+          ...(report.days || []).map(day => ({ Date: day.date, Amount: day.dailyTotal })),
+          { Date: "Weekly Total", Amount: report.summary?.totalAmount || 0 },
+        ]), "Totals");
+        XLSX.writeFile(workbook, `faculty-work-ledger-${report.weekStart}.xlsx`);
+      }
+    } catch (error) { showToast({ type: "error", message: error instanceof Error ? error.message : "Export failed." }); }
+    finally { setExporting(false); }
   };
 
   return (
     <main className="faculty-page">
       <div className="faculty-shell">
         <header className="faculty-header">
-          <button className="faculty-button faculty-button--ghost" onClick={() => router.back()}>
-            <ArrowLeft size={18} />
-            Back
-          </button>
+          <BackToDashboard />
           <div className="faculty-title-block">
             <h1>Faculty Work Ledger</h1>
-            <p>Transparent shift-wise work entries for future payout automation.</p>
+            <p>Daily faculty attendance and recorded amounts for the selected payroll week.</p>
           </div>
-          <Link className="faculty-button faculty-button--ghost" href="/admin/faculty">
-            Faculty List
-          </Link>
         </header>
 
         <section className="faculty-panel">
@@ -798,7 +704,7 @@ export default function FacultyWorkLedgerPage() {
               </h2>
             </div>
             <div className="ledger-weekbar__actions">
-              <button className="faculty-button faculty-button--ghost" onClick={() => { setMode("week"); setWeekStart(addDays(weekStart, -7)); }}>
+              <button className="faculty-button faculty-button--ghost" onClick={() => { setWeekStart(addDays(weekStart, -7)); }}>
                 <ChevronLeft size={17} />
                 Previous Week
               </button>
@@ -806,7 +712,7 @@ export default function FacultyWorkLedgerPage() {
                 <CalendarDays size={17} />
                 Current Week
               </button>
-              <button className="faculty-button faculty-button--ghost" onClick={() => { setMode("week"); setWeekStart(addDays(weekStart, 7)); }}>
+              <button className="faculty-button faculty-button--ghost" onClick={() => { setWeekStart(addDays(weekStart, 7)); }}>
                 Next Week
                 <ChevronRight size={17} />
               </button>
@@ -821,71 +727,6 @@ export default function FacultyWorkLedgerPage() {
           </div>
 
           <div className="faculty-toolbar">
-            <div className="faculty-field">
-              <label>Search by Faculty Name</label>
-              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Faculty name" />
-            </div>
-            <div className="faculty-field">
-              <label>Faculty</label>
-              <select value={facultyFilter} onChange={(event) => setFacultyFilter(event.target.value)}>
-                <option value="all">All faculty</option>
-                {facultyOptions.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.fullName}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="faculty-field">
-              <label>Shift</label>
-              <select value={shiftFilter} onChange={(event) => setShiftFilter(event.target.value)}>
-                <option value="all">All shifts</option>
-                {shifts.map((item) => (
-                  <option key={item.value} value={item.value}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="faculty-field">
-              <label>Month</label>
-              <input
-                type="month"
-                value={monthFilter}
-                onChange={(event) => {
-                  setMonthFilter(event.target.value);
-                  setMode(event.target.value ? "month" : "week");
-                }}
-              />
-            </div>
-            <div className="faculty-field">
-              <label>Date Range Start</label>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(event) => {
-                  setStartDate(event.target.value);
-                  setMode("custom");
-                }}
-              />
-            </div>
-            <div className="faculty-field">
-              <label>Date Range End</label>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(event) => {
-                  setEndDate(event.target.value);
-                  setMode("custom");
-                }}
-              />
-            </div>
-            <div className="faculty-field faculty-field--actions">
-              <label>Filters</label>
-              <button className="faculty-button faculty-button--ghost" onClick={resetFilters}>
-                Reset Filters
-              </button>
-            </div>
             {hasMounted && isAdmin ? (
               <div className="faculty-field faculty-field--actions">
                 <label>Export</label>
@@ -894,17 +735,18 @@ export default function FacultyWorkLedgerPage() {
                     <Download size={16} />
                     CSV
                   </button>
-                  <button className="faculty-button faculty-button--soft" onClick={exportXlsx}>
+                  <button className="faculty-button faculty-button--soft" disabled={exporting} onClick={() => void exportReport("xlsx")}>
                     <FileSpreadsheet size={16} />
                     XLSX
                   </button>
+                  <button className="faculty-button faculty-button--soft" disabled={exporting} onClick={() => void exportReport("pdf")}><Download size={16} />PDF</button>
                 </div>
               </div>
             ) : null}
           </div>
         </section>
 
-        {isAdmin && mode === "week" ? (
+        {isAdmin ? (
           <section className="faculty-panel weekly-payment-panel">
             <div className="faculty-section-heading">
               <div>
@@ -924,9 +766,6 @@ export default function FacultyWorkLedgerPage() {
             {paymentStatus?.status === "PAID" ? (
               <div className="faculty-toast--success">
                 Paid on {paymentStatus.paidAt ? formatUpdatedAt(paymentStatus.paidAt) : "-"} via {paymentStatus.paymentMode || "-"}.
-                {paymentStatus.record?.id ? (
-                  <Link href="/admin/faculty/records" className="faculty-inline-link"> View Record</Link>
-                ) : null}
               </div>
             ) : paymentStatus?.status === "PROCESSING" ? (
               <div className="faculty-toast--success">Online payout is processing. Attendance editing is locked.</div>
@@ -948,13 +787,6 @@ export default function FacultyWorkLedgerPage() {
               <div className="faculty-error">{error}</div>
             ) : (
               <div className="ledger-grid-scroll">
-                <div className="ledger-shift-legend">
-                  {shifts.map((shift) => (
-                    <span key={shift.value} className={`shift-chip shift-chip-${shift.value.toLowerCase()}`}>
-                      {shift.label} Shift
-                    </span>
-                  ))}
-                </div>
                 {isWeekLocked ? <div className="faculty-toast--error">{lockReason || "This week is locked for attendance editing."}</div> : null}
                 <table className="ledger-grid ledger-attendance-grid work-ledger-calendar-grid">
                   <thead>
@@ -989,7 +821,7 @@ export default function FacultyWorkLedgerPage() {
                                     {visibleEntries.map((entry) => (
                                       <button
                                         key={entry.id}
-                                        className={`shift-chip shift-chip-${entry.shift.toLowerCase()}`}
+                                        className="faculty-button faculty-button--soft"
                                         onClick={(event) => {
                                           event.stopPropagation();
                                           openDetailsModal(row, day);
@@ -1029,7 +861,7 @@ export default function FacultyWorkLedgerPage() {
       </div>
 
       {paymentModalOpen && paymentStatus ? (
-        <div className="faculty-modal-backdrop" role="dialog" aria-modal="true">
+        <Modal className="faculty-modal-backdrop" role="dialog" aria-modal="true">
           <div className="faculty-modal payroll-detail-modal">
             <div className="faculty-modal-header">
               <h2>Pay Faculty Week</h2>
@@ -1094,11 +926,11 @@ export default function FacultyWorkLedgerPage() {
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       ) : null}
 
       {detailsCell ? (
-        <div className="faculty-modal-backdrop" role="dialog" aria-modal="true">
+        <Modal className="faculty-modal-backdrop" role="dialog" aria-modal="true">
           <div className="faculty-modal">
             <div className="faculty-modal-header">
               <h2>
@@ -1113,14 +945,7 @@ export default function FacultyWorkLedgerPage() {
               {detailsMessage ? <div className={`faculty-toast--${detailsMessage.type}`}>{detailsMessage.message}</div> : null}
               {detailsCell.entries.length ? (
                 <div className="work-ledger-detail-stack">
-                  {shifts.map((shift) => {
-                    const shiftEntries = detailsCell.entries.filter((entry) => entry.shift === shift.value);
-                    if (!shiftEntries.length) return null;
-                    return (
-                      <section key={shift.value} className="work-ledger-detail-section">
-                        <h3>
-                          <span className={`shift-chip shift-chip-${shift.value.toLowerCase()}`}>{shift.label} Shift</span>
-                        </h3>
+                  <section className="work-ledger-detail-section">
                         <div className="faculty-table-wrap">
                           <table className="faculty-table">
                             <thead>
@@ -1135,7 +960,7 @@ export default function FacultyWorkLedgerPage() {
                               </tr>
                             </thead>
                             <tbody>
-                              {shiftEntries.map((entry) => {
+                              {detailsCell.entries.map((entry) => {
                                 const draft = detailsDrafts[entry.id] || { present: true, amount: String(entry.amount || 0), remarks: entry.remarks || "" };
                                 return (
                                   <tr key={entry.id}>
@@ -1183,9 +1008,7 @@ export default function FacultyWorkLedgerPage() {
                             </tbody>
                           </table>
                         </div>
-                      </section>
-                    );
-                  })}
+                  </section>
                   <div className="work-ledger-day-total">Day Total: {money(detailsCell.entries.reduce((total, entry) => total + Number(entry.amount || 0), 0))}</div>
                 </div>
               ) : (
@@ -1198,11 +1021,11 @@ export default function FacultyWorkLedgerPage() {
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       ) : null}
 
       {modalOpen ? (
-        <div className="faculty-modal-backdrop" role="dialog" aria-modal="true">
+        <Modal className="faculty-modal-backdrop" role="dialog" aria-modal="true">
           <div className="faculty-modal faculty-modal--confirm">
             <div className="faculty-modal-header">
               <h2>{editingEntry ? "Edit Ledger Entry" : "Add Ledger Entry"}</h2>
@@ -1230,21 +1053,13 @@ export default function FacultyWorkLedgerPage() {
                   <Field label="Date" error={formErrors.date}>
                     <input type="date" value={form.date} readOnly />
                   </Field>
-                  <Field label="Shift" error={formErrors.shift}>
-                    <select value={form.shift} disabled>
-                      {shifts.map((item) => (
-                        <option key={item.value} value={item.value}>
-                          {item.label}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
                   <Field label="Amount" error={formErrors.amount}>
                     <input
                       type="number"
                       min="0"
                       step="0.01"
-                      value={form.amount}
+                      value={isAdmin ? form.amount : String([0, 6].includes(parseDateKey(form.date).getUTCDay()) ? 400 : 200)}
+                      readOnly={!isAdmin}
                       onChange={(event) => setForm((current) => ({ ...current, amount: event.target.value }))}
                     />
                   </Field>
@@ -1280,7 +1095,7 @@ export default function FacultyWorkLedgerPage() {
               </div>
             </form>
           </div>
-        </div>
+        </Modal>
       ) : null}
 
       {toast ? <div className={`faculty-toast faculty-toast--${toast.type}`}>{toast.message}</div> : null}

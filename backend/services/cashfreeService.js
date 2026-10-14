@@ -39,11 +39,12 @@ const toGatewayError = async (response, fallbackMessage) => {
   return error;
 };
 
-const cashfreeRequest = async (path, { method = "GET", body, idempotencyKey } = {}) => {
+const cashfreeRequest = async (path, { method = "GET", body, idempotencyKey, signal } = {}) => {
   const clientId = getCashfreeClientId();
   const clientSecret = getCashfreeClientSecret();
   const response = await fetch(`${getCashfreeBaseUrl()}${path}`, {
     method,
+    signal: signal || AbortSignal.timeout(30000),
     headers: {
       "Content-Type": "application/json",
       "x-api-version": CASHFREE_API_VERSION,
@@ -74,10 +75,12 @@ export const createCashfreeOrder = async ({
   orderNote,
   orderExpiryTime,
   idempotencyKey,
+  signal,
 }) =>
   cashfreeRequest("/orders", {
     method: "POST",
     idempotencyKey,
+    signal,
     body: {
       order_id: orderId,
       order_amount: amount,
@@ -94,11 +97,11 @@ export const createCashfreeOrder = async ({
     },
   });
 
-export const fetchCashfreeOrder = async (orderId) =>
-  cashfreeRequest(`/orders/${encodeURIComponent(orderId)}`);
+export const fetchCashfreeOrder = async (orderId, options = {}) =>
+  cashfreeRequest(`/orders/${encodeURIComponent(orderId)}`, options);
 
-export const fetchCashfreePaymentsForOrder = async (orderId) =>
-  cashfreeRequest(`/orders/${encodeURIComponent(orderId)}/payments`);
+export const fetchCashfreePaymentsForOrder = async (orderId, options = {}) =>
+  cashfreeRequest(`/orders/${encodeURIComponent(orderId)}/payments`, options);
 
 export const verifyCashfreeWebhookSignature = ({
   rawBody,
@@ -159,6 +162,24 @@ const inferPaymentMethod = (payment) => {
 
   const methodKeys = Object.keys(payment.payment_method);
   return methodKeys[0] || payment?.payment_group || null;
+};
+
+export const assertCashfreePaymentEvidence = ({ gatewayOrder, order, normalized }) => {
+  const matchesAmount = value => value !== null && value !== undefined && value !== "" &&
+    Number.isFinite(Number(value)) && Number(value) === Number(gatewayOrder.amount);
+  const matchesCurrency = value => String(value || "").toUpperCase() === gatewayOrder.currency;
+  const successful = normalized.successfulAttempt;
+  if (
+    order?.order_id !== gatewayOrder.cashfreeOrderId ||
+    !matchesAmount(order?.order_amount) || !matchesCurrency(order?.order_currency) ||
+    (normalized.status === "PAID" && (
+      !successful?.cf_payment_id || !matchesAmount(successful.payment_amount) ||
+      !matchesCurrency(successful.payment_currency) ||
+      (successful.order_id && successful.order_id !== gatewayOrder.cashfreeOrderId)
+    ))
+  ) {
+    throw Object.assign(new Error("Cashfree verification evidence does not match the saved payment order."), { status: 502 });
+  }
 };
 
 export const normalizeCashfreeOrderState = ({ order, payments }) => {

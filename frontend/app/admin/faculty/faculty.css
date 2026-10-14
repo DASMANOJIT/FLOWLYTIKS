@@ -2085,3 +2085,21 @@ body.faculty-mobile-menu-lock {
     grid-template-columns: 1fr;
   }
 }
+.faculty-stats.faculty-management-stats {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+.faculty-management-stats .faculty-stat-card { padding: 14px 16px; min-width: 0; gap: 6px; }
+.faculty-management-stats .faculty-stat-card strong { font-size: 22px; overflow-wrap: anywhere; }
+.faculty-management-stats .faculty-stat-card small { color: #64748b; font-size: 12px; }
+.faculty-profile-actions { grid-column: 1 / -1; }
+.faculty-profile-actions h2 { margin: 0 0 14px; font-size: 18px; }
+@media (max-width: 1100px) {
+  .faculty-stats.faculty-management-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .faculty-stats.faculty-management-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 360px) {
+  .faculty-stats.faculty-management-stats { grid-template-columns: 1fr; }
+}
