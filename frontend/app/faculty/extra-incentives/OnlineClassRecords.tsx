@@ -9,7 +9,7 @@ import pageStyles from "../online-classes/page.module.css";
 export type OnlineClassRecord = {
   id: string; incentiveTypeId?: string; teacherName: string; facultyCode: string; batchName: string; className: string;
   topic: string; message: string | null; startsAt: string; endsAt: string; meetUrl: string;
-  status: string; canComplete: boolean; announcement: string; updatedAt: string;
+  status: string; liveConfirmed?: boolean; canComplete: boolean; announcement: string; updatedAt: string;
   incentive: { id: string; rate: number; amount: number; status: string; paymentRecordId: string | null } | null;
   trackingEnabled?: boolean; verificationStatus?: string; verificationError?: string | null;
   verificationPending?: boolean; verificationMessage?: string;
@@ -20,6 +20,16 @@ export type OnlineClassRecord = {
   directoryGradeId?: string | null; directoryBatchId?: string | null;
 };
 const date = (value: string) => new Date(value).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
+
+function meetingBadge(record: OnlineClassRecord) {
+  if (record.status === "LIVE" && !record.liveConfirmed) {
+    return { label: record.verificationStatus?.endsWith("_REVIEW") ? "Review required" : "Status unconfirmed", style: pageStyles.scheduled, Icon: Clock };
+  }
+  if (record.status === "COMPLETED") return { label: "Completed", style: pageStyles.completed, Icon: CheckCircle2 };
+  if (record.status === "CANCELLED") return { label: "Cancelled", style: pageStyles.cancelled, Icon: XCircle };
+  if (record.status === "LIVE") return { label: "Live", style: pageStyles.live, Icon: null };
+  return { label: "Scheduled", style: pageStyles.scheduled, Icon: Clock };
+}
 
 export default function OnlineClassRecords({ records, busy, onEdit, onAction, onPreview, onDelete, token, enhanced = false }: {
   records: OnlineClassRecord[]; busy?: boolean;
@@ -43,11 +53,13 @@ export default function OnlineClassRecords({ records, busy, onEdit, onAction, on
     } catch (error) { setDownloadError(error instanceof Error ? error.message : "Unable to download attendance PDF."); }
     finally { setDownloading(""); }
   };
-  return <div className={styles.records}>{downloadError ? <p role="alert" className="faculty-toast--error">{downloadError}</p> : null}{records.map(record => <article key={record.id} className={`${styles.record} ${enhanced ? pageStyles.historyCard : ""}`}>
-    <div className={styles.recordHeading}><strong>{record.topic}</strong>{enhanced ? <span className={`${pageStyles.badge} ${record.status === "COMPLETED" ? pageStyles.completed : record.status === "CANCELLED" ? pageStyles.cancelled : record.status === "LIVE" ? pageStyles.live : pageStyles.scheduled}`}>
-      {record.status === "COMPLETED" ? <CheckCircle2 size={16} /> : record.status === "CANCELLED" ? <XCircle size={16} /> : record.status === "LIVE" ? <span className={pageStyles.liveDot} aria-hidden="true" /> : <Clock size={16} />}
-      {record.status === "SCHEDULED" ? "Scheduled" : record.status === "LIVE" ? "Live" : record.status === "COMPLETED" ? "Completed" : "Cancelled"}
-    </span> : <span className="faculty-status">{record.status === "SCHEDULED" ? "Scheduled" : record.status === "LIVE" ? "Live" : record.status === "COMPLETED" ? "Completed" : "Cancelled"}</span>}</div>
+  return <div className={styles.records}>{downloadError ? <p role="alert" className="faculty-toast--error">{downloadError}</p> : null}{records.map(record => {
+    const badge = meetingBadge(record);
+    return <article key={record.id} className={`${styles.record} ${enhanced ? pageStyles.historyCard : ""}`}>
+    <div className={styles.recordHeading}><strong>{record.topic}</strong>{enhanced ? <span className={`${pageStyles.badge} ${badge.style}`}>
+      {badge.Icon ? <badge.Icon size={16} /> : <span className={pageStyles.liveDot} aria-hidden="true" />}
+      {badge.label}
+    </span> : <span className="faculty-status">{badge.label}</span>}</div>
     <dl className={styles.details}>
       <div><dt>Teacher</dt><dd>{record.teacherName} ({record.facultyCode})</dd></div>
       <div><dt>Batches</dt><dd>{record.batchName}</dd></div>
@@ -75,5 +87,5 @@ export default function OnlineClassRecords({ records, busy, onEdit, onAction, on
       {onDelete ? <button type="button" className={`faculty-button faculty-button--ghost ${pageStyles.deleteButton}`} onClick={() => onDelete(record)} disabled={busy || !record.canDelete} title={record.deletionBlockedReason || undefined}><Trash2 size={16} />Delete Class</button> : null}
     </div>
     {onDelete && record.deletionBlockedReason ? <p className={styles.muted}>{record.deletionBlockedReason}</p> : null}
-  </article>)}</div>;
+  </article>; })}</div>;
 }

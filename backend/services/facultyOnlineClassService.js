@@ -41,6 +41,7 @@ export function onlineClassDto(row, now = new Date()) {
   return { id: row.id, facultyId: row.facultyId, teacherName, facultyCode: row.faculty.facultyId,
     incentiveTypeId: row.incentiveTypeId, directoryGradeId: row.directoryGradeId || null, batchIds: (row.batches || []).map(batch => batch.batchId), batchNames: onlineClassBatchNames(row), batchName: onlineClassBatchNames(row).join(", "), className: row.className, topic: row.topic, message: row.message,
     startsAt: row.startsAt, endsAt: row.endsAt, meetUrl: row.meetUrl, status: row.status, updatedAt: row.updatedAt,
+    liveConfirmed: row.status === "LIVE" && row.verificationStatus === "LIVE" && Boolean(row.conferenceName && row.actualStartAt) && !row.actualEndAt && !row.verificationError,
     canComplete: false, trackingEnabled: Boolean(row.trackingEnabled),
     canEdit: !row.deletedAt && row.status === "SCHEDULED" && !row.conferenceName && !row.incentiveEntryId && !(row.pollLeaseUntil > now),
     canCancel: !row.deletedAt && row.status === "SCHEDULED" && !row.actualStartAt && !row.actualEndAt && !row.completedAt && !row.incentiveEntryId,

@@ -175,13 +175,21 @@ export async function checkOnlineMeeting(id, facultyId, { db = prisma, fetcher =
       await progress({ attendanceEvidence: evidence });
     });
     candidates = matchConferences(candidates, row, space.name);
-    if (candidates.length !== 1) fail(candidates.length ? "Multiple conferences match this class. Admin review required." : "Waiting for Google meeting data. Verification will retry automatically; no incentive has been credited.", 409, candidates.length ? "AMBIGUOUS_REVIEW" : "MISSING_DATA");
-    let conference = candidates[0]; resource(conference.name, /^conferenceRecords\/[a-zA-Z0-9_-]+$/);
+    // Reused links can start new calls after a previously identified conference.
+    // Keep that association only when independent saved evidence still agrees.
+    const saved = row.attendanceEvidence?.conference;
+    const associated = candidates.find(candidate => candidate.name === row.conferenceName
+      && row.conferenceSpace === space.name && saved?.name === candidate.name && saved.space === space.name
+      && row.actualStartAt && +stamp(candidate.startTime) === +row.actualStartAt
+      && +stamp(saved.startTime) === +row.actualStartAt);
+    if (candidates.length !== 1 && !associated) fail(candidates.length ? "Multiple conferences match this class. Admin review required." : "Waiting for Google meeting data. Verification will retry automatically; no incentive has been credited.", 409, candidates.length ? "AMBIGUOUS_REVIEW" : "MISSING_DATA");
+    let conference = associated || candidates[0]; resource(conference.name, /^conferenceRecords\/[a-zA-Z0-9_-]+$/);
     if (row.conferenceName && row.conferenceName !== conference.name) fail("The conference match changed. Admin review required.", 409, "MATCH_REVIEW");
     const duplicates = await db.facultyOnlineClass.findMany({ where: { id: { not: id }, AND: [{ OR: [{ status: { not: "CANCELLED" } }, { deletedAt: { not: null } }] }, { OR: [{ conferenceName: conference.name }, { meetUrl: { startsWith: `https://meet.google.com/${meetingCode(row.meetUrl)}` }, startsAt: { lte: new Date(+stamp(conference.startTime) + MEET_START_TOLERANCE_MS) }, endsAt: { gt: new Date(+stamp(conference.startTime) - MEET_START_TOLERANCE_MS) } }] }] }, select: { id: true } });
     if (duplicates.length) fail("Another class matches this conference. Admin review required; no duplicate credit allowed.", 409, "DUPLICATE_REVIEW");
-    conference = await client.get(conference.name);
-    if (matchConferences([conference], row, space.name).length !== 1) fail("Conference details changed. Admin review required.", 409, "MATCH_REVIEW");
+    const selected = conference;
+    conference = await client.get(selected.name);
+    if (conference.name !== selected.name || (row.conferenceName && +stamp(conference.startTime) !== +row.actualStartAt) || matchConferences([conference], row, space.name).length !== 1) fail("Conference details changed. Admin review required.", 409, "MATCH_REVIEW");
     evidence.conference = { name: conference.name, space: conference.space, startTime: conference.startTime, endTime: conference.endTime || null, expireTime: conference.expireTime || null };
     await progress({ conferenceName: conference.name, conferenceSpace: space.name, actualStartAt: stamp(conference.startTime), actualEndAt: stamp(conference.endTime), conferenceExpiresAt: stamp(conference.expireTime), status: conference.endTime ? "COMPLETED" : "LIVE", attendanceEvidence: evidence });
     let teacherId = null;
@@ -204,7 +212,7 @@ export async function checkOnlineMeeting(id, facultyId, { db = prisma, fetcher =
     });
     // Re-fetch conference end, not teacher departure or the planned schedule.
     const final = await client.get(conference.name);
-    if (final.name !== conference.name || matchConferences([final], row, space.name).length !== 1) fail("Conference details changed. Admin review required.", 409, "MATCH_REVIEW");
+    if (final.name !== conference.name || +stamp(final.startTime) !== +stamp(conference.startTime) || matchConferences([final], row, space.name).length !== 1) fail("Conference details changed. Admin review required.", 409, "MATCH_REVIEW");
     conference = final; evidence.conference = { ...evidence.conference, endTime: final.endTime || null };
     const summary = attendanceSummary(evidence.partialParticipants, conference, teacherId);
     evidence.participants = evidence.partialParticipants; delete evidence.partialParticipants; evidence.summary = summary;

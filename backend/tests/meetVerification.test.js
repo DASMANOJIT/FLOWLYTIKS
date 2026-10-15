@@ -65,6 +65,74 @@ function provider({ ended = true, unknownTeacher = false, ambiguous = false, ses
 }
 const options = (db, p, extra = {}) => ({ db, now, fetcher: p.fetcher, env: { GOOGLE_CLIENT_ID: "controlled-client" }, getToken: async () => "controlled-access", ...extra });
 
+test("a previously live conference becoming ambiguous is review-required, not confirmed live", async () => {
+  const db = fixture();
+  const live = await checkOnlineMeeting("class-one", "faculty-one", options(db, provider({ ended: false })));
+  assert.equal(live.status, "LIVE");
+  const retained = db.rows[0].conferenceName;
+  db.rows[0].actualStartAt = new Date(+db.rows[0].actualStartAt - 1000);
+  const retryAt = new Date(+db.rows[0].nextCheckAt + 1);
+  const result = await checkOnlineMeeting("class-one", "faculty-one", options(db, provider({ ambiguous: true }), { now: retryAt }));
+  assert.equal(result.verificationStatus, "AMBIGUOUS_REVIEW");
+  assert.equal(result.liveConfirmed, false);
+  assert.equal(result.status, "LIVE", "Keep the protected lifecycle; do not permit cancellation/deletion by downgrading it");
+  assert.equal(db.rows[0].conferenceName, retained);
+  assert.equal(db.rows[0].attendanceEvidence.candidates.length, 3);
+  assert.equal(db.entries.length, 0);
+  let automaticChecks = 0;
+  await pollOnlineMeetings({ db, now: new Date(+db.rows[0].nextCheckAt + 1), check: async () => { automaticChecks++; } });
+  assert.equal(automaticChecks, 0, "Genuine ambiguity remains for review, not automatic selection");
+  const repeated = await checkOnlineMeeting("class-one", "faculty-one", options(db, provider({ ambiguous: true }), { now: new Date(+db.rows[0].nextCheckAt + 1) }));
+  assert.equal(repeated.liveConfirmed, false);
+  assert.equal(repeated.verificationStatus, "AMBIGUOUS_REVIEW");
+  assert.equal(db.entries.length, 0);
+});
+
+test("proven live association survives separate restarted conferences and completes only its own evidence", async () => {
+  const db = fixture();
+  await checkOnlineMeeting("class-one", "faculty-one", options(db, provider({ ended: false })));
+  const result = await checkOnlineMeeting("class-one", "faculty-one", options(db, provider({ ambiguous: true }), { now: new Date(+db.rows[0].nextCheckAt + 1) }));
+  assert.equal(result.conferenceName, conference.name);
+  assert.equal(result.status, "COMPLETED");
+  assert.equal(result.verificationStatus, "VERIFIED");
+  assert.equal(+result.actualEndAt, +new Date(conference.endTime));
+  assert.equal(db.rows[0].attendanceEvidence.candidates.length, 3);
+  await checkOnlineMeeting("class-one", "faculty-one", options(db, provider({ ambiguous: true })));
+  assert.equal(db.entries.length, 1);
+});
+
+test("duplicate candidate pages do not become distinct conferences", () => {
+  assert.deepEqual(matchConferences([conference, conference, { ...conference }], row(), conference.space), [conference]);
+});
+
+test("fresh conference identity or start-time changes invalidate an established association", async () => {
+  for (const changed of [{ name: "conferenceRecords/replaced" }, { startTime: "2026-10-11T12:00:01Z" }, { space: "spaces/other" }]) {
+    const db = fixture();
+    await checkOnlineMeeting("class-one", "faculty-one", options(db, provider({ ended: false })));
+    const p = provider({ ambiguous: true });
+    const fetcher = input => new URL(input).pathname.endsWith(conference.name) ? json({ ...conference, ...changed }) : p.fetcher(input);
+    const result = await checkOnlineMeeting("class-one", "faculty-one", options(db, p, { fetcher, now: new Date(+db.rows[0].nextCheckAt + 1) }));
+    assert.equal(result.verificationStatus, "MATCH_REVIEW");
+    assert.equal(result.liveConfirmed, false);
+    assert.equal(result.conferenceName, conference.name);
+    assert.equal(db.entries.length, 0);
+  }
+});
+
+test("same conference live-to-ended refresh credits once and repeated checks retain completion", async () => {
+  const db = fixture();
+  const live = await checkOnlineMeeting("class-one", "faculty-one", options(db, provider({ ended: false })));
+  assert.equal(live.liveConfirmed, true);
+  assert.equal(db.entries.length, 0);
+  const ended = await checkOnlineMeeting("class-one", "faculty-one", options(db, provider(), { now: new Date(+db.rows[0].nextCheckAt + 1) }));
+  assert.equal(ended.status, "COMPLETED");
+  assert.equal(ended.liveConfirmed, false);
+  assert.equal(ended.verificationStatus, "VERIFIED");
+  assert.equal(+ended.actualEndAt, +new Date(conference.endTime));
+  await checkOnlineMeeting("class-one", "faculty-one", options(db, provider()));
+  assert.equal(db.entries.length, 1);
+});
+
 test("automatic credit waits while an incentive payout holds the accounting lease", async () => {
   const db = fixture();
   db.facultyExtraIncentiveOperationLock.findUnique = async () => ({ expiresAt: new Date(Date.now() + 60000) });
