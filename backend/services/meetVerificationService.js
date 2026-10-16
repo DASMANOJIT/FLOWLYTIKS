@@ -34,6 +34,15 @@ export function matchConferences(records, row, space) {
   return [...seen.values()];
 }
 
+export function establishedConference(row) {
+  const saved = row.attendanceEvidence?.conference;
+  return /^conferenceRecords\/[a-zA-Z0-9_-]+$/.test(row.conferenceName || "")
+    && /^spaces\/[a-zA-Z0-9_-]+$/.test(row.conferenceSpace || "")
+    && saved?.name === row.conferenceName && saved.space === row.conferenceSpace
+    && row.actualStartAt && +stamp(saved.startTime) === +row.actualStartAt
+    && matchConferences([saved], row, row.conferenceSpace).length === 1 ? saved : null;
+}
+
 export function attendanceSummary(participants, conference, teacherId) {
   const start = stamp(conference.startTime), end = stamp(conference.endTime);
   const groups = new Map(); let complete = Boolean(start && end);
@@ -107,7 +116,7 @@ export function meetClient({ token, refresh, fetcher = fetch, pulse = async () =
   return { get, pages };
 }
 
-export async function finalizeMeeting(tx, row, summary, now, connectionTime) {
+export async function finalizeMeeting(tx, row, summary, now, connectionTime, finalEvidence = null) {
   // Share the payout lease's acquisition barrier before changing pending accounting.
   await tx.$queryRaw`SELECT "id" FROM "Faculty" WHERE "id" = ${row.facultyId} FOR UPDATE`;
   await tx.$queryRaw`SELECT "facultyId" FROM "FacultyExtraIncentiveOperationLock" WHERE "facultyId" = ${row.facultyId} FOR UPDATE`;
@@ -117,6 +126,10 @@ export async function finalizeMeeting(tx, row, summary, now, connectionTime) {
   const current = await tx.facultyOnlineClass.findUnique({ where: { id: row.id }, include: onlineClassInclude });
   if (!current || current.deletedAt || current.status === "CANCELLED" || current.pollLeaseToken !== row.pollLeaseToken) return current;
   if (current.incentiveEntryId) return current;
+  if (finalEvidence) {
+    await tx.facultyOnlineClass.update({ where: { id: row.id }, data: finalEvidence });
+    Object.assign(current, finalEvidence);
+  }
   const connection = await tx.facultyGoogleConnection.findUnique({ where: { facultyId: row.facultyId } });
   const authorized = connection?.status === "CONNECTED" && +connection.connectedAt === +connectionTime;
   const teacherVerified = summary.teacherVerified && Boolean(current.teacherGoogleUserId) && googleTeacherIdentity(connection) === current.teacherGoogleUserId;
@@ -124,7 +137,7 @@ export async function finalizeMeeting(tx, row, summary, now, connectionTime) {
   if (!current.actualEndAt || current.actualEndAt > now) reason = "LIVE";
   const type = await tx.extraIncentiveType.findUnique({ where: { id: current.incentiveTypeId } });
   if (!type?.isActive || !Number.isFinite(Number(type.rate)) || Number(type.rate) <= 0) reason ||= "INCENTIVE_REVIEW";
-  if (reason) return tx.facultyOnlineClass.update({ where: { id: row.id }, data: { status: reason === "LIVE" ? "LIVE" : "COMPLETED", verificationStatus: reason, verificationError: reason === "LIVE" ? null : "Meeting evidence retained; verification or admin review is required. No incentive credited.", ...(summary.complete ? { attendanceCompleteAt: now } : {}) }, include: onlineClassInclude });
+  if (reason) return tx.facultyOnlineClass.update({ where: { id: row.id }, data: { status: reason === "LIVE" ? "LIVE" : summary.complete ? "COMPLETED" : current.status, verificationStatus: reason, verificationError: reason === "LIVE" ? null : "Meeting evidence retained; verification or admin review is required. No incentive credited.", ...(summary.complete ? { attendanceCompleteAt: now } : {}) }, include: onlineClassInclude });
   // Unique conferenceName and incentiveEntryId survive retries and admin corrections.
   const entry = await tx.facultyExtraIncentiveEntry.create({ data: { facultyId: row.facultyId, incentiveTypeId: type.id, quantityChange: 1, rateSnapshot: type.rate, amountSnapshot: type.rate, status: "PENDING", createdByType: "FACULTY", createdById: row.facultyId, note: `Google Meet verified: ${current.conferenceName}` } });
   return tx.facultyOnlineClass.update({ where: { id: row.id }, data: { status: "COMPLETED", completedAt: current.actualEndAt, attendanceCompleteAt: now, verificationStatus: "VERIFIED", verificationError: null, incentiveEntryId: entry.id }, include: onlineClassInclude });
@@ -162,28 +175,31 @@ export async function checkOnlineMeeting(id, facultyId, { db = prisma, fetcher =
     if (!token) fail("Connect or reconnect your Google account.", 409, "RECONNECT_REQUIRED", 3600000);
     const connection = await db.facultyGoogleConnection.findUnique({ where: { facultyId: row.facultyId } });
     const client = meetClient({ token, fetcher, refresh: () => getToken(row.facultyId, { db, env, fetcher, forceRefresh: true }), pulse: () => progress({}) });
-    const space = await client.get(`spaces/${meetingCode(row.meetUrl)}`);
-    resource(space.name, /^spaces\/[a-zA-Z0-9_-]+$/);
-    if (space.meetingCode !== meetingCode(row.meetUrl)) fail("Google meeting link could not be matched.", 409, "MATCH_REVIEW");
-    evidence.candidates = [];
-    evidence.matching = { filter: conferenceFilter(row, space.name), scheduledStartUtc: row.startsAt.toISOString(), scheduledEndUtc: row.endsAt.toISOString(), toleranceMinutes: 15 };
-    let candidates = await client.pages("conferenceRecords", "conferenceRecords", { pageSize: 100, filter: evidence.matching.filter }, async page => {
-      evidence.candidates = [...(evidence.candidates || []), ...page.map(c => ({ name: c.name, space: c.space, startTime: c.startTime, endTime: c.endTime || null, expireTime: c.expireTime || null }))];
-      const cache = new Map((evidence.candidateCache || []).map(c => [c.name, c]));
-      for (const c of evidence.candidates) cache.set(c.name, c);
-      evidence.candidateCache = [...cache.values()];
-      await progress({ attendanceEvidence: evidence });
-    });
-    candidates = matchConferences(candidates, row, space.name);
-    // Reused links can start new calls after a previously identified conference.
-    // Keep that association only when independent saved evidence still agrees.
-    const saved = row.attendanceEvidence?.conference;
-    const associated = candidates.find(candidate => candidate.name === row.conferenceName
-      && row.conferenceSpace === space.name && saved?.name === candidate.name && saved.space === space.name
-      && row.actualStartAt && +stamp(candidate.startTime) === +row.actualStartAt
-      && +stamp(saved.startTime) === +row.actualStartAt);
-    if (candidates.length !== 1 && !associated) fail(candidates.length ? "Multiple conferences match this class. Admin review required." : "Waiting for Google meeting data. Verification will retry automatically; no incentive has been credited.", 409, candidates.length ? "AMBIGUOUS_REVIEW" : "MISSING_DATA");
-    let conference = associated || candidates[0]; resource(conference.name, /^conferenceRecords\/[a-zA-Z0-9_-]+$/);
+    const established = establishedConference(row);
+    let space, conference;
+    if (established) {
+      // Discovery is only for unbound classes. A reused link is not the identity
+      // of an already matched conference, and later list pages may omit it.
+      space = { name: row.conferenceSpace };
+      conference = established;
+    } else {
+      space = await client.get(`spaces/${meetingCode(row.meetUrl)}`);
+      resource(space.name, /^spaces\/[a-zA-Z0-9_-]+$/);
+      if (space.meetingCode !== meetingCode(row.meetUrl)) fail("Google meeting link could not be matched.", 409, "MATCH_REVIEW");
+      evidence.candidates = [];
+      evidence.matching = { filter: conferenceFilter(row, space.name), scheduledStartUtc: row.startsAt.toISOString(), scheduledEndUtc: row.endsAt.toISOString(), toleranceMinutes: 15 };
+      let candidates = await client.pages("conferenceRecords", "conferenceRecords", { pageSize: 100, filter: evidence.matching.filter }, async page => {
+        evidence.candidates = [...(evidence.candidates || []), ...page.map(c => ({ name: c.name, space: c.space, startTime: c.startTime, endTime: c.endTime || null, expireTime: c.expireTime || null }))];
+        const cache = new Map((evidence.candidateCache || []).map(c => [c.name, c]));
+        for (const c of evidence.candidates) cache.set(c.name, c);
+        evidence.candidateCache = [...cache.values()];
+        await progress({ attendanceEvidence: evidence });
+      });
+      candidates = matchConferences(candidates, row, space.name);
+      if (candidates.length !== 1) fail(candidates.length ? "Multiple conferences match this class. Admin review required." : "Waiting for Google meeting data. Verification will retry automatically; no incentive has been credited.", 409, candidates.length ? "AMBIGUOUS_REVIEW" : "MISSING_DATA");
+      conference = candidates[0];
+    }
+    resource(conference.name, /^conferenceRecords\/[a-zA-Z0-9_-]+$/);
     if (row.conferenceName && row.conferenceName !== conference.name) fail("The conference match changed. Admin review required.", 409, "MATCH_REVIEW");
     const duplicates = await db.facultyOnlineClass.findMany({ where: { id: { not: id }, AND: [{ OR: [{ status: { not: "CANCELLED" } }, { deletedAt: { not: null } }] }, { OR: [{ conferenceName: conference.name }, { meetUrl: { startsWith: `https://meet.google.com/${meetingCode(row.meetUrl)}` }, startsAt: { lte: new Date(+stamp(conference.startTime) + MEET_START_TOLERANCE_MS) }, endsAt: { gt: new Date(+stamp(conference.startTime) - MEET_START_TOLERANCE_MS) } }] }] }, select: { id: true } });
     if (duplicates.length) fail("Another class matches this conference. Admin review required; no duplicate credit allowed.", 409, "DUPLICATE_REVIEW");
@@ -191,7 +207,7 @@ export async function checkOnlineMeeting(id, facultyId, { db = prisma, fetcher =
     conference = await client.get(selected.name);
     if (conference.name !== selected.name || (row.conferenceName && +stamp(conference.startTime) !== +row.actualStartAt) || matchConferences([conference], row, space.name).length !== 1) fail("Conference details changed. Admin review required.", 409, "MATCH_REVIEW");
     evidence.conference = { name: conference.name, space: conference.space, startTime: conference.startTime, endTime: conference.endTime || null, expireTime: conference.expireTime || null };
-    await progress({ conferenceName: conference.name, conferenceSpace: space.name, actualStartAt: stamp(conference.startTime), actualEndAt: stamp(conference.endTime), conferenceExpiresAt: stamp(conference.expireTime), status: conference.endTime ? "COMPLETED" : "LIVE", attendanceEvidence: evidence });
+    await progress({ conferenceName: conference.name, conferenceSpace: space.name, actualStartAt: stamp(conference.startTime), actualEndAt: stamp(conference.endTime), conferenceExpiresAt: stamp(conference.expireTime), ...(!conference.endTime ? { status: "LIVE" } : {}), attendanceEvidence: evidence });
     let teacherId = null;
     try { teacherId = await identity(connection); } catch { /* Unknown identity retains evidence, never awards. */ }
     evidence.partialParticipants = [];
@@ -216,9 +232,9 @@ export async function checkOnlineMeeting(id, facultyId, { db = prisma, fetcher =
     conference = final; evidence.conference = { ...evidence.conference, endTime: final.endTime || null };
     const summary = attendanceSummary(evidence.partialParticipants, conference, teacherId);
     evidence.participants = evidence.partialParticipants; delete evidence.partialParticipants; evidence.summary = summary;
-    await progress({ actualEndAt: stamp(conference.endTime), teacherGoogleUserId: teacherId, attendanceEvidence: evidence });
-    await db.$transaction(tx => finalizeMeeting(tx, row, summary, now, connection.connectedAt));
-    await db.facultyOnlineClass.updateMany({ where: { id, pollLeaseToken }, data: { nextCheckAt: new Date(+now + (conference.endTime ? 3600000 : 60000)), lastCheckedAt: now, pollAttempts: 0 } });
+    const finalized = await db.$transaction(tx => finalizeMeeting(tx, row, summary, now, connection.connectedAt, { actualEndAt: stamp(conference.endTime), teacherGoogleUserId: teacherId, attendanceEvidence: evidence }));
+    const retryMs = conference.endTime && finalized?.verificationStatus !== "ATTENDANCE_PENDING" ? 3600000 : 60000;
+    await db.facultyOnlineClass.updateMany({ where: { id, pollLeaseToken }, data: { nextCheckAt: new Date(+now + retryMs), lastCheckedAt: now, pollAttempts: 0 } });
   } catch (error) {
     const failure = meetingFailure(error);
     console.warn("meet.verification.failed", { classId: id, category: failure.code, ...failure.diagnostic });
@@ -236,8 +252,9 @@ export async function checkOnlineMeeting(id, facultyId, { db = prisma, fetcher =
 }
 
 export async function pollOnlineMeetings({ db = prisma, check = checkOnlineMeeting, now = new Date() } = {}) {
-  const rows = await db.facultyOnlineClass.findMany({ where: { trackingEnabled: true, status: { not: "CANCELLED" }, verificationStatus: { notIn: ["VERIFIED", "EXPIRED", "AMBIGUOUS_REVIEW", "DUPLICATE_REVIEW", "MATCH_REVIEW"] }, startsAt: { lte: new Date(+now + MEET_START_TOLERANCE_MS) }, OR: [{ nextCheckAt: null }, { nextCheckAt: { lte: now } }] }, orderBy: [{ nextCheckAt: "asc" }, { id: "asc" }], take: 10, select: { id: true } });
+  const rows = await db.facultyOnlineClass.findMany({ where: { trackingEnabled: true, deletedAt: null, status: { not: "CANCELLED" }, AND: [{ OR: [{ verificationStatus: { notIn: ["VERIFIED", "EXPIRED", "AMBIGUOUS_REVIEW", "DUPLICATE_REVIEW", "MATCH_REVIEW"] } }, { verificationStatus: "AMBIGUOUS_REVIEW", conferenceName: { not: null }, conferenceSpace: { not: null }, actualStartAt: { not: null } }] }, { OR: [{ nextCheckAt: null }, { nextCheckAt: { lte: now } }] }], startsAt: { lte: new Date(+now + MEET_START_TOLERANCE_MS) } }, orderBy: [{ nextCheckAt: "asc" }, { id: "asc" }], take: 10, select: { id: true, verificationStatus: true, conferenceName: true, conferenceSpace: true, actualStartAt: true, startsAt: true, endsAt: true, attendanceEvidence: true } });
   for (const row of rows) {
+    if (row.verificationStatus === "AMBIGUOUS_REVIEW" && !establishedConference(row)) continue;
     try { await check(row.id, null, { db, now }); }
     catch (error) { if (!["CHECK_RUNNING", "CHECK_NOT_DUE"].includes(error.code)) console.warn("meet.poll.failed", { code: error.code || "UNAVAILABLE" }); }
   }

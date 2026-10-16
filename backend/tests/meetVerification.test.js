@@ -96,7 +96,7 @@ test("proven live association survives separate restarted conferences and comple
   assert.equal(result.status, "COMPLETED");
   assert.equal(result.verificationStatus, "VERIFIED");
   assert.equal(+result.actualEndAt, +new Date(conference.endTime));
-  assert.equal(db.rows[0].attendanceEvidence.candidates.length, 3);
+  assert.equal(db.rows[0].attendanceEvidence.candidates.length, 2, "Retain discovery evidence; do not rediscover on a bound conference");
   await checkOnlineMeeting("class-one", "faculty-one", options(db, provider({ ambiguous: true })));
   assert.equal(db.entries.length, 1);
 });
