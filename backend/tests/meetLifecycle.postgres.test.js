@@ -59,18 +59,21 @@ test("authenticated routes and restarted worker finish the bound conference, not
       const space = /space.name = "([^"]+)"/.exec(url.searchParams.get("filter"))?.[1];
       const s = [...states.values()].find(s => s.space === space);
       assert.ok(s, "Only test-owned spaces may be requested");
-      const extra = { name: `conferenceRecords/other-${s.id}`, space: s.space, startTime: new Date(+start + 1900000).toISOString(), endTime: new Date(+start + 2000000).toISOString() };
+      const extra = { name: `conferenceRecords/other-${s.id}`, space: s.space, startTime: new Date(+start + 300000).toISOString(), endTime: new Date(+start + 600000).toISOString() };
       // Once a link is reused, Google list discovery deliberately omits the original.
       body = { conferenceRecords: s.ambiguous ? [s.conference(), extra] : s.reused ? [extra] : [s.conference()] };
     } else {
       assert.ok(state, "Only the exact saved conference may be requested");
       if (path.startsWith("spaces/")) body = { name: state.space, meetingCode: state.code };
-      else if (path === state.name) body = state.conference();
+      else if (path === state.name) {
+        body = state.conference();
+        if (state.pauseOnce) { state.pauseOnce = false; state.paused(); await state.resume; }
+      }
       else if (path === `${state.name}/participants`) body = url.searchParams.has("pageToken") ? { participants: [{ name: `${state.name}/participants/peer`, signedinUser: { user: "users/peer", displayName: "Lifecycle Peer" } }] } : { participants: [{ name: `${state.name}/participants/teacher`, signedinUser: { user: "users/teacher", displayName: "Lifecycle Teacher" } }], nextPageToken: "peer" };
       else if (path.endsWith("/participantSessions")) {
         const teacher = path.includes("/teacher/");
-        const left = !state.pendingSessions && state.phase !== "live" && (teacher || state.phase !== "teacher-left");
         const second = url.searchParams.has("pageToken");
+        const left = !state.pendingSessions && (["ended", "everyone-left"].includes(state.phase) || (teacher && (state.phase === "teacher-left" || state.phase === "teacher-rejoined" && !second)));
         const finish = teacher ? new Date(+start + 600000) : end;
         body = { participantSessions: [{ name: `${path}/${second ? "second" : "first"}`, startTime: second ? new Date(+start + 300000).toISOString() : start.toISOString(), endTime: left ? finish.toISOString() : null }], ...(!second ? { nextPageToken: "session" } : {}) };
       } else throw new Error("Unexpected Google request");
@@ -79,10 +82,11 @@ test("authenticated routes and restarted worker finish the bound conference, not
   };
   const format = value => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(value);
   const time = value => new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(value);
-  const create = async () => {
+  const create = async ({ legacy = false } = {}) => {
     const letters = randomUUID().replaceAll("-", "").slice(0, 10).replace(/[0-9]/g, digit => String.fromCharCode(97 + Number(digit)));
     const code = `${letters.slice(0, 3)}-${letters.slice(3, 7)}-${letters.slice(7)}`;
-    const { record } = await request("/my/online-classes", owner, "POST", { requestId: randomUUID(), incentiveTypeId: type.id, batchIds: [batch.id], topic: "Lifecycle fixture", date: format(start), startTime: time(start), endTime: time(end), meetUrl: `https://meet.google.com/${code}` });
+    const { record } = await request("/my/online-classes", owner, "POST", { requestId: randomUUID(), incentiveTypeId: type.id, batchIds: [batch.id], topic: "Lifecycle fixture", date: format(start), startTime: time(start), ...(legacy ? { endTime: time(end) } : {}), meetUrl: `https://meet.google.com/${code}` });
+    assert.equal(record.endsAt, legacy ? end.toISOString() : null);
     // Fixture creation predates the conference; no real scheduling clock is changed.
     await db.facultyOnlineClass.update({ where: { id: record.id }, data: { createdAt, nextCheckAt: null } });
     const s = { id: record.id, code, name: `conferenceRecords/lifecycle-${randomUUID()}`, space: `spaces/${randomUUID()}`, phase: "live", reused: false, ambiguous: false };
@@ -99,6 +103,20 @@ test("authenticated routes and restarted worker finish the bound conference, not
     await done; await stopWorker(); stopWorker = null;
   };
 
+  await t.test("Faculty and Admin edits omit scheduled end; legacy ends survive rescheduling", async () => {
+    for (const legacy of [false, true]) {
+      const s = await create({ legacy });
+      for (const auth of [owner, adminToken]) {
+        const current = await db.facultyOnlineClass.findUniqueOrThrow({ where: { id: s.id } });
+        const changedStart = new Date(+start + 86400000);
+        const result = await request(auth === owner ? `/my/online-classes/${s.id}` : `/admin/online-classes/${s.id}`, auth, "PATCH", { batchIds: [batch.id], topic: "Edited without end", date: format(changedStart), startTime: time(changedStart), meetUrl: current.meetUrl, expectedUpdatedAt: current.updatedAt.toISOString() });
+        assert.equal(result.record.endsAt, legacy ? end.toISOString() : null);
+        assert.equal(result.record.startsAt, changedStart.toISOString());
+      }
+      // These future schedules are not due during the subsequent worker checks.
+    }
+  });
+
   await t.test("route discovers Live atomically; teacher departure and even empty attendance do not prove conference end", async () => {
     const s = await create();
     assert.equal((await check(s)).status, "LIVE");
@@ -109,7 +127,7 @@ test("authenticated routes and restarted worker finish the bound conference, not
     assert.equal(persisted.attendanceEvidence.conference.space, persisted.conferenceSpace);
     s.reused = true;
     const discoveries = paths.filter(p => p === "conferenceRecords").length;
-    for (const phase of ["teacher-left", "everyone-left"]) {
+    for (const phase of ["teacher-left", "teacher-rejoined", "everyone-left"]) {
       s.phase = phase; await due(s); await runWorker();
       const current = await db.facultyOnlineClass.findUniqueOrThrow({ where: { id: s.id } });
       assert.equal(current.status, "LIVE"); assert.equal(current.actualEndAt, null); assert.equal(current.incentiveEntryId, null);
@@ -156,10 +174,10 @@ test("authenticated routes and restarted worker finish the bound conference, not
     assert.equal(saved.attendanceEvidence.candidates.length, 2);
   });
 
-  await t.test("ended conference waits for final session data before completion and PDF readiness", async () => {
+  await t.test("ended lifecycle completes while incentive and PDF wait for final session data", async () => {
     const s = await create(); await check(s); s.phase = "ended"; s.pendingSessions = true; s.reused = true; await due(s);
     const pending = await check(s);
-    assert.equal(pending.status, "LIVE"); assert.equal(pending.liveConfirmed, false);
+    assert.equal(pending.status, "COMPLETED"); assert.equal(pending.liveConfirmed, false);
     assert.equal(pending.verificationStatus, "ATTENDANCE_PENDING");
     assert.equal(pending.canDownloadAttendance, false); assert.equal(pending.incentive, null);
     assert.equal(+new Date(pending.actualEndAt), +end);
@@ -171,7 +189,7 @@ test("authenticated routes and restarted worker finish the bound conference, not
     assert.ok(saved.attendanceCompleteAt); assert.ok(saved.incentiveEntryId);
   });
 
-  await t.test("failed credit rolls back completion/report readiness and retry finishes the same conference once", async () => {
+  await t.test("failed credit retains completed lifecycle/report evidence and retries the same conference once", async () => {
     const s = await create(); await check(s); s.phase = "ended"; s.reused = true; await due(s);
     const name = `meet_failure_${randomUUID().replaceAll("-", "")}`;
     // Generated identifiers/resources contain no quotes; this fault exists only
@@ -183,17 +201,52 @@ test("authenticated routes and restarted worker finish the bound conference, not
       const failed = await check(s);
       assert.equal(failed.verificationStatus, "DATABASE_ERROR");
       const saved = await db.facultyOnlineClass.findUniqueOrThrow({ where: { id: s.id } });
-      assert.equal(saved.status, "LIVE"); assert.equal(saved.attendanceCompleteAt, null); assert.equal(saved.incentiveEntryId, null);
+      assert.equal(saved.status, "COMPLETED"); assert.ok(saved.attendanceCompleteAt); assert.equal(saved.incentiveEntryId, null);
       assert.equal(saved.conferenceName, s.name); assert.equal(saved.pollLeaseToken, null);
-      assert.equal(failed.canDownloadAttendance, false);
+      assert.equal(failed.canDownloadAttendance, true);
       const pdf = await originalFetch(`${base}/online-classes/${s.id}/attendance.pdf`, { headers: { Authorization: `Bearer ${owner}` } });
-      assert.equal(pdf.status, 409);
+      assert.equal(pdf.status, 200);
     } finally {
       await db.$executeRawUnsafe(`DROP TRIGGER IF EXISTS "${name}" ON "FacultyExtraIncentiveEntry"`);
       await db.$executeRawUnsafe(`DROP FUNCTION "${name}"()`);
     }
     await due(s); assert.equal((await check(s)).verificationStatus, "VERIFIED");
     await Promise.all([check(s), check(s)]);
+    assert.equal(await db.facultyExtraIncentiveEntry.count({ where: { onlineClass: { id: s.id } } }), 1);
+  });
+
+  await t.test("persisted ended evidence with stale LIVE verification recovers through worker and manual routes", async () => {
+    for (const mode of ["worker", "manual"]) {
+      const s = await create(); await check(s); s.phase = "ended"; s.reused = true;
+      const current = await db.facultyOnlineClass.findUniqueOrThrow({ where: { id: s.id } });
+      await db.facultyOnlineClass.update({ where: { id: s.id }, data: { actualEndAt: end, attendanceCompleteAt: now, attendanceEvidence: { ...current.attendanceEvidence, conference: s.conference() }, verificationStatus: "LIVE", nextCheckAt: new Date(Date.now() + 3600000) } });
+      const listing = await request("/my/online-classes");
+      const shown = listing.records.find(record => record.id === s.id);
+      assert.equal(shown.status, "COMPLETED"); assert.equal(shown.verificationStatus, "ATTENDANCE_PENDING");
+      if (mode === "worker") await runWorker(); else await Promise.all([check(s), check(s), runWorker()]);
+      const finished = await db.facultyOnlineClass.findUniqueOrThrow({ where: { id: s.id } });
+      assert.equal(finished.status, "COMPLETED"); assert.equal(finished.verificationStatus, "VERIFIED");
+      assert.equal(await db.facultyExtraIncentiveEntry.count({ where: { onlineClass: { id: s.id } } }), 1);
+    }
+  });
+
+  await t.test("a superseded live response cannot overwrite a restarted worker's completed evidence or credit", async () => {
+    const s = await create(); await check(s); await due(s);
+    let entered, release;
+    const paused = new Promise(resolve => { entered = resolve; });
+    s.pauseOnce = true; s.paused = entered; s.resume = new Promise(resolve => { release = resolve; });
+    const stale = check(s);
+    try {
+      await paused;
+      await db.facultyOnlineClass.update({ where: { id: s.id }, data: { pollLeaseUntil: new Date(0) } });
+      s.phase = "ended"; s.reused = true;
+      await runWorker();
+    } finally { release(); }
+    const response = await stale;
+    assert.equal(response.status, "COMPLETED"); assert.equal(response.verificationStatus, "VERIFIED");
+    const saved = await db.facultyOnlineClass.findUniqueOrThrow({ where: { id: s.id } });
+    assert.equal(+saved.actualEndAt, +end); assert.equal(saved.attendanceEvidence.conference.endTime, end.toISOString());
+    assert.equal(saved.verificationStatus, "VERIFIED"); assert.equal(saved.pollLeaseToken, null);
     assert.equal(await db.facultyExtraIncentiveEntry.count({ where: { onlineClass: { id: s.id } } }), 1);
   });
 });

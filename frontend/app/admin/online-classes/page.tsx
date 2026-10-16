@@ -17,7 +17,7 @@ const base = "/faculty-extra-incentives";
 type History = { records: OnlineClassRecord[]; hasMore: boolean; total: number; batches: string[]; faculties: { id: string; fullName: string; facultyId: string }[] };
 type DirectoryEditor = { name: string };
 const blankFilters = { search: "", date: "", batch: "", facultyId: "", status: "" };
-const blankClass = { batchIds: [] as string[], batchName: "", topic: "", message: "", date: "", startTime: "", endTime: "", meetUrl: "" };
+const blankClass = { batchIds: [] as string[], batchName: "", topic: "", message: "", date: "", startTime: "", meetUrl: "" };
 const istParts = (value: string) => new Date(+new Date(value) + 330 * 60000).toISOString();
 
 export default function AdminOnlineClassesPage() {
@@ -117,7 +117,7 @@ export default function AdminOnlineClassesPage() {
   };
   const openEdit = (record: OnlineClassRecord) => {
     setError(""); setSelection({ record, action: "edit" });
-    setClassForm({ batchIds: record.batchIds || [], batchName: record.batchName, topic: record.topic, message: record.message || "", date: istParts(record.startsAt).slice(0, 10), startTime: istParts(record.startsAt).slice(11, 16), endTime: istParts(record.endsAt).slice(11, 16), meetUrl: record.meetUrl });
+    setClassForm({ batchIds: record.batchIds || [], batchName: record.batchName, topic: record.topic, message: record.message || "", date: istParts(record.startsAt).slice(0, 10), startTime: istParts(record.startsAt).slice(11, 16), meetUrl: record.meetUrl });
   };
   const action = (record: OnlineClassRecord, kind: "cancel" | "check") => {
     setError("");
@@ -171,7 +171,7 @@ export default function AdminOnlineClassesPage() {
         <ClassDirectoryFields batches={directory} value={classForm} onChange={value => setClassForm(current => ({ ...current, ...value }))} existing loading={directoryLoading} error={directoryError} disabled={busy || directoryLoading || Boolean(directoryError)} />
         <label className="faculty-field"><span>Topic</span><input required maxLength={200} value={classForm.topic} onChange={event => field("topic", event.target.value)} disabled={busy} /></label>
         <label className="faculty-field"><span>Google Meet Link</span><input required type="url" value={classForm.meetUrl} onChange={event => field("meetUrl", event.target.value)} disabled={busy} /></label>
-        <ClassDateTimeFields date={classForm.date} startTime={classForm.startTime} endTime={classForm.endTime} disabled={busy} onChange={field} />
+        <ClassDateTimeFields date={classForm.date} startTime={classForm.startTime} disabled={busy} onChange={field} />
         <label className={`faculty-field ${styles.wide}`}><span>Announcement (optional)</span><textarea maxLength={2000} value={classForm.message} onChange={event => field("message", event.target.value)} disabled={busy} /></label>
         {error ? <p role="alert" className={`faculty-toast--error ${styles.wide}`}>{error}</p> : null}<div className={`${styles.actions} ${styles.wide}`}><button type="button" className="faculty-button faculty-button--ghost" disabled={busy} onClick={close}>Cancel</button><button type="submit" className="faculty-button faculty-button--primary" disabled={busy}>{busy ? "Saving..." : "Save Changes"}</button></div>
       </form> : <><p>{selection.action === "delete" ? "Remove this scheduled or cancelled class and reverse its linked unpaid incentive, if any. Live, completed, paid or processing records cannot be deleted here." : "Cancelled classes cannot receive an incentive. Existing evidence is retained."}</p>{error ? <p role="alert" className="faculty-toast--error">{error}</p> : null}<div className={styles.actions}><button className="faculty-button faculty-button--ghost" disabled={busy} onClick={close}>Back</button><button className="faculty-button faculty-button--primary" disabled={busy} onClick={() => saveClass()}>{busy ? "Processing..." : selection.action === "delete" ? "Confirm Delete" : "Confirm Cancellation"}</button></div></>}

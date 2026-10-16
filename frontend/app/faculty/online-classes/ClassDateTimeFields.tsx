@@ -5,9 +5,9 @@ import Calendar from "react-calendar";
 import { CalendarDays, Clock, X } from "lucide-react";
 import styles from "./page.module.css";
 
-export default function ClassDateTimeFields({ date, startTime, endTime, disabled, onChange }: {
-  date: string; startTime: string; endTime: string; disabled: boolean;
-  onChange: (field: "date" | "startTime" | "endTime", value: string) => void;
+export default function ClassDateTimeFields({ date, startTime, disabled, onChange }: {
+  date: string; startTime: string; disabled: boolean;
+  onChange: (field: "date" | "startTime", value: string) => void;
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -22,7 +22,7 @@ export default function ClassDateTimeFields({ date, startTime, endTime, disabled
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
   }, [open]);
-  const timeField = (name: "startTime" | "endTime", label: string, value: string) => {
+  const timeField = (name: "startTime", label: string, value: string) => {
     const [hour = "", minute = ""] = value.split(":");
     return <fieldset className={styles.timeField} disabled={disabled}><legend><Clock size={16} /> {label} (IST)</legend><div>
       <select required aria-label={`${label} hour`} value={hour} onChange={event => onChange(name, event.target.value ? `${event.target.value}:${minute || "00"}` : "")}><option value="">Hour</option>{Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0")).map(item => <option key={item} value={item}>{item}</option>)}</select>
@@ -43,6 +43,5 @@ export default function ClassDateTimeFields({ date, startTime, endTime, disabled
       </div> : null}
     </div>
     {timeField("startTime", "Start Time", startTime)}
-    {timeField("endTime", "End Time", endTime)}
   </div>;
 }

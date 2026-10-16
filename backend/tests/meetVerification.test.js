@@ -65,6 +65,42 @@ function provider({ ended = true, unknownTeacher = false, ambiguous = false, ses
 }
 const options = (db, p, extra = {}) => ({ db, now, fetcher: p.fetcher, env: { GOOGLE_CLIENT_ID: "controlled-client" }, getToken: async () => "controlled-access", ...extra });
 
+test("Google end received after check-start clock completes lifecycle independently of incentive review", async () => {
+  const db = fixture();
+  const result = await checkOnlineMeeting("class-one", "faculty-one", options(db, provider(), { now: new Date("2026-10-11T12:44:59Z") }));
+  assert.equal(result.status, "COMPLETED");
+  assert.notEqual(result.verificationStatus, "LIVE");
+  assert.equal(result.actualDurationSeconds, 2700);
+});
+
+test("ended evidence survives a later stale live conference response and incomplete attendance", async () => {
+  for (const partial of [false, true]) {
+    const db = fixture(), p = provider({ sessionFailure: partial });
+    let reads = 0;
+    const fetcher = input => new URL(input).pathname.endsWith(conference.name) && ++reads > 1 ? json({ ...conference, endTime: null }) : p.fetcher(input);
+    const result = await checkOnlineMeeting("class-one", "faculty-one", options(db, p, { fetcher }));
+    assert.equal(result.status, "COMPLETED");
+    assert.equal(+result.actualEndAt, +new Date(conference.endTime));
+    assert.notEqual(result.verificationStatus, "LIVE");
+    if (partial) assert.equal(db.entries.length, 0);
+  }
+});
+
+test("nullable schedules use a bounded start window and stale LIVE verification can recover before its old cooldown", async () => {
+  const db = fixture(); db.rows[0].startsAt = new Date(conference.startTime); db.rows[0].endsAt = null;
+  const filter = conferenceFilter(db.rows[0], conference.space);
+  assert.match(filter, /2026-10-11T11:45:00.000Z/); assert.match(filter, /2026-10-11T12:15:00.000Z/);
+  assert.equal(matchConferences([{ ...conference, startTime: "2026-10-11T12:15:00Z" }], db.rows[0], conference.space).length, 0);
+  await checkOnlineMeeting("class-one", "faculty-one", options(db, provider({ ended: false })));
+  Object.assign(db.rows[0], { actualEndAt: new Date(conference.endTime), attendanceCompleteAt: now, nextCheckAt: new Date(+now + 3600000) });
+  db.rows[0].attendanceEvidence.conference.endTime = conference.endTime;
+  const p = provider({ ambiguous: true });
+  const result = await checkOnlineMeeting("class-one", "faculty-one", options(db, p));
+  assert.equal(result.status, "COMPLETED"); assert.equal(result.verificationStatus, "VERIFIED");
+  assert.equal(p.calls.includes("/v2/conferenceRecords"), false);
+  assert.equal(db.entries.length, 1);
+});
+
 test("a previously live conference becoming ambiguous is review-required, not confirmed live", async () => {
   const db = fixture();
   const live = await checkOnlineMeeting("class-one", "faculty-one", options(db, provider({ ended: false })));

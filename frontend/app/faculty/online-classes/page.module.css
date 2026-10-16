@@ -7,7 +7,7 @@
 .timezone { color: #08758d; font-size: 12px; font-weight: 600; background: #eaf8fc; padding: 6px 9px; border-radius: 6px; }
 .content .formGrid { gap: 20px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .content .formGrid :global(.faculty-field--wide) { grid-column: 1 / -1; }
-.timeControls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.timeControls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .content :global(.faculty-field) > span, .dateField > label { color: #33536e; font-size: 13px; font-weight: 600; }
 .content input, .content select, .content textarea { border: 1px solid #cfdfea; border-radius: 6px; background: #fff; font-size: 14px; min-height: 44px; padding: 10px 12px; width: 100%; box-sizing: border-box; color: #203f57; }
 .content input:focus, .content select:focus, .content textarea:focus { outline: 2px solid #72c7e7; outline-offset: 2px; border-color: #138cc0; }

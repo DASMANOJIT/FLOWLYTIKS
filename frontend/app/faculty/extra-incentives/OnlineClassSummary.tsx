@@ -30,7 +30,7 @@ export default function OnlineClassSummary({ token, incentiveTypeId }: { token: 
       <div><dt>Topic</dt><dd>{record.topic}</dd></div>
       <div><dt>Class Date (IST)</dt><dd>{date(record.startsAt)}</dd></div>
       <div><dt>Start Time (IST)</dt><dd>{time(record.startsAt)}</dd></div>
-      <div><dt>End Time (IST)</dt><dd>{time(record.endsAt)}</dd></div>
+      <div><dt>Actual End Time (IST)</dt><dd>{record.actualEndAt ? time(record.actualEndAt) : "Pending Google end time"}</dd></div>
     </dl></article>)}
     {loading ? <p role="status">Loading class records...</p> : null}
     {error ? <p role="alert" className="faculty-toast--error">{error}</p> : null}

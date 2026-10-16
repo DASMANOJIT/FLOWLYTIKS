@@ -8,7 +8,7 @@ import pageStyles from "../online-classes/page.module.css";
 
 export type OnlineClassRecord = {
   id: string; incentiveTypeId?: string; teacherName: string; facultyCode: string; batchName: string; className: string;
-  topic: string; message: string | null; startsAt: string; endsAt: string; meetUrl: string;
+  topic: string; message: string | null; startsAt: string; endsAt: string | null; meetUrl: string;
   status: string; liveConfirmed?: boolean; canComplete: boolean; announcement: string; updatedAt: string;
   incentive: { id: string; rate: number; amount: number; status: string; paymentRecordId: string | null } | null;
   trackingEnabled?: boolean; verificationStatus?: string; verificationError?: string | null;
@@ -64,11 +64,10 @@ export default function OnlineClassRecords({ records, busy, onEdit, onAction, on
       <div><dt>Teacher</dt><dd>{record.teacherName} ({record.facultyCode})</dd></div>
       <div><dt>Batches</dt><dd>{record.batchName}</dd></div>
       <div><dt>Start (IST)</dt><dd>{date(record.startsAt)}</dd></div>
-      <div><dt>End (IST)</dt><dd>{date(record.endsAt)}</dd></div>
       <div><dt>Google Meet</dt><dd><a href={record.meetUrl} target="_blank" rel="noopener noreferrer">{record.meetUrl}</a></dd></div>
       {record.actualStartAt ? <div><dt>Actual start (IST)</dt><dd>{date(record.actualStartAt)}</dd></div> : null}
-      {record.actualEndAt ? <div><dt>Actual end (IST)</dt><dd>{date(record.actualEndAt)}</dd></div> : null}
-      {record.actualDurationSeconds != null ? <div><dt>Actual duration</dt><dd>{Math.floor(record.actualDurationSeconds / 60)}m {Math.floor(record.actualDurationSeconds % 60)}s</dd></div> : null}
+      <div><dt>Actual end (IST)</dt><dd>{record.actualEndAt ? date(record.actualEndAt) : "Pending Google end time"}</dd></div>
+      <div><dt>Actual duration</dt><dd>{record.actualDurationSeconds != null ? `${Math.floor(record.actualDurationSeconds / 60)}m ${Math.floor(record.actualDurationSeconds % 60)}s` : "Pending Google end time"}</dd></div>
       {record.attendance ? <><div><dt>Total participants</dt><dd>{record.attendance.totalParticipants}</dd></div><div><dt>Excluding teacher</dt><dd>{record.attendance.excludingTeacher ?? "Unavailable: teacher identity not verified"}</dd></div></> : null}
       {record.incentive ? <div><dt>Linked incentive</dt><dd>{!enhanced ? <>{record.incentive.id}<br /></> : null}{record.incentive.status} · {new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(record.incentive.amount)}</dd></div> : null}
     </dl>

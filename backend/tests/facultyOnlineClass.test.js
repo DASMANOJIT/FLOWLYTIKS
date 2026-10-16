@@ -31,6 +31,20 @@ test("IST validation uses class date, rejects invalid dates, time ranges and Mee
   for (const change of [{ endTime: "16:00" }, { date: "2026-02-30" }, { startTime: "25:00" }, { topic: " " }, { meetUrl: "http://meet.google.com/abc-defg-hij" }, { meetUrl: "https://meet.google.com.evil.test/abc-defg-hij" }, { meetUrl: "https://user@meet.google.com/abc-defg-hij" }]) assert.throws(() => validateOnlineClass({ ...body, ...change }));
 });
 
+test("new sessions need no scheduled end; editing preserves a historical end without submitting it", async () => {
+  const { endTime, ...withoutEnd } = body;
+  assert.equal(endTime, "18:00");
+  assert.equal(validateOnlineClass(withoutEnd).endsAt, undefined);
+  const db = database();
+  const fresh = await saveOnlineClass("faculty-one", withoutEnd, null, db);
+  assert.equal(fresh.endsAt, undefined);
+  assert.doesNotMatch(fresh.announcement, /18:00/);
+  const legacy = await saveOnlineClass("faculty-one", { ...body, requestId: "legacy-scheduled-one" }, null, db);
+  const edited = await saveOnlineClass("faculty-one", { ...withoutEnd, date: "2026-10-10", expectedUpdatedAt: legacy.updatedAt.toISOString() }, legacy.id, db);
+  assert.equal(+edited.endsAt, +legacy.endsAt);
+  assert.equal(edited.startsAt.toISOString(), "2026-10-10T11:30:00.000Z");
+});
+
 test("save owns faculty identity, retries one class, announcement adds no incentive", async () => {
   const db = database();
   const result = await saveOnlineClass("faculty-one", body, null, db);

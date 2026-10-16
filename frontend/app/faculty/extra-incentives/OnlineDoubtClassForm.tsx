@@ -13,7 +13,7 @@ import Modal from "../../components/ui/Modal";
 import ClassDirectoryFields, { type DirectoryBatch } from "../online-classes/ClassDirectoryFields";
 
 const call = apiCall as <T>(endpoint: string, method?: string, body?: unknown, token?: string | null) => Promise<T>;
-const emptyForm = { batchName: "", batchIds: [] as string[], topic: "", message: "", date: "", startTime: "", endTime: "", meetUrl: "" };
+const emptyForm = { batchName: "", batchIds: [] as string[], topic: "", message: "", date: "", startTime: "", meetUrl: "" };
 type Page = { records: OnlineClassRecord[]; hasMore: boolean; teacherName: string; total?: number; batches?: string[] };
 const localParts = (value: string) => new Date(new Date(value).getTime() + 330 * 60000).toISOString();
 
@@ -88,8 +88,7 @@ export default function OnlineDoubtClassForm({ token, incentiveTypeId, onChanged
   };
   const save = (event: FormEvent) => {
     event.preventDefault();
-    if (!form.batchIds.length || ![form.topic, form.date, form.startTime, form.endTime, form.meetUrl].every(value => value.trim())) { setError("Select at least one active batch and complete all required class details."); return; }
-    if (form.endTime <= form.startTime) { setError("End time must be after start time on the class date."); return; }
+    if (!form.batchIds.length || ![form.topic, form.date, form.startTime, form.meetUrl].every(value => value.trim())) { setError("Select at least one active batch and complete all required class details."); return; }
     let url;
     try { url = new URL(form.meetUrl); } catch { setError("Enter a valid HTTPS Google Meet link."); return; }
     if (url.protocol !== "https:" || url.hostname !== "meet.google.com" || url.port || url.username || url.password || !/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}\/?$/.test(url.pathname)) { setError("Enter a valid HTTPS Google Meet link."); return; }
@@ -102,7 +101,7 @@ export default function OnlineDoubtClassForm({ token, incentiveTypeId, onChanged
   };
   const edit = (record: OnlineClassRecord) => {
     setEditing(record); setError(""); setMessage("");
-    setForm({ batchName: record.batchName, batchIds: record.batchIds || [], topic: record.topic, message: record.message || "", date: localParts(record.startsAt).slice(0, 10), startTime: localParts(record.startsAt).slice(11, 16), endTime: localParts(record.endsAt).slice(11, 16), meetUrl: record.meetUrl });
+    setForm({ batchName: record.batchName, batchIds: record.batchIds || [], topic: record.topic, message: record.message || "", date: localParts(record.startsAt).slice(0, 10), startTime: localParts(record.startsAt).slice(11, 16), meetUrl: record.meetUrl });
     topicRef.current?.focus();
   };
   const action = (record: OnlineClassRecord, kind: "cancel" | "check") => {
@@ -139,11 +138,10 @@ export default function OnlineDoubtClassForm({ token, incentiveTypeId, onChanged
       <ClassDirectoryFields batches={directory} value={form} onChange={selection => setForm(current => ({ ...current, ...selection }))} loading={directoryLoading} error={directoryError} disabled={busy || directoryLoading || Boolean(directoryError)} existing={Boolean(editing)} />
       <label className="faculty-field"><span>Topic / Title</span><input ref={topicRef} required maxLength={200} value={form.topic} onChange={e => field("topic", e.target.value)} disabled={busy} /></label>
       <label className="faculty-field faculty-field--wide"><span>Announcement (optional)</span><textarea maxLength={2000} value={form.message} onChange={e => field("message", e.target.value)} disabled={busy} /></label>
-      {allClasses ? <ClassDateTimeFields date={form.date} startTime={form.startTime} endTime={form.endTime} disabled={busy} onChange={field} /> : <>
+      {allClasses ? <ClassDateTimeFields date={form.date} startTime={form.startTime} disabled={busy} onChange={field} /> : <>
       <label className="faculty-field"><span>Class Date (IST)</span><input type="date" required value={form.date} onChange={e => field("date", e.target.value)} disabled={busy} /></label>
       <div className="faculty-field"><span>Timezone</span><strong>Asia/Kolkata (IST)</strong></div>
       <label className="faculty-field"><span>Start Time (IST)</span><input type="time" required value={form.startTime} onChange={e => field("startTime", e.target.value)} disabled={busy} /></label>
-      <label className="faculty-field"><span>End Time (IST)</span><input type="time" required value={form.endTime} onChange={e => field("endTime", e.target.value)} disabled={busy} /></label>
       </>}
       <label className="faculty-field faculty-field--wide"><span>Google Meet Link</span><input type="url" required value={form.meetUrl} onChange={e => field("meetUrl", e.target.value)} disabled={busy} /></label>
       <div className="faculty-modal-actions faculty-field--wide">

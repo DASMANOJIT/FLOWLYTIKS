@@ -13,12 +13,16 @@ export function validateOnlineClass(body) {
   }
   if (body.message != null && (typeof body.message !== "string" || body.message.length > 2000)) fail("Announcement must be at most 2000 characters.");
   data.message = body.message?.trim() || null;
-  if (![body.date, body.startTime, body.endTime].every(value => typeof value === "string") || !/^\d{4}-\d{2}-\d{2}$/.test(body.date || "") || !/^([01]\d|2[0-3]):[0-5]\d$/.test(body.startTime || "") || !/^([01]\d|2[0-3]):[0-5]\d$/.test(body.endTime || "")) fail("A valid class date and start/end time in IST are required.");
+  if (![body.date, body.startTime].every(value => typeof value === "string") || !/^\d{4}-\d{2}-\d{2}$/.test(body.date || "") || !/^([01]\d|2[0-3]):[0-5]\d$/.test(body.startTime || "")) fail("A valid class date and start time in IST are required.");
   const calendar = new Date(`${body.date}T00:00:00Z`);
   if (!Number.isFinite(calendar.getTime()) || calendar.toISOString().slice(0, 10) !== body.date) fail("Class date is invalid.");
   data.startsAt = new Date(`${body.date}T${body.startTime}:00+05:30`);
-  data.endsAt = new Date(`${body.date}T${body.endTime}:00+05:30`);
-  if (data.endsAt <= data.startsAt) fail("End time must be after start time on the class date.");
+  // Older clients may still submit an end. Omitting it on edit retains the historical value.
+  if (body.endTime != null && body.endTime !== "") {
+    if (typeof body.endTime !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(body.endTime)) fail("Invalid scheduled end time.");
+    data.endsAt = new Date(`${body.date}T${body.endTime}:00+05:30`);
+    if (data.endsAt <= data.startsAt) fail("End time must be after start time on the class date.");
+  }
   let url;
   try { url = new URL(body.meetUrl); } catch { fail("Enter a valid HTTPS Google Meet link."); }
   if (url.protocol !== "https:" || url.hostname !== "meet.google.com" || url.port || url.username || url.password || !/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}\/?$/.test(url.pathname)) fail("Enter a valid HTTPS Google Meet link.");
@@ -38,23 +42,26 @@ const dateFormat = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", 
 const timeFormat = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", timeStyle: "short" });
 export function onlineClassDto(row, now = new Date()) {
   const teacherName = row.faculty.fullName;
+  const ended = Boolean(row.conferenceName && row.actualStartAt && row.actualEndAt && row.actualEndAt >= row.actualStartAt);
+  const status = ended && row.status !== "CANCELLED" ? "COMPLETED" : row.status;
+  const staleLive = ended && row.verificationStatus === "LIVE";
   return { id: row.id, facultyId: row.facultyId, teacherName, facultyCode: row.faculty.facultyId,
     incentiveTypeId: row.incentiveTypeId, directoryGradeId: row.directoryGradeId || null, batchIds: (row.batches || []).map(batch => batch.batchId), batchNames: onlineClassBatchNames(row), batchName: onlineClassBatchNames(row).join(", "), className: row.className, topic: row.topic, message: row.message,
-    startsAt: row.startsAt, endsAt: row.endsAt, meetUrl: row.meetUrl, status: row.status, updatedAt: row.updatedAt,
+    startsAt: row.startsAt, endsAt: row.endsAt, meetUrl: row.meetUrl, status, updatedAt: row.updatedAt,
     liveConfirmed: row.status === "LIVE" && row.verificationStatus === "LIVE" && Boolean(row.conferenceName && row.actualStartAt) && !row.actualEndAt && !row.verificationError,
     canComplete: false, trackingEnabled: Boolean(row.trackingEnabled),
     canEdit: !row.deletedAt && row.status === "SCHEDULED" && !row.conferenceName && !row.incentiveEntryId && !(row.pollLeaseUntil > now),
     canCancel: !row.deletedAt && row.status === "SCHEDULED" && !row.actualStartAt && !row.actualEndAt && !row.completedAt && !row.incentiveEntryId,
     canDelete: !row.deletedAt && !onlineClassDeletionBlockedReason(row),
     deletionBlockedReason: onlineClassDeletionBlockedReason(row),
-    verificationStatus: row.verificationStatus || "LEGACY", verificationError: row.verificationError,
-    verificationPending: ["PENDING", "MISSING_DATA", "ATTENDANCE_PENDING", "LIVE"].includes(row.verificationStatus),
+    verificationStatus: staleLive ? "ATTENDANCE_PENDING" : row.verificationStatus || "LEGACY", verificationError: staleLive ? "Meeting ended. Final attendance and incentive verification are pending; check again shortly." : row.verificationError,
+    verificationPending: staleLive || ["PENDING", "MISSING_DATA", "ATTENDANCE_PENDING", "LIVE", "INCENTIVE_BUSY"].includes(row.verificationStatus),
     conferenceName: row.conferenceName, actualStartAt: row.actualStartAt, actualEndAt: row.actualEndAt,
     actualDurationSeconds: row.actualStartAt && row.actualEndAt ? Math.max(0, (row.actualEndAt - row.actualStartAt) / 1000) : null,
     attendance: row.attendanceEvidence?.summary || null, attendanceCompleteAt: row.attendanceCompleteAt,
     canDownloadAttendance: Boolean(row.attendanceCompleteAt && row.actualEndAt),
     incentive: row.incentiveEntry ? { id: row.incentiveEntry.id, rate: Number(row.incentiveEntry.rateSnapshot), amount: Number(row.incentiveEntry.amountSnapshot), status: row.incentiveEntry.status, paymentRecordId: row.incentiveEntry.paymentRecordId } : null,
-    announcement: `Online Doubt Class\nTeacher: ${teacherName}\nBatches: ${onlineClassBatchNames(row).join(", ")}${row.className ? `\nClass: ${row.className}` : ""}\nTopic: ${row.topic}\nDate: ${dateFormat.format(row.startsAt)}\nTime: ${timeFormat.format(row.startsAt)} - ${timeFormat.format(row.endsAt)} IST\nGoogle Meet: ${row.meetUrl}${row.message ? `\n\n${row.message}` : ""}` };
+    announcement: `Online Doubt Class\nTeacher: ${teacherName}\nBatches: ${onlineClassBatchNames(row).join(", ")}${row.className ? `\nClass: ${row.className}` : ""}\nTopic: ${row.topic}\nDate: ${dateFormat.format(row.startsAt)}\nStart: ${timeFormat.format(row.startsAt)} IST\nGoogle Meet: ${row.meetUrl}${row.message ? `\n\n${row.message}` : ""}` };
 }
 
 export function onlineClassHistoryWhere({ search = "", date = "", batch = "" } = {}) {

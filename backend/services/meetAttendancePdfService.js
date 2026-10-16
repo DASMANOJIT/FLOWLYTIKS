@@ -28,7 +28,7 @@ export function buildMeetAttendancePdf(row) {
     const details = [
       ["Teacher", `${row.faculty.fullName} (${row.faculty.facultyId})`], ["Batches", onlineClassBatchNames(row).join(", ")], ...(row.className ? [["Legacy Class / Grade", row.className]] : []),
       ["Topic", row.topic], ["Meet link", row.meetUrl], ["Conference", row.conferenceName],
-      ["Scheduled", `${ist(row.startsAt)} - ${ist(row.endsAt)}`], ["Actual start", ist(row.actualStartAt)], ["Actual end", ist(row.actualEndAt)],
+      ["Scheduled start", ist(row.startsAt)], ...(row.endsAt ? [["Historical scheduled end", ist(row.endsAt)]] : []), ["Actual start", ist(row.actualStartAt)], ["Actual end", ist(row.actualEndAt)],
       ["Actual duration", duration((row.actualEndAt - row.actualStartAt) / 1000)], ["Participants", String(summary.totalParticipants)],
       ["Excluding teacher", summary.excludingTeacher == null ? "Unavailable: teacher identity not verified" : String(summary.excludingTeacher)],
       ["Verification", row.verificationStatus], ["Evidence retrieved", ist(row.attendanceCompleteAt)],
