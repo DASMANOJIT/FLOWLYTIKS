@@ -77,10 +77,32 @@ export async function saveCopySet(facultyId, incentiveTypeId, body, entryId = nu
 
 export async function listCopySets(facultyId, incentiveTypeId, page = 1, db = prisma) {
   if (!Number.isSafeInteger(page) || page < 1) fail("Invalid page.");
-  const where = { facultyId, ...(incentiveTypeId ? { incentiveTypeId } : {}) };
+  const where = { facultyId, status: { not: "DELETED" }, ...(incentiveTypeId ? { incentiveTypeId } : {}) };
   const [rows, total] = await Promise.all([
     db.facultyExtraIncentiveEntry.findMany({ where, include: { incentiveType: true, onlineClass: { select: { id: true } } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (page - 1) * 20, take: 20 }),
     db.facultyExtraIncentiveEntry.count({ where }),
   ]);
   return { entries: rows.map(copySetDto), page, totalPages: Math.max(1, Math.ceil(total / 20)) };
+}
+
+export async function deleteCopySet(facultyId, incentiveTypeId, entryId, body, db = prisma, actorName = null) {
+  if (typeof body?.expectedUpdatedAt !== "string" || !Number.isFinite(Date.parse(body.expectedUpdatedAt))) fail("Refresh the set before deleting.");
+  return withIncentiveOperationLock(facultyId, guard => db.$transaction(async tx => {
+    await guard(tx);
+    await tx.$queryRaw`SELECT "id" FROM "FacultyExtraIncentiveEntry" WHERE "id" = ${entryId} AND "facultyId" = ${facultyId} FOR UPDATE`;
+    const entry = await tx.facultyExtraIncentiveEntry.findUnique({ where: { id: entryId }, include: { incentiveType: true, onlineClass: { select: { id: true } } } });
+    if (!entry || entry.facultyId !== facultyId || entry.incentiveTypeId !== incentiveTypeId) fail("Incentive set not found.", 404);
+    if (entry.onlineClass || await usesOnlineClassWorkflow(tx, entry.incentiveType)) fail("Online class entries cannot be deleted through copy sets.", 403);
+    if (entry.status === "DELETED" && !entry.paymentRecordId) return { deleted: true, alreadyDeleted: true };
+    if (!copySetDto(entry).editable) fail("Paid, processing, reserved, locked or legacy adjustment entries cannot be deleted.", 409);
+    if (+entry.updatedAt !== Date.parse(body.expectedUpdatedAt)) fail("This set changed. Refresh it before deleting.", 409);
+    // Retain the original quantity, rate and remark as financial history, but remove it from payable balances.
+    await tx.facultyExtraIncentiveEntry.update({ where: { id: entry.id }, data: { status: "DELETED" } });
+    await tx.auditLog.create({ data: {
+      actorType: "FACULTY", actorId: facultyId, actorName,
+      action: "EXTRA_INCENTIVE_SET_DELETED", entityType: "FacultyExtraIncentiveEntry", entityId: entry.id,
+      metadataJson: { facultyId, incentiveTypeId, quantity: entry.quantityChange, rate: Number(entry.rateSnapshot), amount: Number(entry.amountSnapshot), remark: entry.note, previousStatus: entry.status, createdAt: entry.createdAt.toISOString(), previousUpdatedAt: entry.updatedAt.toISOString() },
+    } });
+    return { deleted: true, alreadyDeleted: false };
+  }), db);
 }

@@ -21,6 +21,7 @@ test("missing ledger schema is an error, not a successful empty week", async t =
 });
 
 test("exports fetch all week records ignoring pagination and hidden filters, retain overrides and totals", async t => {
+  replace(t, prisma.faculty, "findMany", async () => []);
   const entries = Array.from({ length: 1005 }, (_, index) => ({ ...entry, id: String(index), amount: index ? 400 : 375, updatedByRole: index ? "FACULTY" : "ADMIN" }));
   replace(t, prisma.workLedgerEntry, "findMany", async query => {
     assert.equal(query.take, undefined);

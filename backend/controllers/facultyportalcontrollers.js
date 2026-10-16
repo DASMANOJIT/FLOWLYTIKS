@@ -671,8 +671,13 @@ export const getWeekAttendance = async (req, res) => {
     }
     const dailyCell = (facultyId, date) => {
       const records = byFacultyDate.get(facultyId + ":" + date) || [];
+      const historical = records.some(entry => ["DAILY", "AFTERNOON"].includes(entry.shift));
       return { present: records.length > 0, amount: sumAmounts(records), defaultAmount: dailyAttendanceRate(date),
-        legacy: records.some(entry => entry.shift !== "DAILY"),
+        legacy: historical,
+        shifts: Object.fromEntries(["MORNING", "EVENING"].map(shift => {
+          const selected = records.filter(entry => entry.shift === shift);
+          return [shift, { present: selected.length > 0, amount: sumAmounts(selected) }];
+        })),
         records: records.map(entry => ({ ...buildAttendanceCell(entry), id: entry.id, shift: entry.shift })) };
     };
     const primaryFaculty = req.userRole === "faculty" ? faculties.find(faculty => faculty.id === String(req.user.id)) : faculties[0];
@@ -716,7 +721,7 @@ export const upsertWeekAttendance = async (req, res) => {
     if (!requireFacultyOrAdmin(req, res)) return null;
     const result = await setDailyAttendance({
       role: req.userRole, actorId: req.user.id, facultyId: req.body?.facultyId,
-      date: req.body?.date, present: req.body?.present, amount: req.body?.amount,
+      date: req.body?.date, shift: req.body?.shift, present: req.body?.present, amount: req.body?.amount,
       actor: getActorMetadata(req),
     });
     return res.json({ success: true, ...result });

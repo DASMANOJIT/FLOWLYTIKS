@@ -63,27 +63,34 @@ export async function assertAttendanceMutable(tx, role, facultyId, value) {
   if (await attendancePayoutLocked(tx, facultyId, value)) fail(403, "Attendance is locked because payroll is approved, settled or a payout has been processed.");
   assertAttendanceDeadline(role, value);
 }
-export async function setDailyAttendance({ role, actorId, facultyId, date, present, amount, actor, remarks }, db = prisma) {
+export async function setDailyAttendance({ role, actorId, facultyId, date, shift, present, amount, actor, remarks, adminAdd = false }, db = prisma) {
   if (!["admin", "faculty"].includes(role)) fail(403, "Forbidden.");
+  if (adminAdd && (role !== "admin" || amount !== undefined)) fail(400, "Admin additions use the configured attendance rate.");
   if (role === "faculty" && !actorId) fail(403, "Faculty identity is required.");
   const target = role === "faculty" ? String(actorId) : String(facultyId || "");
   if (!target || (role === "faculty" && facultyId && String(facultyId) !== target)) fail(403, "Faculty members can only change their own attendance.");
   if (typeof present !== "boolean") fail(400, "Attendance status must be true or false.");
   if (!date) fail(400, "Attendance date is required.");
+  if (!["MORNING", "EVENING"].includes(shift)) fail(400, "Select Morning or Evening attendance.");
   if (role === "faculty" && amount !== undefined) fail(400, "Faculty attendance amounts are calculated automatically.");
   if (amount !== undefined && (!Number.isFinite(Number(amount)) || Number(amount) < 0)) fail(400, "Amount must be a valid non-negative number.");
   const day = attendanceDate(date);
   return db.$transaction(async tx => {
     await lockAttendanceDates(tx, target, [day]);
     await assertAttendanceMutable(tx, role, target, day);
-    if (!(await tx.faculty.findUnique({ where: { id: target }, select: { id: true } }))) fail(404, "Faculty member not found.");
+    const faculty = await tx.faculty.findUnique({ where: { id: target }, select: { id: true, status: true, joiningDate: true } });
+    if (!faculty) fail(404, "Faculty member not found.");
+    if (adminAdd && (faculty.status !== "ACTIVE" || attendanceDateKey(faculty.joiningDate) > attendanceDateKey(day))) fail(409, "Faculty member is not eligible for attendance on this date.");
     const existing = await tx.workLedgerEntry.findMany({ where: { facultyId: target, date: day } });
-    if (present && existing.length) {
+    if (existing.some(entry => ["DAILY", "AFTERNOON"].includes(entry.shift))) fail(409, "Historical daily or Afternoon attendance exists for this date. Its recorded amount is unchanged; Admin review is required before adding shift attendance.");
+    const selected = existing.filter(entry => entry.shift === shift);
+    if (present && selected.length) {
+      if (adminAdd) fail(409, "Faculty member is already present in this shift.");
       // Repeat attendance must not reset recorded legacy amounts or an admin override.
-      return { entry: existing.find(entry => entry.shift === "DAILY") || existing[0], legacy: existing.some(entry => entry.shift !== "DAILY") };
+      return { entry: selected[0] };
     }
     if (!present) {
-      for (const entry of existing) {
+      for (const entry of selected) {
         await tx.workLedgerEntryAudit.create({ data: { entryId: entry.id, action: "DELETE", changedBy: actor.updatedBy, previousData: JSON.parse(JSON.stringify(entry)) } });
         assertAttendanceDeadline(role, day);
         await tx.workLedgerEntry.delete({ where: { id: entry.id } });
@@ -92,7 +99,7 @@ export async function setDailyAttendance({ role, actorId, facultyId, date, prese
       return { entry: null };
     }
     assertAttendanceDeadline(role, day);
-    const entry = await tx.workLedgerEntry.create({ data: { facultyId: target, date: day, shift: "DAILY", amount: role === "admin" && amount !== undefined ? Number(amount) : dailyAttendanceRate(day), remarks: remarks || null, createdBy: actor.updatedBy, ...actor } });
+    const entry = await tx.workLedgerEntry.create({ data: { facultyId: target, date: day, shift, amount: role === "admin" && amount !== undefined ? Number(amount) : dailyAttendanceRate(day), remarks: remarks || null, createdBy: actor.updatedBy, ...actor } });
     await tx.workLedgerEntryAudit.create({ data: { entryId: entry.id, action: "CREATE", changedBy: actor.updatedBy, newData: JSON.parse(JSON.stringify(entry)) } });
     await refreshDraftAttendancePayroll(tx, target, day);
     return { entry };

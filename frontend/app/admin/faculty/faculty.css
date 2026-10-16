@@ -870,6 +870,55 @@
   min-width: 118px;
 }
 
+.work-ledger-calendar-grid { width: 100%; min-width: 1080px; table-layout: fixed; }
+.work-ledger-calendar-grid .ledger-chip-list { min-width: 0; display: grid; gap: 6px; }
+.work-ledger-calendar-grid .weekly-attendance-summary { width: 100%; min-width: 0; max-width: 100%; padding: 7px 6px; border: 1px solid #bfdbfe; border-radius: 6px; background: #eff6ff; color: #164e83; text-align: left; cursor: pointer; }
+.weekly-attendance-summary:focus-visible { outline: 2px solid #0284c7; outline-offset: 2px; }
+.weekly-attendance-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.weekly-attendance-shifts, .weekly-attendance-legend { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.weekly-attendance-legend { margin-bottom: 12px; font-size: 12px; }
+.weekly-shift { display: inline-block; border-radius: 4px; padding: 3px 5px; font-size: 11px; font-weight: 700; background: #f1f5f9; color: #334155; white-space: normal; }
+.weekly-shift--morning { background: #dbeafe; color: #1e40af; }
+.weekly-shift--evening { background: #cffafe; color: #155e75; }
+.ledger-grid-panel, .ledger-grid-scroll { min-width: 0; max-width: 100%; }
+.weekly-attendance-details td small { display: block; }
+.weekly-attendance-details td { white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .weekly-attendance-details .faculty-table { min-width: 0; width: 100%; }
+  .weekly-attendance-details thead { display: none; }
+  .weekly-attendance-details tbody { display: block; }
+  .weekly-attendance-details tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid #dbeafe; padding: 12px 0; }
+  .weekly-attendance-details td { min-width: 0; padding: 8px; border: 0; }
+  .weekly-attendance-details td:first-child { grid-column: 1 / -1; }
+  .weekly-attendance-details td::before { display: block; content: attr(data-label); color: #475569; font-size: 11px; font-weight: 700; margin-bottom: 5px; }
+  .weekly-attendance-details input, .weekly-attendance-details select { width: 100%; min-width: 0; min-height: 44px; }
+}
+
+.weekly-attendance-details.faculty-modal { display: flex; flex-direction: column; width: min(1100px, calc(100vw - 24px)); max-height: 90dvh; overflow: hidden; }
+.weekly-attendance-details .faculty-modal-header, .weekly-attendance-details .faculty-modal-footer { flex: 0 0 auto; flex-wrap: wrap; gap: 12px; }
+.weekly-attendance-details .faculty-modal-header { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; }
+.weekly-attendance-details .faculty-modal-header h2 { min-width: 0; }
+.weekly-attendance-details .faculty-modal-header .faculty-icon-button { flex-shrink: 0; }
+.weekly-attendance-details__body { min-height: 0; min-width: 0; width: 100%; overflow-y: auto; overscroll-behavior: contain; }
+.weekly-attendance-details .faculty-modal-footer { flex-direction: row; }
+.weekly-attendance-details__total { margin-right: auto; }
+.weekly-attendance-details .faculty-table { min-width: 0; width: 100%; }
+.weekly-attendance-details .work-ledger-detail-section + .work-ledger-detail-section { margin-top: 20px; }
+.weekly-attendance-details .weekly-attendance-present { color: #166534; background: #dcfce7; border-radius: 4px; padding: 4px 8px; }
+.weekly-attendance-add { display: grid; gap: 12px; padding: 16px; border: 1px solid #bfdbfe; border-radius: 8px; margin-bottom: 20px; background: #eff6ff; }
+.weekly-attendance-add label { display: grid; gap: 6px; min-width: 0; }
+.weekly-attendance-add input, .weekly-attendance-add select { min-width: 0; width: 100%; min-height: 44px; }
+.weekly-attendance-details button { min-height: 44px; }
+@media (max-width: 640px) {
+  .weekly-attendance-details.faculty-modal { max-height: 90dvh; }
+  .weekly-attendance-details .faculty-modal-header, .weekly-attendance-details .faculty-modal-footer { padding: 12px; }
+  .weekly-attendance-details__body { padding: 12px; }
+  .weekly-attendance-details .faculty-modal-header { grid-template-columns: minmax(0, 1fr) 44px; }
+  .weekly-attendance-details .faculty-modal-header h2 { font-size: 16px; }
+  .weekly-attendance-details .faculty-modal-header .faculty-icon-button { grid-column: 2; grid-row: 1; }
+  .weekly-attendance-details .faculty-modal-header .faculty-button { grid-column: 1 / -1; grid-row: 2; }
+}
+
 .work-ledger-calendar-grid .ledger-date-col {
   width: 136px;
   min-width: 136px;

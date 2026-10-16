@@ -5,7 +5,7 @@ import { createPayout, initiatePayout } from "../services/facultyPayoutService.j
 import { assertPayoutConfig, refreshExtraPaymentFromPayout } from "../services/cashfreePayoutService.js";
 import { sendFacultyExtraIncentiveEmail } from "../services/emailNotificationService.js";
 import { isOnlineDoubtClass, usesOnlineClassWorkflow } from "../services/facultyOnlineClassService.js";
-import { copySetDto, listCopySets, saveCopySet, withIncentiveOperationLock } from "../services/incentiveCopySetService.js";
+import { copySetDto, listCopySets, saveCopySet, deleteCopySet, withIncentiveOperationLock } from "../services/incentiveCopySetService.js";
 
 const money = (value) => Number(Number(value || 0).toFixed(2));
 
@@ -522,6 +522,14 @@ export const getIncentiveCopySets = async (req, res) => {
   try {
     const facultyId = req.userRole === "faculty" ? req.user.id : req.params.facultyId;
     return res.json({ success: true, ...await listCopySets(facultyId, req.params.incentiveTypeId, Number(req.query.page || 1)) });
+  } catch (error) { return operationError(res, error); }
+};
+
+export const deleteMyCopySet = async (req, res) => {
+  if (!req.user || req.userRole !== "faculty") return res.status(403).json({ success: false, message: "Faculty access required." });
+  try {
+    const result = await deleteCopySet(req.user.id, req.params.incentiveTypeId, req.params.entryId, req.body, prisma, req.user.fullName);
+    return res.json({ success: true, ...result });
   } catch (error) { return operationError(res, error); }
 };
 

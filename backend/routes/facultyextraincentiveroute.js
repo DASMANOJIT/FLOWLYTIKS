@@ -9,6 +9,7 @@ import {
   payFacultyIncentives,
   updateIncentiveType,
   saveMyCopySet,
+  deleteMyCopySet,
   getIncentiveCopySets,
 } from "../controllers/facultyextraincentivecontrollers.js";
 import { adminOnly, protect } from "../middleware/authmiddleware.js";
@@ -60,6 +61,7 @@ router.get("/my", protect, facultyOnly, getMyIncentives);
 router.get("/my/:incentiveTypeId/sets", protect, facultyOnly, getIncentiveCopySets);
 router.post("/my/:incentiveTypeId/sets", protect, facultyOnly, adminWriteRateLimit, saveMyCopySet);
 router.patch("/my/:incentiveTypeId/sets/:entryId", protect, facultyOnly, adminWriteRateLimit, saveMyCopySet);
+router.delete("/my/:incentiveTypeId/sets/:entryId", protect, facultyOnly, adminWriteRateLimit, deleteMyCopySet);
 router.patch("/my/:incentiveTypeId/pending-count", protect, facultyOnly, adjustMyIncentive);
 router.post("/my/:incentiveTypeId/increment", protect, facultyOnly, adjustMyIncentive);
 router.post("/my/:incentiveTypeId/decrement", protect, facultyOnly, adjustMyIncentive);

@@ -1,6 +1,9 @@
 import express from "express";
 import {
   createWorkLedgerEntry,
+  addAdminShiftAttendance,
+  deleteAdminShiftAttendance,
+  getEligibleAttendanceFaculty,
   deleteWorkLedgerEntry,
   exportWorkLedgerCsv,
   exportWorkLedgerReport,
@@ -11,11 +14,13 @@ import {
   updateWorkLedgerAttendanceEntry,
   updateWorkLedgerEntry,
 } from "../controllers/workledgercontrollers.js";
-import { protect } from "../middleware/authmiddleware.js";
+import { protect, adminOnly } from "../middleware/authmiddleware.js";
 import { adminWriteRateLimit } from "../middleware/security.js";
 import { validateBody, validateParams, validateQuery } from "../middleware/validation.js";
 import {
   workLedgerBodySchema,
+  adminAttendanceAddSchema,
+  adminAttendanceEligibleSchema,
   workLedgerAttendancePatchSchema,
   workLedgerFacultyParamSchema,
   workLedgerIdParamSchema,
@@ -25,6 +30,10 @@ import {
 import { auditAction } from "../services/auditLogService.js";
 
 const router = express.Router();
+
+router.get("/admin/attendance/eligible", protect, adminOnly, validateQuery(adminAttendanceEligibleSchema), getEligibleAttendanceFaculty);
+router.post("/admin/attendance", protect, adminOnly, adminWriteRateLimit, validateBody(adminAttendanceAddSchema), auditAction({ action: "WORK_LEDGER_ENTRY_CREATED", entityType: "WorkLedgerEntry", metadata: req => req.body }), addAdminShiftAttendance);
+router.delete("/admin/attendance/:id", protect, adminOnly, adminWriteRateLimit, validateParams(workLedgerIdParamSchema), auditAction({ action: "WORK_LEDGER_ENTRY_DELETED", entityType: "WorkLedgerEntry", entityId: req => req.params.id }), deleteAdminShiftAttendance);
 
 router.get("/", protect, validateQuery(workLedgerListQuerySchema), getWorkLedgerEntries);
 router.get("/export.csv", protect, validateQuery(workLedgerListQuerySchema), exportWorkLedgerCsv);

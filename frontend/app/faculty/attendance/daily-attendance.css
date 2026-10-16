@@ -3,6 +3,14 @@
 .daily-attendance-card .ledger-nav { flex-wrap: wrap; margin: 0; }
 .daily-attendance-card .faculty-shift-meta { white-space: normal; max-width: 300px; }
 @media (max-width: 700px) {
+  .daily-attendance-card .faculty-table { min-width: 0; width: 100%; }
+  .daily-attendance-card .faculty-table thead { display: none; }
+  .daily-attendance-card .faculty-table tbody { display: block; }
+  .daily-attendance-card .faculty-table tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid #dce7ef; padding: 12px 0; }
+  .daily-attendance-card .faculty-table td { min-width: 0; white-space: normal; overflow-wrap: anywhere; padding: 8px; border: 0; }
+  .daily-attendance-card .faculty-table td[data-label]::before { content: attr(data-label); display: block; font-weight: 600; margin-bottom: 6px; }
+  .daily-attendance-card .faculty-table td:last-child { grid-column: 1 / -1; }
+  .daily-attendance-card .faculty-shift-btn { min-height: 44px; }
   .daily-attendance-card .faculty-header { align-items: flex-start; flex-direction: column; }
   .daily-attendance-card .ledger-nav { justify-content: flex-start; width: 100%; gap: 8px; }
   .daily-attendance-card .ledger-nav button { flex: 1 1 120px; }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { Plus, Pencil } from "lucide-react";
+import { Plus, Pencil, Trash2 } from "lucide-react";
 import { apiCall } from "../../../lib/api.js";
 import styles from "./copy-sets.module.css";
 
@@ -26,8 +26,10 @@ export default function CopySetsForm({ token, incentiveTypeId, rate, pendingCoun
     setLoading(true); setError("");
     try {
       const path = adminFacultyId ? `/faculty-extra-incentives/admin/${adminFacultyId}/sets/${incentiveTypeId}` : `/faculty-extra-incentives/my/${incentiveTypeId}/sets`;
-      const data = await call<{ entries: Entry[]; totalPages: number }>(`${path}?page=${nextPage}`, "GET", null, token);
-      setEntries(data.entries); setPage(nextPage); setPages(data.totalPages);
+      let data = await call<{ entries: Entry[]; totalPages: number }>(`${path}?page=${nextPage}`, "GET", null, token);
+      const resolvedPage = Math.min(nextPage, data.totalPages);
+      if (resolvedPage !== nextPage) data = await call<{ entries: Entry[]; totalPages: number }>(`${path}?page=${resolvedPage}`, "GET", null, token);
+      setEntries(data.entries); setPage(resolvedPage); setPages(data.totalPages);
     } catch (err) { setError(err instanceof Error ? err.message : "Failed to load saved sets."); }
     finally { setLoading(false); }
   }, [token, incentiveTypeId, adminFacultyId]);
@@ -53,6 +55,18 @@ export default function CopySetsForm({ token, incentiveTypeId, rate, pendingCoun
     finally { submitting.current = false; setSaving(false); onBusy(false); }
   };
   const preview = draft && /^\d+$/.test(draft.quantity) && Number(draft.quantity) > 0 ? Number(draft.quantity) * (draft.entry?.rate ?? rate) : null;
+  const remove = async (entry: Entry) => {
+    if (submitting.current || adminFacultyId || !entry.editable) return;
+    if (!window.confirm(`Delete this saved set of ${entry.quantityChange} copies? Its pending amount will be removed. Paid history and other sets will not change.`)) return;
+    submitting.current = true; setSaving(true); onBusy(true); setError(""); setSuccess("");
+    try {
+      await call(`/faculty-extra-incentives/my/${incentiveTypeId}/sets/${entry.id}`, "DELETE", { expectedUpdatedAt: entry.updatedAt }, token);
+      if (draft?.entry?.id === entry.id) setDraft(null);
+      setSuccess("Set deleted.");
+      await Promise.all([load(page), onChanged()]);
+    } catch (err) { setError(err instanceof Error ? err.message : "Failed to delete the set."); }
+    finally { submitting.current = false; setSaving(false); onBusy(false); }
+  };
   return <div className={styles.sets}>
     <dl className={styles.summary}><div><dt>Configured Rate</dt><dd>{money(rate)}</dd></div><div><dt>Pending Count</dt><dd>{pendingCount}</dd></div><div><dt>Pending Amount</dt><dd>{money(pendingAmount)}</dd></div></dl>
     {!adminFacultyId ? <button type="button" className="faculty-button faculty-button--primary" disabled={saving} onClick={() => openDraft()}><Plus size={16} /> Add Number of Copies</button> : null}
@@ -71,7 +85,10 @@ export default function CopySetsForm({ token, incentiveTypeId, rate, pendingCoun
       <p>{money(entry.rate)} per copy | {money(entry.amount)}</p>
       <p className={styles.remark}>{entry.note || "No remark recorded."}</p>
       <time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })} IST</time>
-      {!adminFacultyId && entry.editable ? <button type="button" className="faculty-button faculty-button--ghost" disabled={saving} onClick={() => openDraft(entry)}><Pencil size={16} /> Edit Set</button> : <span className={styles.readonly}>Read-only</span>}
+      {!adminFacultyId && entry.editable ? <div className={styles.setActions}>
+        <button type="button" className="faculty-button faculty-button--ghost" disabled={saving} onClick={() => openDraft(entry)}><Pencil size={16} /> Edit Set</button>
+        <button type="button" className="faculty-button faculty-button--danger" disabled={saving} onClick={() => void remove(entry)}><Trash2 size={16} /> Delete Set</button>
+      </div> : <span className={styles.readonly}>Read-only</span>}
     </li>)}</ul> : !error ? <p>No saved sets found.</p> : null}
     <div className={styles.actions}><button type="button" className="faculty-button faculty-button--ghost" disabled={loading || saving || page <= 1} onClick={() => void load(page - 1)}>Previous</button><span>Page {page} of {pages}</span><button type="button" className="faculty-button faculty-button--ghost" disabled={loading || saving || page >= pages} onClick={() => void load(page + 1)}>Next</button></div>
     {!adminFacultyId ? <button type="button" className="faculty-button faculty-button--soft" disabled={saving} onClick={() => openDraft()}><Plus size={16} /> Add Another Set of Copies</button> : null}

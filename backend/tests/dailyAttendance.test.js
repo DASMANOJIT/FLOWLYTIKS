@@ -4,7 +4,7 @@ import { attendanceDateKey, attendanceWeek, dailyAttendanceRate, assertAttendanc
 import { workLedgerAttendancePatchSchema, workLedgerBodySchema } from "../validation/workLedgerSchemas.js";
 
 const actor = { updatedBy: "faculty:test", updatedByRole: "FACULTY", updatedByName: "Test Faculty" };
-const input = { role: "faculty", actorId: "faculty-test", date: "2077-10-09", present: true, actor };
+const input = { role: "faculty", actorId: "faculty-test", date: "2077-10-09", shift: "MORNING", present: true, actor };
 function database(initial = []) {
   const entries = [...initial], audits = [], payrollUpdates = [];
   let chain = Promise.resolve();
@@ -54,15 +54,15 @@ test("Friday-Thursday deadline is exactly following Friday noon IST", () => {
 
 test("faculty ownership, amounts, required date and roles are enforced", async () => {
   const db = database();
-  for (const change of [{ facultyId: "someone-else" }, { amount: 1 }, { date: undefined }, { role: "staff" }]) await assert.rejects(setDailyAttendance({ ...input, ...change }, db), error => [400, 403].includes(error.status));
+  for (const change of [{ facultyId: "someone-else" }, { amount: 1 }, { date: undefined }, { role: "staff" }, { shift: "DAILY" }, { shift: "AFTERNOON" }, { shift: undefined }]) await assert.rejects(setDailyAttendance({ ...input, ...change }, db), error => [400, 403].includes(error.status));
   assert.equal(db.entries.length, 0);
 });
 
-test("concurrent and repeated marking creates one daily entry and retains admin amount", async () => {
+test("concurrent and repeated marking creates one shift entry and retains admin amount", async () => {
   const db = database();
   await Promise.all([setDailyAttendance(input, db), setDailyAttendance(input, db)]);
   assert.equal(db.entries.length, 1);
-  assert.equal(db.entries[0].shift, "DAILY");
+  assert.equal(db.entries[0].shift, "MORNING");
   assert.equal(db.entries[0].amount, dailyAttendanceRate(input.date));
   db.entries[0].amount = 375;
   db.entries[0].updatedByRole = "ADMIN";
@@ -72,15 +72,36 @@ test("concurrent and repeated marking creates one daily entry and retains admin 
   assert.equal(db.audits.filter(audit => audit.action === "CREATE").length, 1);
 });
 
-test("legacy shifts keep actual amounts and block a second daily entry", async () => {
+test("legacy Morning amount is retained while Evening can be marked independently", async () => {
   const db = database([{ id: "legacy", facultyId: input.actorId, date: new Date(input.date + "T00:00:00Z"), shift: "MORNING", amount: 123.45 }]);
   const result = await setDailyAttendance(input, db);
-  assert.equal(result.legacy, true);
+  assert.equal(result.entry.amount, 123.45);
   assert.equal(db.entries.length, 1);
   assert.equal(db.entries[0].amount, 123.45);
+  await setDailyAttendance({ ...input, shift: "EVENING" }, db);
+  assert.equal(db.entries.length, 2);
   await setDailyAttendance({ ...input, present: false }, db);
-  assert.equal(db.entries.length, 0);
-  assert.equal(db.audits[0].previousData.amount, 123.45);
+  assert.equal(db.entries.length, 1);
+  assert.equal(db.entries[0].shift, "EVENING");
+  assert.equal(db.audits.find(audit => audit.action === "DELETE").previousData.amount, 123.45);
+});
+
+test("historical daily and Afternoon records are never allocated, repriced or doubled", async () => {
+  for (const shift of ["DAILY", "AFTERNOON"]) {
+    const db = database([{ id: "history", facultyId: input.actorId, date: new Date(input.date + "T00:00:00Z"), shift, amount: 123.45 }]);
+    for (const target of ["MORNING", "EVENING"]) for (const present of [true, false]) await assert.rejects(setDailyAttendance({ ...input, shift: target, present }, db), { status: 409 });
+    assert.equal(db.entries.length, 1); assert.equal(db.entries[0].amount, 123.45); assert.equal(db.audits.length, 0);
+  }
+});
+
+test("both shifts sum actual weekday, Friday and weekend amounts and unmark only the requested shift", async () => {
+  for (const [date, total] of [["2077-10-08", 400], ["2077-10-09", 800], ["2077-10-10", 800], ["2077-10-11", 400]]) {
+    const db = database();
+    await Promise.all(["MORNING", "EVENING", "MORNING", "EVENING"].map(shift => setDailyAttendance({ ...input, date, shift }, db)));
+    assert.equal(db.entries.length, 2); assert.equal(db.entries.reduce((sum, row) => sum + row.amount, 0), total);
+    await setDailyAttendance({ ...input, date, shift: "EVENING", present: false }, db);
+    assert.equal(db.entries.length, 1); assert.equal(db.entries[0].shift, "MORNING");
+  }
 });
 
 test("settled or processing payroll blocks admins too and lock query errors fail closed", async () => {

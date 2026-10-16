@@ -197,14 +197,16 @@ const updateAttendanceFromChat = async ({ req, res, message }) => {
   if (!date) return actionResponse(res, "Please mention a valid exact date for attendance.", "ATTENDANCE_NEEDS_CLARIFICATION");
   const present = parseStatus(message);
   if (present === null) return actionResponse(res, "Please mention whether attendance is Present or Absent.", "ATTENDANCE_NEEDS_CLARIFICATION");
-  if (/\b(amount|amt|charge|rs|inr|rupees)\b/i.test(message) && parseAmount(message) !== null) return actionResponse(res, "Daily attendance amounts are calculated automatically; no amount is needed.", "ATTENDANCE_NEEDS_CLARIFICATION");
+  const shift = parseShift(message);
+  if (!["MORNING", "EVENING"].includes(shift) || (/\bmorning\b/i.test(message) && /\bevening\b/i.test(message))) return actionResponse(res, "Please specify one shift: Morning or Evening.", "ATTENDANCE_NEEDS_CLARIFICATION");
+  if (/\b(amount|amt|charge|rs|inr|rupees)\b/i.test(message) && parseAmount(message) !== null) return actionResponse(res, "Shift attendance amounts are calculated automatically; no amount is needed.", "ATTENDANCE_NEEDS_CLARIFICATION");
   try {
-    const result = await setDailyAttendance({ role: "faculty", actorId: req.user.id, date, present, actor: {
+    const result = await setDailyAttendance({ role: "faculty", actorId: req.user.id, date, shift, present, actor: {
       updatedBy: String(req.user.id), updatedByRole: "FACULTY", updatedByName: req.user.fullName || "Faculty",
       updatedByFacultyId: String(req.user.id), updatedByAdminId: null,
     } });
-    await createAuditLog({ req, action: "FACULTY_CHATBOT_ATTENDANCE_UPDATE", entityType: "WorkLedgerEntry", entityId: result.entry?.id, metadata: { date: toDateKey(date), present } });
-    return actionResponse(res, `Done, marked your daily attendance ${present ? "Present" : "Absent"} for ${formatDate(date)} with ${formatMoney(result.entry?.amount || 0)}.`, "ATTENDANCE_UPDATED", { date: toDateKey(date), present, amount: moneyNumber(result.entry?.amount || 0) });
+    await createAuditLog({ req, action: "FACULTY_CHATBOT_ATTENDANCE_UPDATE", entityType: "WorkLedgerEntry", entityId: result.entry?.id, metadata: { date: toDateKey(date), shift, present } });
+    return actionResponse(res, `Done, marked your ${shift.toLowerCase()} attendance ${present ? "Present" : "Absent"} for ${formatDate(date)} with ${formatMoney(result.entry?.amount || 0)}.`, "ATTENDANCE_UPDATED", { date: toDateKey(date), shift, present, amount: moneyNumber(result.entry?.amount || 0) });
   } catch (error) {
     if (error.status) return actionResponse(res, error.message, "ATTENDANCE_BLOCKED");
     throw error;

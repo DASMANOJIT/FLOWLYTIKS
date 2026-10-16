@@ -20,7 +20,7 @@ test("real attendance transactions enforce Friday noon and settled locks without
     const week = attendanceWeek(previous);
     t.mock.timers.setTime(+week.deadline - 1);
     const saturday = new Date(week.start); saturday.setUTCDate(saturday.getUTCDate() + 1);
-    const input = { role: "faculty", actorId: id, date: saturday.toISOString().slice(0, 10), present: true, actor };
+    const input = { role: "faculty", actorId: id, date: saturday.toISOString().slice(0, 10), shift: "MORNING", present: true, actor };
     const marked = await setDailyAttendance(input, db);
     assert.equal(Number(marked.entry.amount), 400);
     t.mock.timers.setTime(+week.deadline);

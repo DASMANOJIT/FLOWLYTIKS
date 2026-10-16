@@ -1,4 +1,5 @@
 import prisma from "../prisma/client.js";
+import { buildWeeklyAttendanceMatrix } from "../services/weeklyAttendanceMatrix.js";
 import { buildRequestLogMeta, logError, logInfo } from "../utils/appLogger.js";
 
 import { attendanceWeek, attendancePayoutLocked, assertAttendanceDeadline, assertAttendanceMutable, refreshDraftAttendancePayroll, lockAttendanceDates, setDailyAttendance } from "../services/dailyAttendanceService.js";
@@ -317,7 +318,7 @@ const isMissingColumnOrTableError = (error) =>
 export const createWorkLedgerEntry = async (req, res) => {
   try {
     if (!assertLedgerRole(req, res)) return null;
-    if (req.body.shift && req.body.shift !== "DAILY") return res.status(400).json({ success: false, message: "New attendance entries must be daily." });
+    if (!["MORNING", "EVENING"].includes(req.body.shift)) return res.status(400).json({ success: false, message: "New attendance must use Morning or Evening." });
     const result = await setDailyAttendance({ ...req.body, role: req.userRole, actorId: req.user?.id, present: true, actor: actorMetadata(req) });
     return res.status(201).json({ success: true, entry: toEntryDto(result.entry) });
   } catch (error) { return handleLedgerError(res, error); }
@@ -513,8 +514,38 @@ export const updateWorkLedgerAttendanceEntry = async (req, res) => {
   }
 };
 
-export const deleteWorkLedgerEntry = async (req, res) => {
+export const getEligibleAttendanceFaculty = async (req, res) => {
   try {
+    if (!isAdmin(req)) return res.status(403).json({ success: false, message: "Admin access required." });
+    const { shift } = req.query;
+    const search = String(req.query.search || "").trim();
+    const date = parseDateOnly(req.query.date);
+    const eligibleEnd = new Date(date); eligibleEnd.setUTCHours(18, 29, 59, 999); // End of this calendar date in IST.
+    const faculty = await prisma.faculty.findMany({
+      where: {
+        status: "ACTIVE", joiningDate: { lte: eligibleEnd },
+        ...(search ? { OR: [{ fullName: { contains: search, mode: "insensitive" } }, { facultyId: { contains: search, mode: "insensitive" } }] } : {}),
+        workLedgerEntries: { none: { date, shift: { in: [shift, "DAILY", "AFTERNOON"] } } },
+      },
+      select: { id: true, facultyId: true, fullName: true }, orderBy: [{ fullName: "asc" }, { id: "asc" }], take: 50,
+    });
+    return res.json({ success: true, faculty });
+  } catch (error) { return handleLedgerError(res, error); }
+};
+
+export const addAdminShiftAttendance = async (req, res) => {
+  try {
+    if (!isAdmin(req)) return res.status(403).json({ success: false, message: "Admin access required." });
+    await setDailyAttendance({ ...req.body, role: "admin", actorId: req.user.id, present: true, adminAdd: true, actor: actorMetadata(req) });
+    return res.status(201).json({ success: true, message: "Attendance added." });
+  } catch (error) { return handleLedgerError(res, error); }
+};
+
+export const deleteAdminShiftAttendance = (req, res) => removeLedgerEntry(req, res, true);
+export const deleteWorkLedgerEntry = (req, res) => removeLedgerEntry(req, res, false);
+const removeLedgerEntry = async (req, res, shiftOnly) => {
+  try {
+    if (shiftOnly && !isAdmin(req)) return res.status(403).json({ success: false, message: "Admin access required." });
     if (!assertLedgerRole(req, res)) return null;
     let existing = await prisma.workLedgerEntry.findUnique({
       where: { id: req.params.id },
@@ -531,6 +562,7 @@ export const deleteWorkLedgerEntry = async (req, res) => {
       await assertLedgerUnlocked(tx, req, existing.facultyId, [existing.date]);
       existing = await tx.workLedgerEntry.findUnique({ where: { id: existing.id }, select: entrySelect });
       if (!existing) throw Object.assign(new Error("Ledger entry not found."), { status: 404 });
+      if (shiftOnly && !["MORNING", "EVENING"].includes(existing.shift)) throw Object.assign(new Error("Historical attendance is read-only in this view."), { status: 409 });
       await tx.workLedgerEntryAudit.create({
         data: {
           entryId: existing.id,
@@ -564,8 +596,19 @@ export const getWorkLedgerFaculty = async (req, res) => {
 
 const safeCsvCell = (value) => {
   const normalized = value === null || value === undefined ? "" : String(value);
-  const formulaSafe = /^[=+\-@]/.test(normalized) ? `'${normalized}` : normalized;
+  const formulaSafe = typeof value === "string" && (/^[\s\u0000-\u001f]*[=+\-@]/u.test(normalized) || /^[\t\r\n]/.test(normalized)) ? `'${normalized}` : normalized;
   return `"${formulaSafe.replace(/"/g, '""')}"`;
+};
+
+const weeklyExport = async query => {
+  const { where, start, end } = buildWhere({ week: query.week || toDateKey(getFridayWeekStart()) });
+  const eligibleEnd = new Date(end); eligibleEnd.setUTCHours(23, 59, 59, 999);
+  const [records, roster] = await Promise.all([
+    prisma.workLedgerEntry.findMany({ where, select: entrySelect, orderBy: [{ date: "asc" }, { createdAt: "asc" }, { id: "asc" }] }),
+    prisma.faculty.findMany({ where: { OR: [{ status: "ACTIVE", joiningDate: { lte: eligibleEnd } }, { workLedgerEntries: { some: where } }] }, select: { id: true, facultyId: true, fullName: true }, orderBy: [{ fullName: "asc" }, { id: "asc" }] }),
+  ]);
+  const entries = records.map(toEntryDto);
+  return { success: true, weekStart: toDateKey(start), weekEnd: toDateKey(end), entries, days: buildDayGrid(entries, start, end), summary: buildSummary(entries, start, end), matrix: buildWeeklyAttendanceMatrix(entries, roster, start, end) };
 };
 
 export const exportWorkLedgerCsv = async (req, res) => {
@@ -573,13 +616,15 @@ export const exportWorkLedgerCsv = async (req, res) => {
     if (!isAdmin(req)) {
       return res.status(403).json({ success: false, message: "Only admins can export work ledger data." });
     }
-    const { where, start, end } = buildWhere(req.query.week ? { week: req.query.week } : req.query);
-    const entries = await prisma.workLedgerEntry.findMany({
-      where,
-      orderBy: [{ date: "asc" }, { shift: "asc" }, { createdAt: "asc" }],
-      select: entrySelect,
-    });
+    const report = await weeklyExport(req.query);
+    const { entries, matrix } = report;
+    const start = new Date(report.weekStart), end = new Date(report.weekEnd);
     const rows = [
+      [matrix.title], ["Week", report.weekStart, report.weekEnd], [matrix.legend],
+      ["Faculty ID", "Faculty Name", ...matrix.days.flatMap(day => [`${day.label} Morning`, `${day.label} Evening`]), "Legacy / Unallocated Amount", "Weekly Amount"],
+      ...matrix.rows.map(row => [row.facultyCode, row.facultyName, ...row.days.flatMap(day => [day.MORNING.present ? "P" : "—", day.EVENING.present ? "P" : "—"]), row.legacyAmount, row.weeklyAmount]),
+      ["", "Totals (INR)", ...matrix.totals.days.flatMap(day => [day.MORNING, day.EVENING]), matrix.totals.legacyAmount, matrix.totals.weeklyAmount],
+      [], ["Detailed Work Ledger (includes historical daily / Afternoon records)"],
       ["Week Start", "Week End", "Date", "Entry Type", "Faculty ID", "Faculty Name", "Status", "Amount", "Remarks", "Created By", "Updated By", "Updated By Role", "Created At", "Updated At"],
       ...entries.map((entry) => [
         toDateKey(start),
@@ -594,8 +639,8 @@ export const exportWorkLedgerCsv = async (req, res) => {
         entry.createdBy,
         entry.updatedByName || entry.updatedBy || "",
         entry.updatedByRole || "",
-        entry.createdAt?.toISOString?.() || "",
-        entry.updatedAt?.toISOString?.() || "",
+        entry.createdAt?.toISOString?.() || entry.createdAt || "",
+        entry.updatedAt?.toISOString?.() || entry.updatedAt || "",
       ]),
     ];
     for (const day of buildDayGrid(entries, start, end)) rows.push([toDateKey(start), toDateKey(end), day.date, "DAILY TOTAL", "", "", "", day.dailyTotal]);
@@ -612,8 +657,6 @@ export const exportWorkLedgerCsv = async (req, res) => {
 export const exportWorkLedgerReport = async (req, res) => {
   try {
     if (!isAdmin(req)) return res.status(403).json({ success: false, message: "Only admins can export work ledger data." });
-    const { where, start, end } = buildWhere({ week: req.query.week || toDateKey(getFridayWeekStart()) });
-    const entries = (await prisma.workLedgerEntry.findMany({ where, select: entrySelect, orderBy: [{ date: "asc" }, { createdAt: "asc" }, { id: "asc" }] })).map(toEntryDto);
-    return res.json({ success: true, weekStart: toDateKey(start), weekEnd: toDateKey(end), entries, days: buildDayGrid(entries, start, end), summary: buildSummary(entries, start, end) });
+    return res.json(await weeklyExport(req.query));
   } catch (error) { return handleLedgerError(res, error); }
 };

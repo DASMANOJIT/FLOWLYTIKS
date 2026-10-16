@@ -5,7 +5,9 @@ import PremiumLoader from "../components/ui/PremiumLoader.jsx";
 import "./attendance/daily-attendance.css";
 
 type AttendanceRecord = { id: string; shift: string; amount: number; updatedAt?: string; updatedByName?: string; updatedByRole?: string };
-type AttendanceRow = { date: string; dayName: string; attendance: { present: boolean; amount: number; defaultAmount: number; legacy?: boolean; records: AttendanceRecord[] } };
+type Shift = "MORNING" | "EVENING";
+type AttendanceRow = { date: string; dayName: string; attendance: { present: boolean; amount: number; defaultAmount: number; legacy?: boolean; shifts: Record<Shift, { present: boolean; amount: number }>; records: AttendanceRecord[] } };
+const shifts: Shift[] = ["MORNING", "EVENING"];
 const money = (value: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(value || 0);
 const dateKey = (date: Date) => date.toISOString().slice(0, 10);
 const addDays = (date: Date, days: number) => { const next = new Date(date); next.setUTCDate(next.getUTCDate() + days); return next; };
@@ -52,15 +54,15 @@ export default function WeeklyAttendanceGrid({ token, onAttendanceUpdated }: { t
   }, [token, weekStart]);
 
   useEffect(() => { if (token) { setMessage(null); void load(); } }, [load, token]);
-  const toggle = async (row: AttendanceRow) => {
+  const toggle = async (row: AttendanceRow, shift: Shift) => {
     if (pending.current || isLocked) return;
     pending.current = true;
-    setSaving(row.date);
+    setSaving(`${row.date}:${shift}`);
     setMessage(null);
     try {
       const res = await fetch("/api/faculty/attendance/week", {
         method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ date: row.date, present: !row.attendance.present }),
+        body: JSON.stringify({ date: row.date, shift, present: !row.attendance.shifts[shift].present }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -90,17 +92,21 @@ export default function WeeklyAttendanceGrid({ token, onAttendanceUpdated }: { t
       {isLocked ? <div className="faculty-toast--error">{lockReason || "This week is locked for attendance editing."}</div> : null}
       <div className="faculty-table-wrap">
         <table className="faculty-table">
-          <thead><tr><th>Date</th><th>Day</th><th>Attendance</th><th>Recorded Amount</th><th>Last Updated</th></tr></thead>
+          <thead><tr><th>Date</th><th>Day</th><th>Morning</th><th>Evening</th><th>Daily Total</th><th>Last Updated</th></tr></thead>
           <tbody>
-            {loading ? <tr><td colSpan={5}><PremiumLoader label="Loading attendance" compact /></td></tr> : rows.length ? rows.map(row => (
+            {loading ? <tr><td colSpan={6}><PremiumLoader label="Loading attendance" compact /></td></tr> : rows.length ? rows.map(row => (
               <tr key={row.date}>
                 <td>{row.date}</td><td>{row.dayName}</td>
-                <td><button className={`faculty-shift-btn ${row.attendance.present ? "present" : "absent"}`} disabled={loading || isLocked || !!saving} onClick={() => void toggle(row)} aria-label={`Mark ${row.date} ${row.attendance.present ? "absent" : "present"}`}>{saving === row.date ? "Saving..." : row.attendance.present ? "Present" : "Absent"}</button></td>
-                <td>{money(row.attendance.amount)}{!row.attendance.present ? <small className="faculty-shift-meta">Daily rate: {money(row.attendance.defaultAmount)}</small> : null}
-                  {row.attendance.legacy ? <small className="faculty-shift-meta">Historical entries retained: {row.attendance.records.map(record => `${record.shift.toLowerCase()} ${money(record.amount)}`).join(", ")}</small> : null}</td>
-                <td>{row.attendance.records.map(record => <small className="faculty-shift-meta" key={record.id}>{record.updatedAt ? timestamp(record.updatedAt) : "-"}<br />By: {record.updatedByName || "-"}{record.updatedByRole === "ADMIN" ? " (Admin)" : ""}</small>)}</td>
+                {shifts.map(shift => {
+                  const cell = row.attendance.shifts?.[shift] || { present: false, amount: 0 };
+                  const label = shift === "MORNING" ? "Morning" : "Evening";
+                  return <td key={shift} data-label={label}><button className={`faculty-shift-btn ${cell.present ? "present" : "absent"}`} disabled={loading || isLocked || !!saving || row.attendance.legacy} onClick={() => void toggle(row, shift)} aria-label={`Mark ${row.date} ${label} ${cell.present ? "absent" : "present"}`} aria-pressed={cell.present}>{saving === `${row.date}:${shift}` ? "Saving..." : cell.present ? "Present" : "Absent"}</button><small className="faculty-shift-meta">{money(cell.amount)}{!cell.present && !row.attendance.legacy ? ` · Rate ${money(row.attendance.defaultAmount)}` : ""}</small></td>;
+                })}
+                <td data-label="Daily Total">{money(row.attendance.amount)}
+                  {row.attendance.legacy ? <small className="faculty-shift-meta">Historical entries retained: {row.attendance.records.map(record => `${record.shift.toLowerCase()} ${money(record.amount)}`).join(", ")}. Shift changes require Admin review.</small> : null}</td>
+                <td data-label="Last Updated">{row.attendance.records.map(record => <small className="faculty-shift-meta" key={record.id}>{record.shift.toLowerCase()}: {record.updatedAt ? timestamp(record.updatedAt) : "-"}<br />By: {record.updatedByName || "-"}{record.updatedByRole === "ADMIN" ? " (Admin)" : ""}</small>)}</td>
               </tr>
-            )) : <tr><td colSpan={5}>{loadError ? "Attendance could not be loaded. Please refresh to retry." : "No attendance records for this week."}</td></tr>}
+            )) : <tr><td colSpan={6}>{loadError ? "Attendance could not be loaded. Please refresh to retry." : "No attendance records for this week."}</td></tr>}
           </tbody>
         </table>
       </div>

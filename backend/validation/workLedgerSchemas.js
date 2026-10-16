@@ -31,7 +31,7 @@ export const workLedgerFacultyParamSchema = z.object({
 export const workLedgerBodySchema = z.object({
   facultyId: prismaStringId("Faculty member is required."),
   date: dateOnly,
-  shift: z.enum(workLedgerShifts).optional().default("DAILY"),
+  shift: z.enum(workLedgerShifts),
   amount: z.coerce.number().min(0, "Amount cannot be negative.").optional(),
   remarks: z.preprocess(emptyToNull, z.string().max(1000).nullable().optional()),
 });
@@ -41,6 +41,18 @@ export const workLedgerAttendancePatchSchema = z.object({
   amount: z.coerce.number().min(0, "Amount cannot be negative.").optional(),
   remarks: z.preprocess(emptyToNull, z.string().max(1000).nullable().optional()),
 });
+
+export const adminAttendanceAddSchema = z.object({
+  facultyId: prismaStringId("Faculty member is required."),
+  date: dateOnly,
+  shift: z.enum(["MORNING", "EVENING"]),
+}).strict();
+
+export const adminAttendanceEligibleSchema = z.object({
+  date: z.string().refine(value => dateOnly.safeParse(value).success, "A valid date is required."),
+  shift: z.enum(["MORNING", "EVENING"]),
+  search: z.string().trim().max(160).optional().default(""),
+}).strict();
 
 export const workLedgerListQuerySchema = z.object({
   startDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

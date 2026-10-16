@@ -4,8 +4,10 @@ import Modal from "../../../components/ui/Modal";
 
 import type React from "react";
 import BackToDashboard from "../../../components/admin/BackToDashboard";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildWorkLedgerPdf } from "../../../../lib/workLedgerPdf.js";
+import { groupAttendanceFaculty } from "../../../../lib/attendancePresentation.js";
+import { buildWorkLedgerWorkbook, styledAttendanceXlsx } from "../../../../lib/workLedgerWorkbook.js";
 import {
   CalendarDays,
   ChevronLeft,
@@ -16,7 +18,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import * as XLSX from "xlsx";
 import { getAuthRole, getAuthToken, getAuthUserId } from "../../../../lib/authStorage.js";
 import { apiCall } from "../../../../lib/api.js";
 import PremiumLoader from "../../../components/ui/PremiumLoader";
@@ -167,6 +168,8 @@ const money = (value: number) =>
     maximumFractionDigits: 0,
   }).format(value || 0);
 
+const recordedMoney = (value: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(value || 0);
+
 const toDateKey = (date: Date) => date.toISOString().slice(0, 10);
 
 const parseDateKey = (value: string) => new Date(`${value}T00:00:00.000Z`);
@@ -277,7 +280,15 @@ export default function FacultyWorkLedgerPage() {
   const [toast, setToast] = useState<Toast>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [detailsCell, setDetailsCell] = useState<SelectedDayCell>(null);
-  const [detailsDrafts, setDetailsDrafts] = useState<Record<string, { present: boolean; amount: string; remarks: string }>>({});
+  const [addingPerson, setAddingPerson] = useState(false);
+  const [attendanceSearch, setAttendanceSearch] = useState("");
+  const [attendanceShift, setAttendanceShift] = useState<"MORNING" | "EVENING">("MORNING");
+  const [attendanceFaculty, setAttendanceFaculty] = useState("");
+  const [eligibleFaculty, setEligibleFaculty] = useState<FacultyOption[]>([]);
+  const [eligibleLoading, setEligibleLoading] = useState(false);
+  const [eligibleError, setEligibleError] = useState("");
+  const [attendanceBusy, setAttendanceBusy] = useState(false);
+  const attendancePending = useRef(false);
   const [detailsMessage, setDetailsMessage] = useState<Toast>(null);
   const [paymentStatus, setPaymentStatus] = useState<WeeklyPaymentStatus | null>(null);
   const [paymentLoading, setPaymentLoading] = useState(false);
@@ -290,7 +301,7 @@ export default function FacultyWorkLedgerPage() {
   const [form, setForm] = useState<EntryForm>({
     facultyId: "",
     date: toDateKey(weekStart),
-    shift: "DAILY",
+    shift: "MORNING",
     amount: "",
     remarks: "",
   });
@@ -564,66 +575,50 @@ export default function FacultyWorkLedgerPage() {
   const openDetailsModal = (row: WorkLedgerCalendarRow, dayLabel: string) => {
     const cellEntries = row.cells?.[dayLabel]?.entries || [];
     setDetailsCell({ date: row.date, day: row.dayName || dayLabel, entries: cellEntries });
-    setDetailsDrafts(
-      Object.fromEntries(
-        cellEntries.map((entry) => [
-          entry.id,
-          {
-            present: true,
-            amount: String(entry.amount ?? 0),
-            remarks: entry.remarks || "",
-          },
-        ])
-      )
-    );
+    setAddingPerson(false);
+    setAttendanceSearch("");
+    setAttendanceFaculty("");
     setDetailsMessage(null);
   };
 
-  const updateDetailsDraft = (entryId: string, patch: Partial<{ present: boolean; amount: string; remarks: string }>) => {
-    setDetailsDrafts((current) => ({
-      ...current,
-      [entryId]: {
-        present: current[entryId]?.present ?? true,
-        amount: current[entryId]?.amount ?? "0",
-        remarks: current[entryId]?.remarks ?? "",
-        ...patch,
-      },
-    }));
-  };
+  const detailsDate = detailsCell?.date;
+  useEffect(() => {
+    if (!addingPerson || !detailsDate || !isAdmin || !token) return;
+    let active = true;
+    setEligibleLoading(true);
+    setEligibleError("");
+    setAttendanceFaculty("");
+    const timer = setTimeout(() => {
+      const query = new URLSearchParams({ date: detailsDate, shift: attendanceShift, search: attendanceSearch });
+      callApi<FacultyListResponse>(`/work-ledger/admin/attendance/eligible?${query}`, "GET", null, token)
+        .then(data => { if (active) setEligibleFaculty(data.faculty || []); })
+        .catch(error => { if (active) { setEligibleFaculty([]); setEligibleError(error instanceof Error ? error.message : "Unable to load eligible faculty."); } })
+        .finally(() => { if (active) setEligibleLoading(false); });
+    }, 200);
+    return () => { active = false; clearTimeout(timer); };
+  }, [addingPerson, detailsDate, attendanceShift, attendanceSearch, isAdmin, token]);
 
-  const saveDetailsEntry = async (entry: LedgerEntry) => {
-    if (!token || !detailsCell) return;
-    const draft = detailsDrafts[entry.id] || { present: true, amount: String(entry.amount || 0), remarks: entry.remarks || "" };
-    const amount = Math.max(0, Number(draft.amount || 0) || 0);
-    setSubmitting(true);
+  const changeDetailsAttendance = async (entry?: LedgerEntry) => {
+    if (!token || !detailsCell || !isAdmin || attendancePending.current) return;
+    if (entry && !window.confirm(`Delete ${entry.facultyName || entry.faculty?.fullName}'s ${entry.shift === "MORNING" ? "Morning" : "Evening"} attendance for ${formatDisplayDate(detailsCell.date)}?`)) return;
+    if (!entry && !attendanceFaculty) return;
+    const date = detailsCell.date;
+    attendancePending.current = true;
+    setAttendanceBusy(true);
     setDetailsMessage(null);
     try {
-      await callApi(
-        `/work-ledger/attendance/${entry.id}`,
-        "PATCH",
-        {
-          isPresent: draft.present,
-          amount: draft.present ? amount : 0,
-          remarks: draft.remarks,
-        },
-        token
-      );
-      setDetailsMessage({ type: "success", message: "Attendance updated successfully." });
+      await callApi(entry ? `/work-ledger/admin/attendance/${entry.id}` : "/work-ledger/admin/attendance", entry ? "DELETE" : "POST", entry ? null : { facultyId: attendanceFaculty, date, shift: attendanceShift }, token);
+      setDetailsMessage({ type: "success", message: entry ? "Attendance deleted." : "Attendance added." });
+      setAddingPerson(false);
+      setAttendanceFaculty("");
+      const fresh = await callApi<LedgerListResponse>(`/work-ledger?${queryString}`, "GET", null, token);
+      setDetailsCell(current => current?.date === date ? { ...current, entries: (fresh.entries || []).filter(item => item.date.slice(0, 10) === date) } : current);
       await refreshLedgerAndPayment();
-      setDetailsCell((current) =>
-        current
-          ? {
-              ...current,
-              entries: draft.present
-                ? current.entries.map((item) => item.id === entry.id ? { ...item, amount, remarks: draft.remarks } : item)
-                : current.entries.filter((item) => item.id !== entry.id),
-            }
-          : current
-      );
     } catch (error) {
       setDetailsMessage({ type: "error", message: error instanceof Error ? error.message : "Failed to update attendance." });
     } finally {
-      setSubmitting(false);
+      attendancePending.current = false;
+      setAttendanceBusy(false);
     }
   };
 
@@ -666,24 +661,16 @@ export default function FacultyWorkLedgerPage() {
       if (format === "pdf") {
         (await buildWorkLedgerPdf(report)).save(`faculty-work-ledger-${report.weekStart}.pdf`);
       } else {
-        const rows = (report.entries || []).map(entry => ({
-          Date: entry.date, "Entry Type": entry.shift, "Faculty ID": entry.faculty?.facultyId || "", "Faculty Name": entry.faculty?.fullName || "",
-          Attendance: "Present", Amount: entry.amount, Remarks: entry.remarks || "", "Updated By": entry.updatedByName || entry.updatedBy || "",
-          "Updated By Role": entry.updatedByRole || "", "Created At": entry.createdAt, "Updated At": entry.updatedAt,
-        }));
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), "Work Ledger");
-        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet((report.summary?.facultyTotals || []).map(row => ({ "Faculty Name": row.facultyName, "Attendance Entries": row.entries, "Total Amount": row.totalAmount }))), "Faculty Totals");
-        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet([
-          { Date: "Week Start", Amount: report.weekStart }, { Date: "Week End", Amount: report.weekEnd },
-          ...(report.days || []).map(day => ({ Date: day.date, Amount: day.dailyTotal })),
-          { Date: "Weekly Total", Amount: report.summary?.totalAmount || 0 },
-        ]), "Totals");
-        XLSX.writeFile(workbook, `faculty-work-ledger-${report.weekStart}.xlsx`);
+        const workbook = buildWorkLedgerWorkbook(report);
+        const url = URL.createObjectURL(new Blob([styledAttendanceXlsx(workbook)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+        const link = document.createElement("a"); link.href = url; link.download = `faculty-work-ledger-${report.weekStart}.xlsx`; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
     } catch (error) { showToast({ type: "error", message: error instanceof Error ? error.message : "Export failed." }); }
     finally { setExporting(false); }
   };
+
+  const legacyWeeklyAmount = entries.filter(entry => !["MORNING", "EVENING"].includes(entry.shift)).reduce((total, entry) => total + Number(entry.amount || 0), 0);
 
   return (
     <main className="faculty-page">
@@ -692,7 +679,7 @@ export default function FacultyWorkLedgerPage() {
           <BackToDashboard />
           <div className="faculty-title-block">
             <h1>Faculty Work Ledger</h1>
-            <p>Daily faculty attendance and recorded amounts for the selected payroll week.</p>
+            <p>Morning and Evening attendance and recorded amounts for the selected payroll week. Historical entries are retained.</p>
           </div>
         </header>
 
@@ -788,6 +775,7 @@ export default function FacultyWorkLedgerPage() {
             ) : (
               <div className="ledger-grid-scroll">
                 {isWeekLocked ? <div className="faculty-toast--error">{lockReason || "This week is locked for attendance editing."}</div> : null}
+                <div className="weekly-attendance-legend"><span className="weekly-shift weekly-shift--morning">Morning</span><span className="weekly-shift weekly-shift--evening">Evening</span><span>Historical entries retain their recorded amounts.</span></div>
                 <table className="ledger-grid ledger-attendance-grid work-ledger-calendar-grid">
                   <thead>
                     <tr>
@@ -808,38 +796,40 @@ export default function FacultyWorkLedgerPage() {
                           </td>
                           {dayLabels.map((day) => {
                             const cell = row.cells?.[day] || { entries: [], totalAmount: 0, entryCount: 0 };
-                            const visibleEntries = cell.entries.slice(0, 3);
-                            const hiddenCount = Math.max(0, cell.entries.length - visibleEntries.length);
+                            const members = groupAttendanceFaculty(cell.entries);
+                            const compact = members.length > 2;
+                            const visibleMembers = compact ? members.slice(0, 1) : members;
                             return (
                               <td
                                 key={`${row.date}-${day}`}
                                 className={`ledger-cell ledger-attendance-cell work-ledger-calendar-cell ${cell.entries.length ? "work-ledger-cell-clickable" : ""}`}
                                 onClick={() => openDetailsModal(row, day)}
                               >
-                                {visibleEntries.length ? (
+                                {visibleMembers.length ? (
                                   <div className="ledger-chip-list">
-                                    {visibleEntries.map((entry) => (
+                                    {visibleMembers.map((member) => (
                                       <button
-                                        key={entry.id}
-                                        className="faculty-button faculty-button--soft"
+                                        key={member.id}
+                                        className="weekly-attendance-summary"
+                                        aria-label={`View all attendance for ${row.date}: ${members.map(person => person.name).join(", ")}`}
                                         onClick={(event) => {
                                           event.stopPropagation();
                                           openDetailsModal(row, day);
                                         }}
-                                        title="View attendance details"
+                                        title={member.name}
                                       >
-                                        {entry.facultyName || entry.faculty?.fullName || "Faculty"}
+                                        <span className="weekly-attendance-name">{compact ? `${member.name.trim().split(/\s+/)[0]} +${members.length - 1}` : member.name}</span>
+                                        {!compact ? <span className="weekly-attendance-shifts">{member.shifts.map((shift: string) => <span key={shift} className={`weekly-shift ${shift === "MORNING" ? "weekly-shift--morning" : shift === "EVENING" ? "weekly-shift--evening" : ""}`}>{shift === "MORNING" ? "Morning" : shift === "EVENING" ? "Evening" : "Legacy"}</span>)}</span> : null}
                                       </button>
                                     ))}
-                                    {hiddenCount ? <span className="work-ledger-more-chip">+{hiddenCount}</span> : null}
                                   </div>
-                                ) : (
-                                  <span className="ledger-empty-cell">-</span>
-                                )}
+                                ) : isAdmin && row.dayName === day ? (
+                                  <button className="weekly-attendance-summary" aria-label={`Open attendance details for ${row.date}`} onClick={event => { event.stopPropagation(); openDetailsModal(row, day); }}>View / Add</button>
+                                ) : <span className="ledger-empty-cell">-</span>}
                               </td>
                             );
                           })}
-                          <td>{money(row.dailyTotal || 0)}</td>
+                          <td>{recordedMoney(row.dailyTotal || 0)}</td>
                         </tr>
                       ))
                     ) : (
@@ -851,10 +841,11 @@ export default function FacultyWorkLedgerPage() {
                   <tfoot>
                     <tr>
                       <td colSpan={8}>Overall Weekly Total</td>
-                      <td>{money(summary.currentWeekTotal)}</td>
+                      <td>{recordedMoney(summary.currentWeekTotal)}</td>
                     </tr>
                   </tfoot>
                 </table>
+                {legacyWeeklyAmount !== 0 ? <p className="weekly-attendance-legacy-note">Historical unallocated attendance: {recordedMoney(legacyWeeklyAmount)} is included in weekly totals, but not assigned to Morning or Evening.</p> : null}
               </div>
             )}
         </section>
@@ -930,92 +921,84 @@ export default function FacultyWorkLedgerPage() {
       ) : null}
 
       {detailsCell ? (
-        <Modal className="faculty-modal-backdrop" role="dialog" aria-modal="true">
-          <div className="faculty-modal">
+        <Modal className="faculty-modal-backdrop" role="dialog" aria-modal="true" onClose={() => setDetailsCell(null)}>
+          <div className="faculty-modal weekly-attendance-details">
             <div className="faculty-modal-header">
               <h2>
                 Attendance Details — {detailsCell.day}, {formatDisplayDate(detailsCell.date)}
               </h2>
-              <button className="faculty-icon-button" onClick={() => setDetailsCell(null)}>
+              {isAdmin ? <button className="faculty-button faculty-button--primary" disabled={isWeekLocked || attendanceBusy} onClick={() => setAddingPerson(true)}>Add People</button> : null}
+              <button className="faculty-icon-button" aria-label="Close attendance details" onClick={() => setDetailsCell(null)}>
                 <X size={18} />
               </button>
             </div>
-            <div className="faculty-form">
-              {isWeekLocked ? <div className="faculty-toast--error">{lockReason || "This week’s payout has already been processed. Attendance editing is locked."}</div> : null}
-              {detailsMessage ? <div className={`faculty-toast--${detailsMessage.type}`}>{detailsMessage.message}</div> : null}
-              {detailsCell.entries.length ? (
-                <div className="work-ledger-detail-stack">
-                  <section className="work-ledger-detail-section">
-                        <div className="faculty-table-wrap">
-                          <table className="faculty-table">
-                            <thead>
-                              <tr>
-                                <th>Faculty</th>
-                                <th>Status</th>
-                                <th>Amount</th>
-                                <th>Updated At</th>
-                                <th>Updated By</th>
-                                <th>Remarks</th>
-                                <th>Action</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {detailsCell.entries.map((entry) => {
-                                const draft = detailsDrafts[entry.id] || { present: true, amount: String(entry.amount || 0), remarks: entry.remarks || "" };
-                                return (
-                                  <tr key={entry.id}>
-                                    <td>
-                                      <strong>{entry.facultyName || entry.faculty?.fullName || "Faculty"}</strong>
-                                      <small>{entry.facultyCode || entry.faculty?.facultyId || "-"}</small>
-                                    </td>
-                                    <td>
-                                      <select
-                                        value={draft.present ? "PRESENT" : "ABSENT"}
-                                        disabled={isWeekLocked || submitting}
-                                        onChange={(event) => updateDetailsDraft(entry.id, { present: event.target.value === "PRESENT" })}
-                                      >
-                                        <option value="PRESENT">Present</option>
-                                        <option value="ABSENT">Absent</option>
-                                      </select>
-                                    </td>
-                                    <td>
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        step="0.01"
-                                        value={draft.amount}
-                                        disabled={isWeekLocked || submitting || !draft.present}
-                                        onChange={(event) => updateDetailsDraft(entry.id, { amount: event.target.value })}
-                                      />
-                                    </td>
-                                    <td>{formatUpdatedAt(entry.updatedAt)}</td>
-                                    <td>{entry.updatedByName || entry.updatedBy || "-"}</td>
-                                    <td>
-                                      <input
-                                        value={draft.remarks}
-                                        disabled={isWeekLocked || submitting}
-                                        onChange={(event) => updateDetailsDraft(entry.id, { remarks: event.target.value })}
-                                      />
-                                    </td>
-                                    <td>
-                                      <button className="faculty-button faculty-button--primary" disabled={isWeekLocked || submitting} onClick={() => saveDetailsEntry(entry)}>
-                                        {submitting ? "Saving..." : "Save"}
-                                      </button>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                  </section>
-                  <div className="work-ledger-day-total">Day Total: {money(detailsCell.entries.reduce((total, entry) => total + Number(entry.amount || 0), 0))}</div>
-                </div>
-              ) : (
-                <div className="faculty-empty">No attendance entries for this day.</div>
-              )}
+            <div className="faculty-form weekly-attendance-details__body">
+              {isWeekLocked ? <div className="faculty-toast--error">{lockReason || "Attendance is locked because this week's payout has been processed."}</div> : null}
+              {detailsMessage ? <div role="status" className={`faculty-toast--${detailsMessage.type}`}>{detailsMessage.message}</div> : null}
+              {addingPerson ? (
+                <form className="weekly-attendance-add" onSubmit={event => { event.preventDefault(); void changeDetailsAttendance(); }}>
+                  <h3>Add People</h3>
+                  <label>Shift
+                    <select value={attendanceShift} disabled={attendanceBusy} onChange={event => setAttendanceShift(event.target.value as "MORNING" | "EVENING")}>
+                      <option value="MORNING">Morning</option><option value="EVENING">Evening</option>
+                    </select>
+                  </label>
+                  <label>Search faculty by name or ID
+                    <input value={attendanceSearch} disabled={attendanceBusy} onChange={event => setAttendanceSearch(event.target.value)} maxLength={160} />
+                  </label>
+                  <label>Faculty Name
+                    <select aria-label="Faculty Name" required value={attendanceFaculty} disabled={eligibleLoading || attendanceBusy || Boolean(eligibleError)} onChange={event => setAttendanceFaculty(event.target.value)}>
+                      <option value="">{eligibleLoading ? "Loading faculty..." : "Select faculty"}</option>
+                      {eligibleFaculty.map(person => <option key={person.id} value={person.id}>{person.fullName} ({person.facultyId})</option>)}
+                    </select>
+                  </label>
+                  {eligibleError ? <p role="alert">{eligibleError}</p> : !eligibleLoading && !eligibleFaculty.length ? <p>No eligible faculty found. Try a different name or shift.</p> : <p>Search the directory to narrow results. Up to 50 matches are shown.</p>}
+                  <div className="faculty-inline-actions">
+                    <button type="submit" className="faculty-button faculty-button--primary" disabled={attendanceBusy || eligibleLoading || !attendanceFaculty || isWeekLocked}>{attendanceBusy ? "Adding..." : "Add"}</button>
+                    <button type="button" className="faculty-button faculty-button--ghost" disabled={attendanceBusy} onClick={() => setAddingPerson(false)}>Cancel</button>
+                  </div>
+                </form>
+              ) : null}
+              {(["MORNING", "EVENING"] as const).map(shift => (
+                <section key={shift} className="work-ledger-detail-section">
+                  <h3 className={`weekly-shift weekly-shift--${shift.toLowerCase()}`}>{shift} SHIFT</h3>
+                  {detailsCell.entries.some(entry => entry.shift === shift) ? (
+                    <div className="faculty-table-wrap">
+                      <table className="faculty-table">
+                        <thead><tr><th>Faculty Name</th><th>Status</th><th>Amount</th><th>Updated At</th><th>Delete</th></tr></thead>
+                        <tbody>{detailsCell.entries.filter(entry => entry.shift === shift).map(entry => (
+                          <tr key={entry.id}>
+                            <td data-label="Faculty Name"><strong>{entry.facultyName || entry.faculty?.fullName || "Faculty"}</strong></td>
+                            <td data-label="Status"><span className="weekly-attendance-present">Present</span></td>
+                            <td data-label="Amount">{recordedMoney(Number(entry.amount))}</td>
+                            <td data-label="Updated At">{formatUpdatedAt(entry.updatedAt)}</td>
+                            <td data-label="Delete">{isAdmin ? <button className="faculty-button faculty-button--danger" disabled={isWeekLocked || attendanceBusy} onClick={() => void changeDetailsAttendance(entry)} aria-label={`Delete ${entry.facultyName || entry.faculty?.fullName} ${shift === "MORNING" ? "Morning" : "Evening"} attendance`}>Delete</button> : "-"}</td>
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    </div>
+                  ) : <p className="faculty-empty">No attendance in this shift.</p>}
+                </section>
+              ))}
+              {detailsCell.entries.some(entry => !["MORNING", "EVENING"].includes(entry.shift)) ? (
+                <section className="work-ledger-detail-section">
+                  <h3>Historical attendance (read-only)</h3>
+                  <div className="faculty-table-wrap"><table className="faculty-table">
+                    <thead><tr><th>Faculty Name</th><th>Historical Entry</th><th>Amount</th><th>Updated At</th></tr></thead>
+                    <tbody>{detailsCell.entries.filter(entry => !["MORNING", "EVENING"].includes(entry.shift)).map(entry => (
+                      <tr key={entry.id}>
+                        <td data-label="Faculty Name">{entry.facultyName || entry.faculty?.fullName}</td>
+                        <td data-label="Historical Entry">{entry.shift === "DAILY" ? "Unallocated daily" : "Legacy Afternoon"}</td>
+                        <td data-label="Amount">{recordedMoney(Number(entry.amount))}</td>
+                        <td data-label="Updated At">{formatUpdatedAt(entry.updatedAt)}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table></div>
+                </section>
+              ) : null}
             </div>
             <div className="faculty-modal-footer">
+              <strong className="weekly-attendance-details__total">Day Total: {recordedMoney(detailsCell.entries.reduce((total, entry) => total + Number(entry.amount || 0), 0))}</strong>
               <button className="faculty-button faculty-button--ghost" onClick={() => setDetailsCell(null)}>
                 Close
               </button>
@@ -1052,6 +1035,12 @@ export default function FacultyWorkLedgerPage() {
                   </Field>
                   <Field label="Date" error={formErrors.date}>
                     <input type="date" value={form.date} readOnly />
+                  </Field>
+                  <Field label="Shift">
+                    <select value={form.shift} disabled={Boolean(editingEntry)} onChange={event => setForm(current => ({ ...current, shift: event.target.value as Shift }))}>
+                      {editingEntry && ["DAILY", "AFTERNOON"].includes(form.shift) ? <option value={form.shift}>Historical {form.shift.toLowerCase()}</option> : null}
+                      <option value="MORNING">Morning</option><option value="EVENING">Evening</option>
+                    </select>
                   </Field>
                   <Field label="Amount" error={formErrors.amount}>
                     <input

@@ -1,15 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { saveCopySet, listCopySets, validateCopySet, withIncentiveOperationLock } from "../services/incentiveCopySetService.js";
+import { saveCopySet, deleteCopySet, listCopySets, validateCopySet, withIncentiveOperationLock } from "../services/incentiveCopySetService.js";
 
 function fixture() {
-  const entries = [], leases = new Map();
+  const entries = [], leases = new Map(), audits = [];
   const type = { id: "copies", name: "Copies", rate: 100, isActive: true };
-  const matches = (row, where) => Object.entries(where).every(([key, value]) => value?.gt ? row[key] > value.gt : row[key] === value);
+  const matches = (row, where) => Object.entries(where).every(([key, value]) => value?.gt ? row[key] > value.gt : value?.not ? row[key] !== value.not : row[key] === value);
   let queue = Promise.resolve();
   const db = {
-    entries, type, leases, $queryRaw: async () => [],
+    entries, type, leases, audits, $queryRaw: async () => [],
+    auditLog: { create: async ({ data }) => { audits.push(data); return data; } },
     faculty: { findUnique: async ({ where }) => ({ id: where.id }) },
     facultyOnlineClass: { findFirst: async () => null },
     extraIncentiveType: { findFirst: async ({ where }) => where.id === type.id ? type : null },
@@ -106,4 +107,39 @@ test("copy endpoints retain authentication and faculty/admin role restrictions",
       assert.equal(res.code, 403);
     }
   }
+});
+
+test("deleting one pending copy set retains snapshots/audit, excludes its balance and safely repeats", async () => {
+  const db = fixture();
+  const first = (await saveCopySet("faculty", "copies", body(2), null, db)).entry;
+  await saveCopySet("faculty", "copies", body(3), null, db);
+  const request = { expectedUpdatedAt: first.updatedAt.toISOString() };
+  assert.equal((await deleteCopySet("faculty", "copies", first.id, request, db)).alreadyDeleted, false);
+  assert.equal((await deleteCopySet("faculty", "copies", first.id, request, db)).alreadyDeleted, true);
+  assert.equal(db.audits.length, 1); assert.equal(db.audits[0].metadataJson.amount, 200);
+  assert.equal(db.entries[0].quantityChange, 2); assert.equal(db.entries[0].amountSnapshot, 200);
+  assert.equal(db.entries[0].status, "DELETED");
+  const remaining = await listCopySets("faculty", "copies", 1, db);
+  assert.equal(remaining.entries.length, 1); assert.equal(remaining.entries[0].amount, 300);
+});
+
+test("delete rejects other owners, stale edits, online records and every protected status", async () => {
+  const db = fixture(), entry = (await saveCopySet("faculty", "copies", body(), null, db)).entry;
+  const request = { expectedUpdatedAt: entry.updatedAt.toISOString() };
+  await assert.rejects(deleteCopySet("other", "copies", entry.id, request, db), { status: 404 });
+  await assert.rejects(deleteCopySet("faculty", "other-type", entry.id, request, db), { status: 404 });
+  await assert.rejects(deleteCopySet("faculty", "copies", entry.id, {}, db), { status: 400 });
+  await assert.rejects(deleteCopySet("faculty", "copies", entry.id, { expectedUpdatedAt: new Date(0).toISOString() }, db), { status: 409 });
+  for (const status of ["PAID", "PROCESSING", "RESERVED", "LOCKED"]) {
+    db.entries[0].status = status;
+    await assert.rejects(deleteCopySet("faculty", "copies", entry.id, request, db), { status: 409 });
+    assert.equal(db.entries[0].status, status);
+  }
+  db.entries[0].status = "PENDING"; db.entries[0].paymentRecordId = "reserved-payment";
+  await assert.rejects(deleteCopySet("faculty", "copies", entry.id, request, db), { status: 409 });
+  db.entries[0].paymentRecordId = null; db.entries[0].onlineClass = { id: "linked-class" };
+  await assert.rejects(deleteCopySet("faculty", "copies", entry.id, request, db), { status: 403 });
+  db.entries[0].onlineClass = null; db.type.name = "ONLINE DOUBT CLASS";
+  await assert.rejects(deleteCopySet("faculty", "copies", entry.id, request, db), { status: 403 });
+  assert.equal(db.audits.length, 0);
 });

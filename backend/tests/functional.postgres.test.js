@@ -112,19 +112,19 @@ test("real HTTP/Prisma role sessions, Staff OTP/reset, follow-ups, cash concurre
     const saturdayDate = new Date(friday); saturdayDate.setUTCDate(saturdayDate.getUTCDate() + 1);
     const saturday = saturdayDate.toISOString().slice(0, 10);
     for (const [date, amount] of [[friday, 200], [saturday, 400]]) {
-      const results = await Promise.all(Array.from({ length: 3 }, () => call("/api/faculty/attendance/week", faculty, { date, present: true })));
+      const results = await Promise.all(Array.from({ length: 3 }, () => call("/api/faculty/attendance/week", faculty, { date, shift: "MORNING", present: true })));
       assert.ok(results.every(result => result.status === 200));
       assert.ok(results.every(result => Number(result.data.entry.amount) === amount));
     }
     assert.equal((await call("/api/faculty/attendance/week", faculty, { date: friday, present: true, amount: 999 })).status, 400);
     assert.equal((await call(`/api/faculty/attendance/week?weekStart=${friday}`, faculty)).status, 200);
-    const daily = await db.workLedgerEntry.findFirst({ where: { facultyId: facultyRecord.id, date: new Date(saturday), shift: "DAILY" } });
+    const daily = await db.workLedgerEntry.findFirst({ where: { facultyId: facultyRecord.id, date: new Date(saturday), shift: "MORNING" } });
     assert.equal((await call(`/api/work-ledger/attendance/${daily.id}`, admin, { amount: 350, isPresent: true }, "PATCH")).status, 200);
-    assert.equal(Number((await call("/api/faculty/attendance/week", faculty, { date: saturday, present: true })).data.entry.amount), 350);
+    assert.equal(Number((await call("/api/faculty/attendance/week", faculty, { date: saturday, shift: "MORNING", present: true })).data.entry.amount), 350);
     const csv = await fetch(`${base}/api/work-ledger/export.csv?week=${friday}`, { headers: { Authorization: `Bearer ${admin}` } });
     assert.equal(csv.status, 200); assert.match(csv.headers.get("content-type"), /text\/csv/);
     assert.match(await csv.text(), /350/);
-    assert.equal((await call("/api/faculty/attendance/week", faculty, { date: friday, present: false })).status, 200);
+    assert.equal((await call("/api/faculty/attendance/week", faculty, { date: friday, shift: "MORNING", present: false })).status, 200);
     assert.equal((await call("/api/staff/password-reset/send-code", null, { email })).status, 200);
     const reset = await call("/api/staff/password-reset/verify", null, { email, code: delivered.get(email) });
     assert.equal(reset.status, 200);

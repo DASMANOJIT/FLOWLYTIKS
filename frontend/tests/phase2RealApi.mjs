@@ -96,7 +96,7 @@ try {
     const file = path.join(destination, `ledger.${format.toLowerCase()}`); await download.saveAs(file);
     if (format === "XLSX") {
       const workbook = XLSX.read(await readFile(file), { type: "buffer" });
-      assert.deepEqual(workbook.SheetNames, ["Work Ledger", "Faculty Totals", "Totals"]);
+      assert.deepEqual(workbook.SheetNames, ["Weekly Attendance", "Work Ledger", "Faculty Totals", "Totals"]);
       const entries = XLSX.utils.sheet_to_json(workbook.Sheets["Work Ledger"]);
       assert.equal(entries.length, report.body.entries.length);
       assert.ok(entries.some(entry => entry.Remarks === `Override-${fixture.marker}` && entry.Amount === 375));

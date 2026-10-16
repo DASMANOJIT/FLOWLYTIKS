@@ -13,6 +13,8 @@
 .entries li { border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
 .entries p { margin: 0; }
 .entries button { justify-self: start; }
+.setActions { display: flex; flex-wrap: wrap; gap: 8px; }
+.setActions :global(.faculty-button) { width: auto; min-height: 44px; }
 .entries time, .readonly { color: #64748b; font-size: 12px; }
 .remark { white-space: pre-wrap; overflow-wrap: anywhere; }
 .status { background: #eff6ff; color: #1d4ed8; padding: 4px 8px; border-radius: 6px; font-size: 12px; }
