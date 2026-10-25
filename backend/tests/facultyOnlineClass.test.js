@@ -88,3 +88,22 @@ test("scheduled edits cannot replace matched evidence or credited legacy account
   db.rows[0].conferenceName = null; db.rows[0].incentiveEntryId = "retained-paid-entry";
   await assert.rejects(saveOnlineClass("faculty-one", { ...body, expectedUpdatedAt: row.updatedAt.toISOString() }, row.id, db), /Credited classes/);
 });
+
+test("creation reports missing scheduled-end migration or stale generated client without disguising other failures", async () => {
+  const { default: prisma } = await import("../prisma/client.js");
+  const { saveMyOnlineClass } = await import("../controllers/facultyonlineclasscontrollers.js");
+  const original = prisma.$transaction;
+  try {
+    for (const [error, expected, code] of [
+      [Object.assign(new Error("Controlled constraint failure"), { code: "P2011", meta: { constraint: ["endsAt"] } }), 503, "ONLINE_CLASS_SCHEMA_NOT_READY"],
+      [Object.assign(new Error("Argument `endsAt` is missing."), { name: "PrismaClientValidationError" }), 503, "ONLINE_CLASS_SCHEMA_NOT_READY"],
+      [Object.assign(new Error("Other constraint"), { code: "P2011", meta: { constraint: ["topic"] } }), 500, undefined],
+    ]) {
+      prisma.$transaction = async () => { throw error; };
+      const res = { code: 200, status(status) { this.code = status; return this; }, json(data) { this.body = data; return this; } };
+      await saveMyOnlineClass({ user: { id: "faculty-one" }, params: {}, body }, res);
+      assert.equal(res.code, expected); assert.equal(res.body.code, code);
+      assert.equal(res.body.success, false);
+    }
+  } finally { prisma.$transaction = original; }
+});

@@ -14,7 +14,7 @@ import {
 } from "../controllers/facultyextraincentivecontrollers.js";
 import { adminOnly, protect } from "../middleware/authmiddleware.js";
 import { adminWriteRateLimit } from "../middleware/security.js";
-import { getMyOnlineClasses, getAdminOnlineClasses, saveMyOnlineClass, changeMyOnlineClass, deleteMyOnlineClass, downloadOnlineAttendance, adminOnlineClassSummary, getOnlineDirectory, writeOnlineDirectory, deleteOnlineDirectoryBatch, manageAdminOnlineClass } from "../controllers/facultyonlineclasscontrollers.js";
+import { getMyOnlineClasses, getAdminOnlineClasses, createAdminOnlineClass, saveMyOnlineClass, changeMyOnlineClass, deleteMyOnlineClass, downloadOnlineAttendance, adminOnlineClassSummary, getOnlineDirectory, writeOnlineDirectory, deleteOnlineDirectoryBatch, manageAdminOnlineClass } from "../controllers/facultyonlineclasscontrollers.js";
 
 const router = express.Router();
 
@@ -41,6 +41,7 @@ router.post("/admin/pay/:facultyId", protect, adminOnly, adminWriteRateLimit, pa
 router.get("/admin/payments", protect, adminOnly, listIncentivePayments);
 router.get("/admin/:facultyId/sets/:incentiveTypeId", protect, adminOnly, getIncentiveCopySets);
 router.get("/admin/online-classes", protect, adminOnly, getAdminOnlineClasses);
+router.post("/admin/online-classes", protect, adminOnly, adminWriteRateLimit, createAdminOnlineClass);
 router.get("/admin/online-class-summary", protect, adminOnly, adminOnlineClassSummary);
 router.get("/online-class-directory", protect, attendanceReaderOnly, getOnlineDirectory);
 router.post("/admin/online-class-directory/:kind", protect, adminOnly, adminWriteRateLimit, writeOnlineDirectory);

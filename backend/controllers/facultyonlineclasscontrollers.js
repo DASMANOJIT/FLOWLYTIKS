@@ -5,11 +5,15 @@ import { checkOnlineMeeting } from "../services/meetVerificationService.js";
 import { getMeetingAttendance, buildMeetAttendancePdf } from "../services/meetAttendancePdfService.js";
 import { deleteFacultyOnlineClass } from "../services/facultyOnlineClassDeletionService.js";
 import { getOnlineClassSummary, listOnlineClassDirectory, saveDirectoryItem, deleteOnlineClassBatch } from "../services/adminOnlineClassService.js";
+import { prismaStringId } from "../validation/idSchemas.js";
 
 const respond = handler => async (req, res) => {
   try { await handler(req, res); }
   catch (error) {
-    console.error("Online class request failed:", { name: error?.name, code: error?.code, status: error?.status });
+    const requiredScheduledEnd = error?.code === "P2011" && Array.isArray(error.meta?.constraint) && error.meta.constraint.includes("endsAt");
+    const staleClient = error?.name === "PrismaClientValidationError" && /Argument `endsAt` is missing/.test(error.message || "");
+    console.error("Online class request failed:", { name: error?.name, code: error?.code, status: error?.status, ...(requiredScheduledEnd || staleClient ? { schemaIssue: "scheduled_end_required" } : {}) });
+    if (requiredScheduledEnd || staleClient) return res.status(503).json({ success: false, code: "ONLINE_CLASS_SCHEMA_NOT_READY", message: "Online class database setup is incomplete. Apply the scheduled-end migration and regenerate Prisma Client before retrying." });
     return res.status(error.status || 500).json({ success: false, message: error.status ? error.message : "Unable to process online classes. Please try again." });
   }
 };
@@ -33,6 +37,15 @@ const audit = (req, record, action) => createAuditLog({ req, actorType: req.user
 export const saveMyOnlineClass = respond(async (req, res) => {
   const record = await saveOnlineClass(req.user.id, req.body, req.params.id || null);
   await audit(req, record, req.params.id ? "ONLINE_CLASS_UPDATED" : "ONLINE_CLASS_SCHEDULED");
+  res.json({ success: true, record });
+});
+
+export const createAdminOnlineClass = respond(async (req, res) => {
+  const facultyId = prismaStringId("Select a valid faculty member.").safeParse(req.body?.facultyId);
+  if (!facultyId.success) return res.status(400).json({ success: false, message: "Select a valid faculty member." });
+  if (!await prisma.faculty.findUnique({ where: { id: facultyId.data }, select: { id: true } })) return res.status(404).json({ success: false, message: "Faculty not found." });
+  const record = await saveOnlineClass(facultyId.data, req.body);
+  await audit(req, record, "ONLINE_CLASS_SCHEDULED");
   res.json({ success: true, record });
 });
 
