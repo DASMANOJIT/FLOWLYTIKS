@@ -4,7 +4,7 @@ import { createAuditLog } from "../services/auditLogService.js";
 import { createPayout, initiatePayout } from "../services/facultyPayoutService.js";
 import { assertPayoutConfig, refreshExtraPaymentFromPayout } from "../services/cashfreePayoutService.js";
 import { sendFacultyExtraIncentiveEmail } from "../services/emailNotificationService.js";
-import { isOnlineDoubtClass, usesOnlineClassWorkflow } from "../services/facultyOnlineClassService.js";
+import { isOnlineDoubtClass, isOnlineClassIncentiveEntryEligible, usesOnlineClassWorkflow } from "../services/facultyOnlineClassService.js";
 import { copySetDto, listCopySets, saveCopySet, deleteCopySet, withIncentiveOperationLock } from "../services/incentiveCopySetService.js";
 
 const money = (value) => Number(Number(value || 0).toFixed(2));
@@ -75,9 +75,10 @@ const createCashPaymentLegacy = async ({ facultyId, req }) =>
     }
     const entries = await tx.facultyExtraIncentiveEntry.findMany({
       where: { facultyId, status: "PENDING" },
-      include: { incentiveType: true },
+      include: { incentiveType: true, onlineClass: true },
     });
-    const summary = summarizeEntries(entries);
+    const eligibleEntries = entries.filter(isOnlineClassIncentiveEntryEligible);
+    const summary = summarizeEntries(eligibleEntries);
     const totalAmount = money(summary.reduce((sum, item) => sum + item.amount, 0));
     if (totalAmount <= 0) {
       const error = new Error("No pending extra incentive amount to pay.");
@@ -96,7 +97,7 @@ const createCashPaymentLegacy = async ({ facultyId, req }) =>
     `;
 
     await tx.facultyExtraIncentiveEntry.updateMany({
-      where: { id: { in: entries.map((entry) => entry.id) } },
+      where: { id: { in: eligibleEntries.map((entry) => entry.id) } },
       data: { status: "PAID", paymentRecordId: paymentId },
     });
 
@@ -226,12 +227,12 @@ export const getAdminSummary = async (req, res) => {
       prisma.faculty.findMany({ orderBy: { fullName: "asc" } }),
       prisma.facultyExtraIncentiveEntry.findMany({
         where: { status: "PENDING" },
-        include: { incentiveType: true },
+        include: { incentiveType: true, onlineClass: true },
       }),
     ]);
 
     const entriesByFaculty = new Map();
-    for (const entry of pendingEntries) {
+    for (const entry of pendingEntries.filter(isOnlineClassIncentiveEntryEligible)) {
       const list = entriesByFaculty.get(entry.facultyId) || [];
       list.push(entry);
       entriesByFaculty.set(entry.facultyId, list);
@@ -348,17 +349,18 @@ export const getMyIncentives = async (req, res) => {
       prisma.extraIncentiveType.findMany({ where: { isActive: true }, include: { onlineClasses: { select: { id: true }, take: 1 } }, orderBy: { name: "asc" } }),
       prisma.facultyExtraIncentiveEntry.findMany({
         where: { facultyId: req.user.id },
-        include: { incentiveType: true },
+        include: { incentiveType: true, onlineClass: true },
         orderBy: { createdAt: "desc" },
         take: 200,
       }),
-      prisma.facultyExtraIncentiveEntry.findMany({ where: { facultyId: req.user.id, status: "PENDING" }, include: { incentiveType: true } }),
+      prisma.facultyExtraIncentiveEntry.findMany({ where: { facultyId: req.user.id, status: "PENDING" }, include: { incentiveType: true, onlineClass: true } }),
     ]);
+    const eligiblePendingEntries = pendingEntries.filter(isOnlineClassIncentiveEntryEligible);
     const payments = await findExtraIncentivePayments({ facultyId: req.user.id });
     return res.json({
       success: true,
       types: types.map(typeDto),
-      pendingSummary: summarizeEntries(pendingEntries),
+      pendingSummary: summarizeEntries(eligiblePendingEntries),
       entries: entries.map((entry) => ({
         id: entry.id,
         incentiveTypeId: entry.incentiveTypeId,
@@ -401,9 +403,10 @@ const payFacultyIncentivesUnlocked = async (req, res) => {
       }
       const entries = await tx.facultyExtraIncentiveEntry.findMany({
         where: { facultyId, status: "PENDING" },
-        include: { incentiveType: true },
+        include: { incentiveType: true, onlineClass: true },
       });
-      const summary = summarizeEntries(entries);
+      const eligibleEntries = entries.filter(isOnlineClassIncentiveEntryEligible);
+      const summary = summarizeEntries(eligibleEntries);
       const totalAmount = money(summary.reduce((sum, item) => sum + item.amount, 0));
       if (totalAmount <= 0) {
         const error = new Error("No pending extra incentive amount to pay.");
@@ -432,7 +435,7 @@ const payFacultyIncentivesUnlocked = async (req, res) => {
         },
       });
       await tx.facultyExtraIncentiveEntry.updateMany({
-        where: { id: { in: entries.map((entry) => entry.id) } },
+        where: { id: { in: eligibleEntries.map((entry) => entry.id) } },
         data: { status: "PAID", paymentRecordId: payment.id },
       });
       return { payment, faculty, summary };

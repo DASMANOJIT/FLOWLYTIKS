@@ -30,7 +30,7 @@ export function validateOnlineClass(body) {
   return data;
 }
 
-export const onlineClassInclude = { batches: { orderBy: { batchId: "asc" } }, faculty: { select: { fullName: true, facultyId: true } }, incentiveEntry: { select: { id: true, rateSnapshot: true, amountSnapshot: true, status: true, paymentRecordId: true } } };
+export const onlineClassInclude = { batches: { orderBy: { batchId: "asc" } }, faculty: { select: { fullName: true, facultyId: true } }, incentiveEntry: { select: { id: true, facultyId: true, incentiveTypeId: true, quantityChange: true, rateSnapshot: true, amountSnapshot: true, status: true, paymentRecordId: true } } };
 export const onlineClassBatchNames = row => row.batches?.length ? row.batches.map(batch => batch.nameSnapshot) : [row.batchName].filter(Boolean);
 export function onlineClassDeletionBlockedReason(row) {
   if (!["SCHEDULED", "CANCELLED"].includes(row.status) || row.actualStartAt || row.actualEndAt || row.completedAt) return "Live or completed classes cannot be deleted, including after cancellation.";
@@ -55,6 +55,7 @@ export function onlineClassDto(row, now = new Date()) {
     canDelete: !row.deletedAt && !onlineClassDeletionBlockedReason(row),
     deletionBlockedReason: onlineClassDeletionBlockedReason(row),
     verificationStatus: staleLive ? "ATTENDANCE_PENDING" : row.verificationStatus || "LEGACY", verificationError: staleLive ? "Meeting ended. Final attendance and incentive verification are pending; check again shortly." : row.verificationError,
+    verifiedCompletion: isOnlineClassEvidenceEligible(row, row.incentiveEntry),
     verificationPending: staleLive || ["PENDING", "MISSING_DATA", "ATTENDANCE_PENDING", "LIVE", "INCENTIVE_BUSY"].includes(row.verificationStatus),
     conferenceName: row.conferenceName, actualStartAt: row.actualStartAt, actualEndAt: row.actualEndAt,
     actualDurationSeconds: row.actualStartAt && row.actualEndAt ? Math.max(0, (row.actualEndAt - row.actualStartAt) / 1000) : null,
@@ -62,6 +63,40 @@ export function onlineClassDto(row, now = new Date()) {
     canDownloadAttendance: Boolean(row.attendanceCompleteAt && row.actualEndAt),
     incentive: row.incentiveEntry ? { id: row.incentiveEntry.id, rate: Number(row.incentiveEntry.rateSnapshot), amount: Number(row.incentiveEntry.amountSnapshot), status: row.incentiveEntry.status, paymentRecordId: row.incentiveEntry.paymentRecordId } : null,
     announcement: `Online Doubt Class\nTeacher: ${teacherName}\nBatches: ${onlineClassBatchNames(row).join(", ")}${row.className ? `\nClass: ${row.className}` : ""}\nTopic: ${row.topic}\nDate: ${dateFormat.format(row.startsAt)}\nStart: ${timeFormat.format(row.startsAt)} IST\nGoogle Meet: ${row.meetUrl}${row.message ? `\n\n${row.message}` : ""}` };
+}
+
+function isOnlineClassEvidenceEligible(row, entry) {
+  if (!row || !entry) return false;
+  const durationSeconds = row.actualStartAt && row.actualEndAt
+    ? (+new Date(row.actualEndAt) - +new Date(row.actualStartAt)) / 1000
+    : null;
+  const summary = row.attendanceEvidence?.summary;
+  return row.status === "COMPLETED"
+    && row.verificationStatus === "VERIFIED"
+    && !row.deletedAt
+    && !row.cancelledAt
+    && row.conferenceName
+    && durationSeconds !== null
+    && durationSeconds > 3600
+    && row.createdAt
+    && new Date(row.actualStartAt) >= new Date(row.createdAt)
+    && row.attendanceCompleteAt
+    && row.teacherGoogleUserId
+    && summary?.complete === true
+    && summary.teacherVerified === true
+    && Number(summary.verifiedNonTeacher) > 0
+    && row.incentiveEntryId === entry.id
+    && entry.id === row.incentiveEntryId
+    && row.facultyId === entry.facultyId
+    && row.incentiveTypeId === entry.incentiveTypeId
+    && entry.quantityChange === 1;
+}
+
+export function isOnlineClassIncentiveEntryEligible(entry) {
+  if (!entry?.incentiveType || entry.status !== "PENDING") return false;
+  const row = entry.onlineClass;
+  if (!isOnlineDoubtClass(entry.incentiveType)) return !row;
+  return isOnlineClassEvidenceEligible(row, entry);
 }
 
 export function onlineClassHistoryWhere({ search = "", date = "", batch = "" } = {}) {
@@ -97,21 +132,183 @@ export function onlineClassHistoryWhere({ search = "", date = "", batch = "" } =
   return where;
 }
 
-export async function listOnlineClasses({ facultyId, incentiveTypeId, paymentId, page = 1, historyFilters = false, search, date, batch, status }, db = prisma) {
-  if (!Number.isInteger(page) || page < 1 || page > 100000) fail("Invalid page.");
-  if (facultyId != null && (typeof facultyId !== "string" || facultyId.length > 64)) fail("Invalid faculty filter.");
-  if (status && !["SCHEDULED", "LIVE", "COMPLETED", "CANCELLED"].includes(status)) fail("Invalid class status.");
-  const scope = { deletedAt: null, ...(facultyId ? { facultyId } : {}), ...(incentiveTypeId ? { incentiveTypeId } : {}), ...(paymentId ? { incentiveEntry: { paymentRecordId: paymentId } } : {}) };
-  const where = { ...scope, ...(historyFilters ? onlineClassHistoryWhere({ search, date, batch }) : {}), ...(status ? { status } : {}) };
-  const rows = await db.facultyOnlineClass.findMany({ where, include, orderBy: [{ startsAt: "desc" }, { id: "desc" }], skip: (page - 1) * 20, take: 21 });
+const ONLINE_CLASS_RECORD_STATUSES = [
+  "COMPLETED",
+  "INCOMPLETE",
+  "SCHEDULED",
+  "LIVE",
+  "CANCELLED",
+];
+
+function onlineClassRecordStatusWhere(statuses, completedIds = [], incompleteIds = []) {
+  if (!Array.isArray(statuses) || statuses.some(
+    value => !ONLINE_CLASS_RECORD_STATUSES.includes(value)
+  )) {
+    fail("Invalid online class record status filter.");
+  }
+
+  if (statuses.length === 0) {
+    return { id: { in: [] } };
+  }
+
+  const conditions = {
+    COMPLETED: {
+      id: { in: completedIds },
+    },
+
+    INCOMPLETE: {
+      id: { in: incompleteIds },
+    },
+
+    SCHEDULED: {
+      status: "SCHEDULED",
+      actualStartAt: null,
+      actualEndAt: null,
+    },
+
+    LIVE: {
+      status: "LIVE",
+      verificationStatus: "LIVE",
+      conferenceName: { not: null },
+      actualStartAt: { not: null },
+      actualEndAt: null,
+      verificationError: null,
+      cancelledAt: null,
+    },
+
+    CANCELLED: {
+      status: "CANCELLED",
+    },
+  };
+
+  return {
+    OR: statuses.map(value => conditions[value]),
+  };
+}
+
+export async function listOnlineClasses({
+  facultyId,
+  incentiveTypeId,
+  paymentId,
+  page = 1,
+  historyFilters = false,
+  search,
+  date,
+  batch,
+  status,
+  recordStatuses,
+}, db = prisma) {
+  if (!Number.isInteger(page) || page < 1 || page > 100000) {
+    fail("Invalid page.");
+  }
+
+  if (facultyId != null && (typeof facultyId !== "string" || facultyId.length > 64)) {
+    fail("Invalid faculty filter.");
+  }
+
+  if (status && !["SCHEDULED", "LIVE", "COMPLETED", "CANCELLED"].includes(status)) {
+    fail("Invalid class status.");
+  }
+
+  const scope = {
+    deletedAt: null,
+    ...(facultyId ? { facultyId } : {}),
+    ...(incentiveTypeId ? { incentiveTypeId } : {}),
+    ...(paymentId ? { incentiveEntry: { paymentRecordId: paymentId } } : {}),
+  };
+
+  if (recordStatuses !== undefined && !Array.isArray(recordStatuses)) {
+    fail("Invalid online class record status filter.");
+  }
+
+  let completedIds = [];
+  let incompleteIds = [];
+  if (Array.isArray(recordStatuses) && recordStatuses.some(value => ["COMPLETED", "INCOMPLETE"].includes(value))) {
+    if (typeof db.$queryRaw !== "function") fail("Ended class status filters require a database query.", 400);
+    const typeId = incentiveTypeId || null;
+    const endedRows = await db.$queryRaw`
+      SELECT c."id",
+        (
+          c."status" = 'COMPLETED'
+          AND c."verificationStatus" = 'VERIFIED'
+          AND c."conferenceName" IS NOT NULL
+          AND c."actualEndAt" > c."actualStartAt" + INTERVAL '3600 seconds'
+          AND c."actualStartAt" >= c."createdAt"
+          AND c."attendanceCompleteAt" IS NOT NULL
+          AND c."teacherGoogleUserId" IS NOT NULL
+          AND c."attendanceEvidence" #>> '{summary,complete}' = 'true'
+          AND c."attendanceEvidence" #>> '{summary,teacherVerified}' = 'true'
+          AND CASE
+            WHEN jsonb_typeof(c."attendanceEvidence" #> '{summary,verifiedNonTeacher}') = 'number'
+            THEN (c."attendanceEvidence" #>> '{summary,verifiedNonTeacher}')::numeric > 0
+            ELSE false
+          END
+          AND EXISTS (
+            SELECT 1 FROM "FacultyExtraIncentiveEntry" e
+            WHERE e."id" = c."incentiveEntryId"
+              AND e."facultyId" = c."facultyId"
+              AND e."incentiveTypeId" = c."incentiveTypeId"
+              AND e."quantityChange" = 1
+          )
+        ) AS "eligible"
+      FROM "FacultyOnlineClass" c
+      WHERE (${facultyId || null}::text IS NULL OR c."facultyId" = ${facultyId || null})
+        AND c."deletedAt" IS NULL
+        AND c."status" <> 'CANCELLED'
+        AND c."cancelledAt" IS NULL
+        AND c."actualStartAt" IS NOT NULL
+        AND c."actualEndAt" IS NOT NULL
+        AND (${typeId}::text IS NULL OR c."incentiveTypeId" = ${typeId})
+    `;
+    completedIds = endedRows.filter(row => row.eligible).map(row => row.id);
+    incompleteIds = endedRows.filter(row => !row.eligible).map(row => row.id);
+  }
+
+  const where = {
+    AND: [
+      scope,
+      ...(historyFilters
+        ? [onlineClassHistoryWhere({ search, date, batch })]
+        : []),
+      ...(status ? [{ status }] : []),
+      ...(recordStatuses !== undefined
+        ? [onlineClassRecordStatusWhere(recordStatuses, completedIds, incompleteIds)]
+        : []),
+    ],
+  };
+
+  const rows = await db.facultyOnlineClass.findMany({
+    where,
+    include,
+    orderBy: [{ startsAt: "desc" }, { id: "desc" }],
+    skip: (page - 1) * 20,
+    take: 21,
+  });
+
   const metadata = historyFilters ? {
     total: await db.facultyOnlineClass.count({ where }),
     batches: [...new Set([
-      ...(await db.onlineClassBatch.findMany({ where: { isActive: true }, select: { name: true } })).map(batch => batch.name),
-      ...(await db.facultyOnlineClass.findMany({ where: scope, select: { batchName: true, batches: { select: { nameSnapshot: true } } } })).flatMap(onlineClassBatchNames),
+      ...(await db.onlineClassBatch.findMany({
+        where: { isActive: true },
+        select: { name: true },
+      })).map(batch => batch.name),
+
+      ...(await db.facultyOnlineClass.findMany({
+        where: scope,
+        select: {
+          batchName: true,
+          batches: { select: { nameSnapshot: true } },
+        },
+      })).flatMap(onlineClassBatchNames),
     ])].sort((a, b) => a.localeCompare(b)),
   } : {};
-  return { records: rows.slice(0, 20).map(row => onlineClassDto(row)), hasMore: rows.length > 20, serverNow: new Date(), ...metadata };
+
+  return {
+    records: rows.slice(0, 20).map(row => onlineClassDto(row)),
+    hasMore: rows.length > 20,
+    serverNow: new Date(),
+    ...metadata,
+  };
 }
 
 export async function saveOnlineClass(facultyId, body, id = null, db = prisma) {

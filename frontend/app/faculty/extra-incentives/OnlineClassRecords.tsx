@@ -9,7 +9,7 @@ import pageStyles from "../online-classes/page.module.css";
 export type OnlineClassRecord = {
   id: string; incentiveTypeId?: string; teacherName: string; facultyCode: string; batchName: string; className: string;
   topic: string; message: string | null; startsAt: string; endsAt: string | null; meetUrl: string;
-  status: string; liveConfirmed?: boolean; canComplete: boolean; announcement: string; updatedAt: string;
+  status: string; liveConfirmed?: boolean; verifiedCompletion?: boolean; canComplete: boolean; announcement: string; updatedAt: string;
   incentive: { id: string; rate: number; amount: number; status: string; paymentRecordId: string | null } | null;
   trackingEnabled?: boolean; verificationStatus?: string; verificationError?: string | null;
   verificationPending?: boolean; verificationMessage?: string;
@@ -22,13 +22,88 @@ export type OnlineClassRecord = {
 const date = (value: string) => new Date(value).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 
 function meetingBadge(record: OnlineClassRecord) {
-  if (record.status === "LIVE" && !record.liveConfirmed) {
-    return { label: record.verificationStatus?.endsWith("_REVIEW") ? "Review required" : "Status unconfirmed", style: pageStyles.scheduled, Icon: Clock };
+  const actualDurationSeconds =
+    record.actualDurationSeconds ??
+    (record.actualStartAt && record.actualEndAt
+      ? Math.max(
+          0,
+          (new Date(record.actualEndAt).getTime() -
+            new Date(record.actualStartAt).getTime()) / 1000
+        )
+      : null);
+
+  // The configured minimum is strict: exactly one hour is not eligible.
+  if (
+    record.actualEndAt &&
+    actualDurationSeconds !== null &&
+    actualDurationSeconds <= 3600
+  ) {
+    return {
+      label: "Ended too early",
+      style: pageStyles.cancelled,
+      Icon: XCircle,
+    };
   }
-  if (record.status === "COMPLETED") return { label: "Completed", style: pageStyles.completed, Icon: CheckCircle2 };
-  if (record.status === "CANCELLED") return { label: "Cancelled", style: pageStyles.cancelled, Icon: XCircle };
-  if (record.status === "LIVE") return { label: "Live", style: pageStyles.live, Icon: null };
-  return { label: "Scheduled", style: pageStyles.scheduled, Icon: Clock };
+
+  // Backend explicitly classified it as too early
+  if (record.verificationStatus === "ENDED_TOO_EARLY") {
+    return {
+      label: "Ended too early",
+      style: pageStyles.cancelled,
+      Icon: XCircle,
+    };
+  }
+
+  // Only verified classes should display Completed
+  if (record.status === "COMPLETED" && record.verifiedCompletion === true) {
+    return {
+      label: "Completed",
+      style: pageStyles.completed,
+      Icon: CheckCircle2,
+    };
+  }
+
+  if (record.status === "CANCELLED") {
+    return {
+      label: "Cancelled",
+      style: pageStyles.cancelled,
+      Icon: XCircle,
+    };
+  }
+
+  if (record.status === "LIVE" && record.liveConfirmed === true) {
+    return {
+      label: "Live",
+      style: pageStyles.live,
+      Icon: null,
+    };
+  }
+
+  // Meeting ended but verification is not finished
+  if (record.actualEndAt || record.status === "COMPLETED") {
+    const reviewRequired = record.verificationStatus?.endsWith("_REVIEW")
+      || record.verificationStatus === "RECONNECT_REQUIRED"
+      || record.verificationStatus === "INCENTIVE_REVIEW";
+    return {
+      label: reviewRequired ? "Review required" : "Incomplete",
+      style: reviewRequired ? pageStyles.scheduled : pageStyles.cancelled,
+      Icon: reviewRequired ? Clock : XCircle,
+    };
+  }
+
+  if (record.status === "LIVE") {
+    return {
+      label: record.verificationStatus?.endsWith("_REVIEW") ? "Review required" : "Status unconfirmed",
+      style: pageStyles.scheduled,
+      Icon: Clock,
+    };
+  }
+
+  return {
+    label: "Scheduled",
+    style: pageStyles.scheduled,
+    Icon: Clock,
+  };
 }
 
 export default function OnlineClassRecords({ records, busy, onEdit, onAction, onPreview, onDelete, token, enhanced = false }: {

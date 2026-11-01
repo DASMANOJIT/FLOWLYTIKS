@@ -21,3 +21,58 @@
   .record { padding: 12px; }
   .actions button { flex: 1 1 140px; min-height: 44px; }
 }
+
+.summaryContainer {
+  min-width: 0;
+}
+
+.summaryFilters {
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid #dce4ef;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+}
+
+.summaryFilters legend {
+  padding: 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.filterOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+}
+
+.filterOption {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #334155;
+  cursor: pointer;
+}
+
+.filterOption input {
+  width: 16px;
+  height: 16px;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+
+@media (max-width: 600px) {
+  .summaryFilters {
+    padding: 12px;
+  }
+
+  .filterOptions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+}

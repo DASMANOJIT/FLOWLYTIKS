@@ -42,8 +42,10 @@ test("directory names normalize duplicates and selection cannot spoof names or a
 test("admin complete-history filters combine faculty, date, batch and saved status", async () => {
   const calls = [];
   const db = { onlineClassBatch: { findMany: async () => [] }, facultyOnlineClass: { findMany: async query => { calls.push(query); return []; }, count: async () => 0 } };
-  await listOnlineClasses({ facultyId: "one", page: 2, historyFilters: true, search: "JAVA", date: "2026-10-12", batch: "Batch A", status: "LIVE" }, db);
-  assert.equal(calls[0].where.facultyId, "one"); assert.equal(calls[0].where.status, "LIVE"); assert.equal(calls[0].skip, 20);
+  await listOnlineClasses({ facultyId: "one", page: 2, historyFilters: true, search: "JAVA", date: "2026-10-12", batch: "Batch A", recordStatuses: ["LIVE"] }, db);
+  assert.equal(calls[0].where.AND[0].facultyId, "one");
+  assert.deepEqual(calls[0].where.AND[2].OR[0], { status: "LIVE", verificationStatus: "LIVE", conferenceName: { not: null }, actualStartAt: { not: null }, actualEndAt: null, verificationError: null, cancelledAt: null });
+  assert.equal(calls[0].skip, 20);
   await assert.rejects(listOnlineClasses({ status: "MANUAL_PAID" }, db), { status: 400 });
 });
 

@@ -19,13 +19,43 @@ const respond = handler => async (req, res) => {
 };
 
 export const getMyOnlineClasses = respond(async (req, res) => {
-  const result = await listOnlineClasses({ facultyId: req.user.id, incentiveTypeId: req.query.incentiveTypeId, page: Number(req.query.page || 1), historyFilters: req.query.historyFilters === "true", search: req.query.search, date: req.query.date, batch: req.query.batch });
-  const faculty = await prisma.faculty.findUnique({ where: { id: req.user.id }, select: { fullName: true } });
-  res.json({ success: true, ...result, teacherName: faculty.fullName, batches: result.batches || [] });
+  const rawStatuses = req.query.statuses;
+
+  const recordStatuses = rawStatuses === undefined
+    ? ["COMPLETED"]
+    : typeof rawStatuses === "string"
+      ? rawStatuses === ""
+        ? []
+        : rawStatuses.split(",").map(value => value.trim())
+      : rawStatuses;
+
+  const result = await listOnlineClasses({
+    facultyId: req.user.id,
+    incentiveTypeId: req.query.incentiveTypeId,
+    page: Number(req.query.page || 1),
+    historyFilters: req.query.historyFilters === "true",
+    search: req.query.search,
+    date: req.query.date,
+    batch: req.query.batch,
+    recordStatuses,
+  });
+
+  const faculty = await prisma.faculty.findUnique({
+    where: { id: req.user.id },
+    select: { fullName: true },
+  });
+
+  res.json({
+    success: true,
+    ...result,
+    teacherName: faculty.fullName,
+    batches: result.batches || [],
+  });
 });
 
 export const getAdminOnlineClasses = respond(async (req, res) => {
-  const result = await listOnlineClasses({ facultyId: req.query.facultyId, paymentId: req.query.paymentId, page: Number(req.query.page || 1), historyFilters: true, search: req.query.search, date: req.query.date, batch: req.query.batch, status: req.query.status });
+  const recordStatuses = req.query.status ? [req.query.status] : undefined;
+  const result = await listOnlineClasses({ facultyId: req.query.facultyId, paymentId: req.query.paymentId, page: Number(req.query.page || 1), historyFilters: true, search: req.query.search, date: req.query.date, batch: req.query.batch, recordStatuses });
   const faculties = await prisma.faculty.findMany({ select: { id: true, fullName: true, facultyId: true }, orderBy: { fullName: "asc" } });
   res.json({ success: true, ...result, faculties });
 });

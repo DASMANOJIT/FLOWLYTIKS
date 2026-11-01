@@ -27,7 +27,7 @@ test("authenticated routes and restarted worker finish the bound conference, not
     await db.$disconnect();
   });
   const now = new Date(), createdAt = new Date(+now - 7200000);
-  const start = new Date(Math.floor((+now - 3600000) / 60000) * 60000), end = new Date(+start + 1800000);
+  const start = new Date(Math.floor((+now - 3600000) / 60000) * 60000), end = new Date(+start + 3661000);
   const faculty = await db.faculty.create({ data: { facultyId: `LIFE_${randomUUID()}`, username: randomUUID(), passwordHash: "TEST_LOGIN_DISABLED", fullName: "Lifecycle Teacher", phone: randomUUID(), joiningDate: createdAt, salaryType: "ATTENDANCE_BASED", status: "ACTIVE" } });
   const type = await db.extraIncentiveType.findFirst({ where: { name: "ONLINE DOUBT CLASS" } }) || await db.extraIncentiveType.create({ data: { name: "ONLINE DOUBT CLASS", rate: 237 } });
   const batch = await db.onlineClassBatch.create({ data: { name: `Lifecycle ${randomUUID()}`, normalizedName: randomUUID() } });

@@ -5,8 +5,8 @@ import { getMeetingAttendance, buildMeetAttendancePdf } from "../services/meetAt
 import { transitionOnlineClass } from "../services/facultyOnlineClassService.js";
 import { GOOGLE_MEET_SCOPE } from "../services/facultyGoogleService.js";
 
-const now = new Date("2026-10-11T13:00:00Z");
-const conference = { name: "conferenceRecords/current", space: "spaces/space-one", startTime: "2026-10-11T12:00:00Z", endTime: "2026-10-11T12:45:00Z", expireTime: "2026-11-10T12:45:00Z" };
+const now = new Date("2026-10-11T13:05:00Z");
+const conference = { name: "conferenceRecords/current", space: "spaces/space-one", startTime: "2026-10-11T12:00:00Z", endTime: "2026-10-11T13:01:00Z", expireTime: "2026-11-10T13:01:00Z" };
 const oldConference = { ...conference, name: "conferenceRecords/old", startTime: "2026-10-10T12:00:00Z", endTime: "2026-10-10T12:45:00Z" };
 const row = () => ({ id: "class-one", facultyId: "faculty-one", incentiveTypeId: "type-one", trackingEnabled: true, startsAt: new Date("2026-10-11T11:30:00Z"), endsAt: new Date("2026-10-11T12:30:00Z"), createdAt: new Date("2026-10-11T11:00:00Z"), updatedAt: now, meetUrl: "https://meet.google.com/abc-defg-hij", topic: "Doubt class", batchName: "Batch A", className: "10", status: "SCHEDULED", verificationStatus: "PENDING", pollAttempts: 0, nextCheckAt: null, pollLeaseUntil: null, pollLeaseToken: null, faculty: { fullName: "Test Teacher", facultyId: "FAC_TEST" } });
 function matches(row, where) {
@@ -41,23 +41,25 @@ export function fixture() {
   return db;
 }
 const json = data => ({ ok: true, status: 200, json: async () => data });
-function provider({ ended = true, unknownTeacher = false, ambiguous = false, sessionFailure = false, onParticipant = async () => {} } = {}) {
+function provider({ ended = true, durationSeconds = 3660, unknownTeacher = false, ambiguous = false, sessionFailure = false, onParticipant = async () => {} } = {}) {
   const calls = [];
+  const currentConference = { ...conference, endTime: new Date(+new Date(conference.startTime) + durationSeconds * 1000).toISOString() };
+  const priorConference = { ...oldConference, endTime: new Date(+new Date(oldConference.startTime) + durationSeconds * 1000).toISOString() };
   const fetcher = async input => {
     const url = new URL(input); calls.push(url.pathname + (url.searchParams.get("pageToken") || ""));
     if (url.pathname.includes("tokeninfo")) return json({ audience: "controlled-client", issued_to: "controlled-client", expires_in: 3600, scope: GOOGLE_MEET_SCOPE, ...(unknownTeacher ? {} : { user_id: "teacher-id" }) });
     if (url.pathname.endsWith("spaces/abc-defg-hij")) return json({ name: conference.space, meetingCode: "abc-defg-hij" });
-    if (url.pathname.endsWith("conferenceRecords")) return json(url.searchParams.has("pageToken") ? { conferenceRecords: [conference, ...(ambiguous ? [{ ...conference, name: "conferenceRecords/second" }] : [])].map(c => ({ ...c, endTime: ended ? c.endTime : null })) } : { conferenceRecords: [oldConference], nextPageToken: "c-next" });
-    if (url.pathname.endsWith("conferenceRecords/current")) return json({ ...conference, endTime: ended ? conference.endTime : null });
+    if (url.pathname.endsWith("conferenceRecords")) return json(url.searchParams.has("pageToken") ? { conferenceRecords: [currentConference, ...(ambiguous ? [{ ...currentConference, name: "conferenceRecords/second" }] : [])].map(c => ({ ...c, endTime: ended ? c.endTime : null })) } : { conferenceRecords: [priorConference], nextPageToken: "c-next" });
+    if (url.pathname.endsWith("conferenceRecords/current")) return json({ ...currentConference, endTime: ended ? currentConference.endTime : null });
     if (url.pathname.endsWith("/participants")) {
       await onParticipant();
-      return json(url.searchParams.has("pageToken") ? { participants: [{ name: `${conference.name}/participants/teacher-two`, signedinUser: { user: "users/teacher-id", displayName: "Teacher renamed" } }, { name: `${conference.name}/participants/student`, signedinUser: { user: "users/other-id", displayName: "Participant (not claimed student)" } }] } : { participants: [{ name: `${conference.name}/participants/teacher-one`, signedinUser: { user: "users/teacher-id", displayName: "Teacher" } }], nextPageToken: "p-next" });
+      return json(url.searchParams.has("pageToken") ? { participants: [{ name: `${currentConference.name}/participants/teacher-two`, signedinUser: { user: "users/teacher-id", displayName: "Teacher renamed" } }, { name: `${currentConference.name}/participants/student`, signedinUser: { user: "users/other-id", displayName: "Participant (not claimed student)" } }] } : { participants: [{ name: `${currentConference.name}/participants/teacher-one`, signedinUser: { user: "users/teacher-id", displayName: "Teacher" } }], nextPageToken: "p-next" });
     }
     if (url.pathname.endsWith("participantSessions")) {
       if (sessionFailure) return { ok: false, status: 429, headers: { get: () => "120" } };
       const parent = url.pathname.slice(4, -20);
       const second = url.searchParams.has("pageToken");
-      return json({ participantSessions: [{ name: `${parent}/participantSessions/${second ? "second" : "first"}`, startTime: second ? "2026-10-11T12:10:00Z" : "2026-10-11T12:00:00Z", endTime: ended ? second ? "2026-10-11T12:45:00Z" : "2026-10-11T12:20:00Z" : null }], ...(second ? {} : { nextPageToken: "s-next" }) });
+      return json({ participantSessions: [{ name: `${parent}/participantSessions/${second ? "second" : "first"}`, startTime: second ? "2026-10-11T12:10:00Z" : "2026-10-11T12:00:00Z", endTime: ended ? second ? currentConference.endTime : "2026-10-11T12:20:00Z" : null }], ...(second ? {} : { nextPageToken: "s-next" }) });
     }
     throw new Error("Unexpected mocked provider path");
   };
@@ -70,7 +72,19 @@ test("Google end received after check-start clock completes lifecycle independen
   const result = await checkOnlineMeeting("class-one", "faculty-one", options(db, provider(), { now: new Date("2026-10-11T12:44:59Z") }));
   assert.equal(result.status, "COMPLETED");
   assert.notEqual(result.verificationStatus, "LIVE");
-  assert.equal(result.actualDurationSeconds, 2700);
+  assert.equal(result.actualDurationSeconds, 3660);
+});
+
+test("verified incentive requires strictly more than 3600 seconds", async () => {
+  for (const [durationSeconds, shouldCredit] of [[3600, false], [3601, true]]) {
+    const db = fixture();
+    const result = await checkOnlineMeeting("class-one", "faculty-one", options(db, provider({ durationSeconds })));
+    assert.equal(result.status, "COMPLETED");
+    assert.equal(result.actualDurationSeconds, durationSeconds);
+    assert.equal(result.verificationStatus === "VERIFIED", shouldCredit);
+    assert.equal(db.entries.length, shouldCredit ? 1 : 0);
+    if (!shouldCredit) assert.equal(result.verificationStatus, "ENDED_TOO_EARLY");
+  }
 });
 
 test("ended evidence survives a later stale live conference response and incomplete attendance", async () => {
@@ -299,7 +313,7 @@ test("all conference/participant/session pages persist; reconnect overlap merges
   const result = await checkOnlineMeeting("class-one", "faculty-one", options(db, p));
   assert.equal(result.verificationStatus, "VERIFIED"); assert.equal(result.conferenceName, conference.name);
   assert.equal(result.attendance.totalParticipants, 2); assert.equal(result.attendance.excludingTeacher, 1);
-  assert.equal(result.attendance.participants[0].durationSeconds, 2700);
+  assert.equal(result.attendance.participants[0].durationSeconds, 3660);
   assert.equal(result.attendance.participants[0].sessions.length, 4);
   assert.ok(p.calls.some(path => path.endsWith("participantSessionss-next")));
   assert.equal(db.entries.length, 1); assert.equal(db.entries[0].rateSnapshot, 237.5);
@@ -309,7 +323,9 @@ test("all conference/participant/session pages persist; reconnect overlap merges
 test("teacher departure and scheduled end never complete a live conference", async () => {
   const db = fixture(), p = provider({ ended: false });
   const result = await checkOnlineMeeting("class-one", "faculty-one", options(db, p));
-  assert.equal(result.status, "LIVE"); assert.equal(result.actualEndAt, null); assert.equal(db.entries.length, 0);
+  assert.equal(result.status, "LIVE"); assert.equal(result.verificationStatus, "LIVE");
+  assert.equal(result.verificationError, null); assert.equal(result.liveConfirmed, true);
+  assert.equal(result.actualEndAt, null); assert.equal(db.entries.length, 0);
 });
 
 test("unknown account identity is not guessed from display names, and missing signed-in peers require review", async () => {

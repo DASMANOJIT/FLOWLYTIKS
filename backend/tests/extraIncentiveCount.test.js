@@ -84,6 +84,33 @@ test("pending totals include entries beyond the recent history limit", async () 
   assert.equal(res.body.pendingSummary[0].quantity, 205); assert.equal(res.body.pendingSummary[0].amount, 20500);
 });
 
+test("pending totals exclude unlinked or incomplete Online Doubt Class entries only", async () => {
+  const onlineType = { id: "online-type", name: "Online Doubt Class" };
+  const start = new Date("2026-10-11T12:00:00Z");
+  const eligibleClass = {
+    id: "class-one", facultyId: "faculty-one", incentiveTypeId: onlineType.id, incentiveEntryId: "online-entry",
+    createdAt: new Date(+start - 60000),
+    status: "COMPLETED", verificationStatus: "VERIFIED", conferenceName: "conferenceRecords/one",
+    actualStartAt: start, actualEndAt: new Date(+start + 3601000), attendanceCompleteAt: new Date(),
+    teacherGoogleUserId: "users/teacher", attendanceEvidence: { summary: { complete: true, teacherVerified: true, verifiedNonTeacher: 1 } },
+  };
+  entries = [
+    seed(2, 50),
+    { id: "online-entry", facultyId: "faculty-one", incentiveTypeId: onlineType.id, quantityChange: 1, rateSnapshot: 200, amountSnapshot: 200, status: "PENDING", incentiveType: onlineType, onlineClass: eligibleClass },
+    { id: "unlinked-online", facultyId: "faculty-one", incentiveTypeId: onlineType.id, quantityChange: 1, rateSnapshot: 200, amountSnapshot: 200, status: "PENDING", incentiveType: onlineType, onlineClass: null },
+    { id: "early-online", facultyId: "faculty-one", incentiveTypeId: onlineType.id, quantityChange: 1, rateSnapshot: 200, amountSnapshot: 200, status: "PENDING", incentiveType: onlineType, onlineClass: { ...eligibleClass, id: "early-class", incentiveEntryId: "early-online", actualEndAt: new Date(+start + 3600000) } },
+  ];
+
+  const res = response();
+  await getMyIncentives({ user: { id: "faculty-one" } }, res);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body.pendingSummary.map(item => [item.incentiveTypeId, item.quantity, item.amount]), [
+    ["type-one", 2, 100],
+    ["online-type", 1, 200],
+  ]);
+  assert.equal(entries.find(entry => entry.id === "unlinked-online").status, "PENDING", "filtering does not mutate or erase the legacy record");
+});
+
 test("online doubt class manual count, increment and decrement are blocked", async () => {
   types[0].name = "ONLINE DOUBT CLASS";
   const before = structuredClone(entries);
