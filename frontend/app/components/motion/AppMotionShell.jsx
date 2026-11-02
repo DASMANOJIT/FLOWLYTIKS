@@ -18,10 +18,13 @@ export default function AppMotionShell({ children }) {
         <motion.div
           key={pathname}
           className="app-motion-shell"
-          initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 18, filter: "blur(10px)" }}
-          animate={reducedMotion ? { opacity: 1 } : { opacity: 1, y: 0, filter: "blur(0px)" }}
-          exit={reducedMotion ? { opacity: 0 } : { opacity: 0, y: -10, filter: "blur(8px)" }}
-          transition={pageTransition}
+          initial={{ opacity: 0 }}
+animate={{ opacity: 1 }}
+exit={{ opacity: 0 }}
+transition={{
+  duration: reducedMotion ? 0 : 0.2,
+  ease: "easeOut",
+}}
         >
           {children}
         </motion.div>

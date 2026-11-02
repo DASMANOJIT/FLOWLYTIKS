@@ -22,12 +22,14 @@ export const getMyOnlineClasses = respond(async (req, res) => {
   const rawStatuses = req.query.statuses;
 
   const recordStatuses = rawStatuses === undefined
-    ? ["COMPLETED"]
-    : typeof rawStatuses === "string"
-      ? rawStatuses === ""
-        ? []
-        : rawStatuses.split(",").map(value => value.trim())
-      : rawStatuses;
+  ? req.query.historyFilters === "true"
+    ? undefined
+    : ["COMPLETED"]
+  : typeof rawStatuses === "string"
+    ? rawStatuses === ""
+      ? []
+      : rawStatuses.split(",").map(value => value.trim())
+    : rawStatuses;
 
   const result = await listOnlineClasses({
     facultyId: req.user.id,
