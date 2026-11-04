@@ -14,8 +14,22 @@ import {
 } from "../controllers/facultyextraincentivecontrollers.js";
 import { adminOnly, protect } from "../middleware/authmiddleware.js";
 import { adminWriteRateLimit } from "../middleware/security.js";
-import { getMyOnlineClasses, getAdminOnlineClasses, createAdminOnlineClass, saveMyOnlineClass, changeMyOnlineClass, deleteMyOnlineClass, downloadOnlineAttendance, adminOnlineClassSummary, getOnlineDirectory, writeOnlineDirectory, deleteOnlineDirectoryBatch, manageAdminOnlineClass } from "../controllers/facultyonlineclasscontrollers.js";
-
+import {
+  getMyOnlineClasses,
+  getMyOnlineClassMeetLink,
+  saveMyOnlineClassMeetLink,
+  getAdminOnlineClasses,
+  createAdminOnlineClass,
+  saveMyOnlineClass,
+  changeMyOnlineClass,
+  deleteMyOnlineClass,
+  downloadOnlineAttendance,
+  adminOnlineClassSummary,
+  getOnlineDirectory,
+  writeOnlineDirectory,
+  deleteOnlineDirectoryBatch,
+  manageAdminOnlineClass,
+} from "../controllers/facultyonlineclasscontrollers.js";
 const router = express.Router();
 
 const facultyOnly = (req, res, next) => {
@@ -57,6 +71,20 @@ router.post("/my/online-classes", protect, facultyOnly, adminWriteRateLimit, sav
 router.patch("/my/online-classes/:id", protect, facultyOnly, adminWriteRateLimit, saveMyOnlineClass);
 router.delete("/my/online-classes/:id", protect, facultyOnly, adminWriteRateLimit, deleteMyOnlineClass);
 router.post("/my/online-classes/:id/:action", protect, facultyOnly, adminWriteRateLimit, changeMyOnlineClass);
+router.get(
+  "/my/online-class-meet-link",
+  protect,
+  facultyOnly,
+  getMyOnlineClassMeetLink,
+);
+
+router.patch(
+  "/my/online-class-meet-link",
+  protect,
+  facultyOnly,
+  adminWriteRateLimit,
+  saveMyOnlineClassMeetLink,
+);
 
 router.get("/my", protect, facultyOnly, getMyIncentives);
 router.get("/my/:incentiveTypeId/sets", protect, facultyOnly, getIncentiveCopySets);

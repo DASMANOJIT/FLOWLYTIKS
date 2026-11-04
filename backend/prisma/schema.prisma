@@ -189,6 +189,7 @@ model Faculty {
   passwordHash           String
   fullName               String
   email                  String?
+  defaultMeetUrl         String?
   phone                  String                         @unique
   gender                 String?
   dob                    DateTime?
