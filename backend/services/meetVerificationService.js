@@ -636,6 +636,62 @@ export async function checkOnlineMeeting(
           await progress({ attendanceEvidence: evidence });
         },
       );
+      console.info("meet.conference.discovery", {
+  classId: id,
+  facultyId,
+  space: space.name,
+  scheduledStart: row.startsAt.toISOString(),
+  scheduledEnd: row.endsAt?.toISOString() || null,
+  toleranceMinutes: 15,
+  googleRecordsReturned: candidates.length,
+  records: candidates.map((c) => ({
+    name: c.name,
+    space: c.space,
+    startTime: c.startTime,
+    endTime: c.endTime || null,
+  })),
+});
+if (candidates.length === 0) {
+  const diagnosticStart = new Date(
+    +row.startsAt - 24 * 60 * 60 * 1000,
+  );
+  const diagnosticEnd = new Date(
+    +row.startsAt + 24 * 60 * 60 * 1000,
+  );
+
+  const diagnosticFilter =
+    `space.name = "${space.name}" AND ` +
+    `start_time >= "${diagnosticStart.toISOString()}" AND ` +
+    `start_time < "${diagnosticEnd.toISOString()}"`;
+
+  try {
+    const nearbyRecords = await client.pages(
+      "conferenceRecords",
+      "conferenceRecords",
+      {
+        pageSize: 100,
+        filter: diagnosticFilter,
+      },
+    );
+
+    console.info("meet.conference.broad.discovery", {
+      classId: id,
+      facultyId,
+      space: space.name,
+      recordsReturned: nearbyRecords.length,
+      records: nearbyRecords.map((c) => ({
+        name: c.name,
+        startTime: c.startTime,
+        endTime: c.endTime || null,
+      })),
+    });
+  } catch (error) {
+    console.warn("meet.conference.broad.discovery.failed", {
+      classId: id,
+      message: error.message,
+    });
+  }
+}
       candidates = matchConferences(candidates, row, space.name);
       if (candidates.length !== 1)
         fail(
