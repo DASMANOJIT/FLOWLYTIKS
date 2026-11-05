@@ -1,6 +1,6 @@
 import prisma from "../prisma/client.js";
 import { resolveClassDirectory } from "./adminOnlineClassService.js";
-
+import { wakeMeetWorker } from "./meetWorkerSignals.js";
 const fail = (message, status = 400) => {
   throw Object.assign(new Error(message), { status });
 };
@@ -689,6 +689,9 @@ export async function saveOnlineClass(facultyId, body, id = null, db = prisma) {
         include,
       }),
     );
+  }).then((result) => {
+    wakeMeetWorker();
+    return result;
   });
 }
 
@@ -743,5 +746,8 @@ export async function transitionOnlineClass(
       "Manual completion is disabled. Use Check Meeting Status for Google verification.",
       409,
     );
+  }).then((result) => {
+    wakeMeetWorker();
+    return result;
   });
 }

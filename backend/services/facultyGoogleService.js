@@ -7,7 +7,7 @@ import {
 } from "node:crypto";
 import prisma from "../prisma/client.js";
 import { OAuth2Client } from "google-auth-library";
-
+import { wakeMeetWorker } from "./meetWorkerSignals.js";
 export const GOOGLE_MEET_SCOPE =
   "https://www.googleapis.com/auth/meetings.space.readonly";
 export const GOOGLE_CONNECTION_SCOPES = `openid ${GOOGLE_MEET_SCOPE}`;
@@ -398,7 +398,7 @@ export async function finishGoogleConnection(
     config.clientId,
     idTokenVerifier,
   );
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     await lockFaculty(tx, row.facultyId);
     const currentState = await tx.facultyGoogleOAuthState.findUnique({
       where: { id: row.id },
@@ -450,10 +450,16 @@ export async function finishGoogleConnection(
         incentiveEntryId: null,
         trackingEnabled: true,
       },
-      data: { nextCheckAt: new Date() },
+     data: {
+  verificationStatus: "PENDING",
+  nextCheckAt: new Date(),
+},
     });
-    return { result: "connected" };
+        return { result: "connected" };
   });
+
+  wakeMeetWorker();
+  return result;
 }
 
 // Backend-only helper for future explicit Meet requests; no polling or Meet calls are registered.

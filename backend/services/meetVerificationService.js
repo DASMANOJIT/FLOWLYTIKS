@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { registerMeetWorkerWakeHandler } from "./meetWorkerSignals.js";
 import prisma from "../prisma/client.js";
 import { getFacultyGoogleAccessToken } from "./facultyGoogleService.js";
 import {
@@ -943,51 +944,71 @@ function resolveMeetPollConcurrency(value, fallback = 10) {
 
   return Math.min(10, Math.max(1, parsed));
 }
-
+const TERMINAL_MEET_VERIFICATION_STATUSES = [
+  "VERIFIED",
+  "EXPIRED",
+  "AMBIGUOUS_REVIEW",
+  "DUPLICATE_REVIEW",
+  "MATCH_REVIEW",
+  "ENDED_TOO_EARLY",
+  "TEACHER_IDENTITY_REVIEW",
+  "PARTICIPANT_IDENTITY_REVIEW",
+  "BACKDATED_REVIEW",
+  "INCENTIVE_REVIEW",
+];
 export async function pollOnlineMeetings({
   db = prisma,
   check = checkOnlineMeeting,
   now = new Date(),
   concurrency = 3,
 } = {}) {
+  const eligibleWhere = {
+    trackingEnabled: true,
+    deletedAt: null,
+    status: { not: "CANCELLED" },
+    AND: [
+      {
+        OR: [
+          {
+            verificationStatus: {
+              notIn: TERMINAL_MEET_VERIFICATION_STATUSES,
+            },
+          },
+          {
+            verificationStatus: "AMBIGUOUS_REVIEW",
+            conferenceName: { not: null },
+            conferenceSpace: { not: null },
+            actualStartAt: { not: null },
+          },
+        ],
+      },
+    ],
+  };
+
   const rows = await db.facultyOnlineClass.findMany({
     where: {
-      trackingEnabled: true,
-      deletedAt: null,
-      status: { not: "CANCELLED" },
+      ...eligibleWhere,
       AND: [
-        {
-          OR: [
-            {
-              verificationStatus: {
-                notIn: [
-                  "VERIFIED",
-                  "EXPIRED",
-                  "AMBIGUOUS_REVIEW",
-                  "DUPLICATE_REVIEW",
-                  "MATCH_REVIEW",
-                ],
-              },
-            },
-            {
-              verificationStatus: "AMBIGUOUS_REVIEW",
-              conferenceName: { not: null },
-              conferenceSpace: { not: null },
-              actualStartAt: { not: null },
-            },
-          ],
-        },
+        ...eligibleWhere.AND,
         {
           OR: [
             { nextCheckAt: null },
             { nextCheckAt: { lte: now } },
-            { verificationStatus: "LIVE", actualEndAt: { not: null } },
+            {
+              verificationStatus: "LIVE",
+              actualEndAt: { not: null },
+            },
           ],
         },
       ],
-      startsAt: { lte: new Date(+now + MEET_START_TOLERANCE_MS) },
+      startsAt: {
+        lte: new Date(+now + MEET_START_TOLERANCE_MS),
+      },
     },
-    orderBy: [{ nextCheckAt: "asc" }, { id: "asc" }],
+    orderBy: [
+      { nextCheckAt: "asc" },
+      { id: "asc" },
+    ],
     take: 10,
     select: {
       id: true,
@@ -1031,6 +1052,78 @@ export async function pollOnlineMeetings({
   );
 
   await Promise.all(workers);
+
+  // A full batch may mean more due classes remain.
+  if (rows.length === 10) {
+    return { nextDelayMs: 0 };
+  }
+
+  // Find the next retry deadline for classes already inside
+  // their eligible conference window.
+  const retryRows = await db.facultyOnlineClass.findMany({
+    where: {
+      ...eligibleWhere,
+      startsAt: {
+        lte: new Date(+now + MEET_START_TOLERANCE_MS),
+      },
+      nextCheckAt: { gt: now },
+    },
+    orderBy: [
+      { nextCheckAt: "asc" },
+      { id: "asc" },
+    ],
+    take: 100,
+    select: {
+      nextCheckAt: true,
+    },
+  });
+
+  // Find upcoming classes outside their conference window.
+  const upcomingRows = await db.facultyOnlineClass.findMany({
+    where: {
+      ...eligibleWhere,
+      startsAt: {
+        gt: new Date(+now + MEET_START_TOLERANCE_MS),
+      },
+    },
+    orderBy: [
+      { startsAt: "asc" },
+      { id: "asc" },
+    ],
+    take: 100,
+    select: {
+      startsAt: true,
+      nextCheckAt: true,
+    },
+  });
+
+  const deadlines = [];
+
+  for (const row of retryRows) {
+    if (row.nextCheckAt) {
+      deadlines.push(+row.nextCheckAt);
+    }
+  }
+
+  for (const row of upcomingRows) {
+    const windowStart = +row.startsAt - MEET_START_TOLERANCE_MS;
+    const nextCheck = row.nextCheckAt
+      ? +row.nextCheckAt
+      : Number.NEGATIVE_INFINITY;
+
+    deadlines.push(Math.max(windowStart, nextCheck));
+  }
+
+  const nextDeadline = deadlines.length
+    ? Math.min(...deadlines)
+    : null;
+
+  return {
+    nextDelayMs:
+      nextDeadline === null
+        ? null
+        : Math.max(0, nextDeadline - +now),
+  };
 }
 
 
@@ -1038,7 +1131,7 @@ export async function pollOnlineMeetings({
 export function startMeetPollingWorker({
   env = process.env,
   poll = pollOnlineMeetings,
-  intervalMs = 30000,
+  intervalMs = 5 * 60 * 1000,
   schedule = setTimeout,
   cancelSchedule = clearTimeout,
 } = {}) {
@@ -1053,36 +1146,98 @@ export function startMeetPollingWorker({
 
   console.info("meet.worker.started", {
     concurrency,
-    intervalMs,
+    recoveryIntervalMs: intervalMs,
   });
 
   let stopped = false;
-  let timer;
-  let active;
+  let timer = null;
+  let active = null;
+  let wakeRequested = false;
+
+  const scheduleNext = (delayMs) => {
+    if (stopped) return;
+
+    timer = schedule(() => {
+      timer = null;
+      startRun();
+    }, delayMs);
+
+    timer?.unref?.();
+  };
 
   const run = async () => {
+    let result = null;
+
     try {
-      await poll({ concurrency });
+      result = await poll({ concurrency });
     } catch (error) {
       console.warn("meet.worker.failed", {
         code: error.code || "UNAVAILABLE",
       });
     }
 
-    if (!stopped) {
-      timer = schedule(() => {
-        active = run();
-      }, intervalMs);
+    // Mark the current poll as finished before handling wake requests.
+    active = null;
 
-      timer.unref?.();
+    if (stopped) return;
+
+    if (wakeRequested) {
+      wakeRequested = false;
+      startRun();
+      return;
     }
+
+    const suggestedDelay = Number.isFinite(result?.nextDelayMs)
+      ? Math.max(0, result.nextDelayMs)
+      : intervalMs;
+
+    // The recovery interval is the maximum sleep time.
+    // It also discovers work created by other backend instances.
+    scheduleNext(Math.min(suggestedDelay, intervalMs));
   };
 
-  active = run();
+  const startRun = () => {
+    if (stopped) return;
+
+    if (active) {
+      wakeRequested = true;
+      return;
+    }
+
+    wakeRequested = false;
+    active = run();
+  };
+
+  const wake = () => {
+    if (stopped) return;
+
+    if (timer !== null) {
+      cancelSchedule(timer);
+      timer = null;
+    }
+
+    if (active) {
+      wakeRequested = true;
+      return;
+    }
+
+    startRun();
+  };
+
+  const unregisterWakeHandler =
+    registerMeetWorkerWakeHandler(wake);
+
+  startRun();
 
   return async () => {
     stopped = true;
-    cancelSchedule(timer);
+    unregisterWakeHandler();
+
+    if (timer !== null) {
+      cancelSchedule(timer);
+      timer = null;
+    }
+
     await active;
   };
 }
