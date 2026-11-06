@@ -627,6 +627,11 @@ test(
     );
 
     assert.equal(live.status, "LIVE");
+    assert.equal(
+  +db.rows[0].nextCheckAt,
+  +now + 30 * 60 * 1000,
+  "A confirmed live conference is fully collected again after 30 minutes",
+);
 
     const retained = db.rows[0].conferenceName;
 
@@ -1454,6 +1459,45 @@ test(
       automaticallyChecked,
       ["class-one"],
     );
+  },
+);
+test(
+  "polling selects the earliest retry or upcoming-class deadline",
+  async () => {
+    const db = fixture();
+
+    db.rows.push(
+      {
+        ...structuredClone(row()),
+        id: "retry-later",
+        startsAt: new Date(+now + 5 * 60 * 1000),
+        nextCheckAt: new Date(+now + 60 * 60 * 1000),
+      },
+      {
+        ...structuredClone(row()),
+        id: "upcoming-earlier",
+        startsAt: new Date(+now + 60 * 60 * 1000),
+        nextCheckAt: null,
+      },
+    );
+
+    const result = await pollOnlineMeetings({
+      db,
+      now,
+      check: async () => {},
+    });
+
+    assert.equal(result.nextDelayMs, 45 * 60 * 1000);
+
+    db.rows[1].nextCheckAt = new Date(+now + 5 * 60 * 1000);
+
+    const retryResult = await pollOnlineMeetings({
+      db,
+      now,
+      check: async () => {},
+    });
+
+    assert.equal(retryResult.nextDelayMs, 5 * 60 * 1000);
   },
 );
 

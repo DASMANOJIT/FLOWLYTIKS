@@ -903,10 +903,13 @@ if (candidates.length === 0) {
     );
 
     const retryMs =
-      conference.endTime &&
-      finalized?.verificationStatus !== "ATTENDANCE_PENDING"
-        ? 3600000
-        : 60000;
+  !conference.endTime &&
+  finalized?.verificationStatus === "LIVE"
+    ? 30 * 60 * 1000
+    : conference.endTime &&
+        finalized?.verificationStatus !== "ATTENDANCE_PENDING"
+      ? 3600000
+      : 60000;
 
     await db.facultyOnlineClass.updateMany({
       where: { id, pollLeaseToken },
@@ -1012,6 +1015,7 @@ const TERMINAL_MEET_VERIFICATION_STATUSES = [
   "BACKDATED_REVIEW",
   "INCENTIVE_REVIEW",
 ];
+
 export async function pollOnlineMeetings({
   db = prisma,
   check = checkOnlineMeeting,
@@ -1114,9 +1118,9 @@ export async function pollOnlineMeetings({
     return { nextDelayMs: 0 };
   }
 
-  // Find the next retry deadline for classes already inside
-  // their eligible conference window.
-  const retryRows = await db.facultyOnlineClass.findMany({
+  // Find the earliest retry deadline for eligible classes
+  // already inside their conference window.
+  const retryRow = await db.facultyOnlineClass.findFirst({
     where: {
       ...eligibleWhere,
       startsAt: {
@@ -1128,14 +1132,13 @@ export async function pollOnlineMeetings({
       { nextCheckAt: "asc" },
       { id: "asc" },
     ],
-    take: 100,
     select: {
       nextCheckAt: true,
     },
   });
 
-  // Find upcoming classes outside their conference window.
-  const upcomingRows = await db.facultyOnlineClass.findMany({
+  // Find the earliest upcoming class outside its conference window.
+  const upcomingRow = await db.facultyOnlineClass.findFirst({
     where: {
       ...eligibleWhere,
       startsAt: {
@@ -1146,7 +1149,6 @@ export async function pollOnlineMeetings({
       { startsAt: "asc" },
       { id: "asc" },
     ],
-    take: 100,
     select: {
       startsAt: true,
       nextCheckAt: true,
@@ -1155,16 +1157,16 @@ export async function pollOnlineMeetings({
 
   const deadlines = [];
 
-  for (const row of retryRows) {
-    if (row.nextCheckAt) {
-      deadlines.push(+row.nextCheckAt);
-    }
+  if (retryRow?.nextCheckAt) {
+    deadlines.push(+retryRow.nextCheckAt);
   }
 
-  for (const row of upcomingRows) {
-    const windowStart = +row.startsAt - MEET_START_TOLERANCE_MS;
-    const nextCheck = row.nextCheckAt
-      ? +row.nextCheckAt
+  if (upcomingRow) {
+    const windowStart =
+      +upcomingRow.startsAt - MEET_START_TOLERANCE_MS;
+
+    const nextCheck = upcomingRow.nextCheckAt
+      ? +upcomingRow.nextCheckAt
       : Number.NEGATIVE_INFINITY;
 
     deadlines.push(Math.max(windowStart, nextCheck));
@@ -1181,6 +1183,7 @@ export async function pollOnlineMeetings({
         : Math.max(0, nextDeadline - +now),
   };
 }
+
 
 
 
