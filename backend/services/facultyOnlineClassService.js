@@ -4,6 +4,15 @@ import { wakeMeetWorker } from "./meetWorkerSignals.js";
 const fail = (message, status = 400) => {
   throw Object.assign(new Error(message), { status });
 };
+const MEET_START_LEAD_MS = 15 * 60 * 1000;
+const MAX_SCHEDULING_HORIZON_MS = 3 * 24 * 60 * 60 * 1000;
+
+function validateSchedulingWindow(startsAt, now = new Date()) {
+  const difference = startsAt.getTime() - now.getTime();
+  if (difference < 0 || difference > MAX_SCHEDULING_HORIZON_MS) {
+    fail("Classes must be scheduled between now and 3 days ahead.", 400);
+  }
+}
 export const isOnlineDoubtClass = (type) =>
   String(type?.name || "")
     .trim()
@@ -185,6 +194,7 @@ export function onlineClassDto(row, now = new Date()) {
       !row.deletedAt &&
       row.status === "SCHEDULED" &&
       !row.conferenceName &&
+      !row.actualStartAt &&
       !row.incentiveEntryId &&
       !(row.pollLeaseUntil > now),
     canCancel:
@@ -579,7 +589,13 @@ export async function listOnlineClasses(
 }
 
 
-export async function saveOnlineClass(facultyId, body, id = null, db = prisma) {
+export async function saveOnlineClass(
+  facultyId,
+  body,
+  id = null,
+  db = prisma,
+  now = new Date(),
+) {
   const data = validateOnlineClass(body, {
     allowMissingMeetUrl: !id,
   });
@@ -602,13 +618,16 @@ export async function saveOnlineClass(facultyId, body, id = null, db = prisma) {
           "Credited classes require admin correction and cannot be edited here.",
           409,
         );
-      if (row.conferenceName || row.pollLeaseUntil > new Date())
+      if (row.conferenceName || row.actualStartAt || row.pollLeaseUntil > now)
         fail(
-          "A meeting is being tracked. It cannot be rescheduled or changed.",
+          "A class that has started or is currently being verified cannot be rescheduled.",
           409,
         );
       if (body.expectedUpdatedAt !== row.updatedAt.toISOString())
         fail("This class changed. Refresh before editing.", 409);
+      if (data.startsAt.getTime() !== row.startsAt.getTime()) {
+  validateSchedulingWindow(data.startsAt, now);
+}
 
       const directory = await resolveClassDirectory(body, row, tx);
 
@@ -620,7 +639,9 @@ export async function saveOnlineClass(facultyId, body, id = null, db = prisma) {
             ...directory,
             ...(row.trackingEnabled
               ? {
-                  nextCheckAt: data.startsAt,
+                  nextCheckAt: new Date(
+                    data.startsAt.getTime() - MEET_START_LEAD_MS,
+                  ),
                   verificationStatus: "PENDING",
                   verificationError: null,
                   attendanceEvidence: null,
@@ -657,6 +678,7 @@ export async function saveOnlineClass(facultyId, body, id = null, db = prisma) {
       fail("This class was deleted. Start a new class submission.", 409);
 
     if (existing) return onlineClassDto(existing);
+    validateSchedulingWindow(data.startsAt, now);
 
     // Use the faculty default only when no class-specific URL was supplied.
     if (!data.meetUrl) {
@@ -684,7 +706,9 @@ export async function saveOnlineClass(facultyId, body, id = null, db = prisma) {
           requestId: body.requestId,
           trackingEnabled: true,
           verificationStatus: "PENDING",
-          nextCheckAt: data.startsAt,
+          nextCheckAt: new Date(
+            data.startsAt.getTime() - MEET_START_LEAD_MS,
+          ),
         },
         include,
       }),

@@ -56,6 +56,7 @@ const row = () => ({
   status: "SCHEDULED",
   verificationStatus: "PENDING",
   pollAttempts: 0,
+  lastCheckedAt: null,
   nextCheckAt: null,
   pollLeaseUntil: null,
   pollLeaseToken: null,
@@ -294,6 +295,7 @@ function provider({
   unknownTeacher = false,
   ambiguous = false,
   sessionFailure = false,
+  participantFailure = false,
   historicalCount = 1,
   onParticipant = async () => {},
 } = {}) {
@@ -382,7 +384,15 @@ function provider({
     if (url.pathname.endsWith("/participants")) {
       await onParticipant();
 
-      return json(
+
+      if (participantFailure && url.searchParams.has("pageToken")) {
+        return {
+          ok: false,
+          status: 429,
+          headers: { get: () => "120" },
+        };
+      }
+return json(
         url.searchParams.has("pageToken")
           ? {
               participants: [
@@ -525,7 +535,7 @@ test(
   async () => {
     for (const partial of [false, true]) {
       const db = fixture();
-      const p = provider({ sessionFailure: partial });
+      const p = provider({ participantFailure: partial });
 
       let reads = 0;
 
@@ -1250,7 +1260,7 @@ test(
 );
 
 test(
-  "worker uses the five-minute recovery interval when no deadline exists",
+  "worker uses the 30-minute default recovery interval when no deadline exists",
   async () => {
     const scheduledTimers = [];
     const clearedTimers = [];
@@ -1268,7 +1278,6 @@ test(
 
     const stop = startMeetPollingWorker({
       env: {},
-      intervalMs: 5 * 60 * 1000,
       schedule,
       cancelSchedule: (timer) =>
         clearedTimers.push(timer),
@@ -1282,7 +1291,7 @@ test(
     assert.equal(scheduledTimers.length, 1);
     assert.equal(
       scheduledTimers[0].delay,
-      5 * 60 * 1000,
+      30 * 60 * 1000,
     );
 
     await stop();
@@ -1314,7 +1323,7 @@ test(
 
     const stop = startMeetPollingWorker({
       env: {},
-      intervalMs: 5 * 60 * 1000,
+      intervalMs: 30 * 60 * 1000,
       schedule,
       cancelSchedule: (timer) =>
         clearedTimers.push(timer),
@@ -1336,7 +1345,7 @@ test(
 
     assert.equal(
       recoveryTimer.delay,
-      5 * 60 * 1000,
+      30 * 60 * 1000,
     );
 
     assert.equal(wakeMeetWorker(), true);
@@ -1372,7 +1381,7 @@ test(
 
     const stop = startMeetPollingWorker({
       env: {},
-      intervalMs: 5 * 60 * 1000,
+      intervalMs: 30 * 60 * 1000,
       schedule,
       cancelSchedule: (timer) =>
         clearedTimers.push(timer),
@@ -1401,7 +1410,7 @@ test(
 
     assert.equal(
       scheduledTimers[1].delay,
-      5 * 60 * 1000,
+      30 * 60 * 1000,
     );
 
     await stop();
@@ -1462,6 +1471,44 @@ test(
   },
 );
 test(
+  "first activation ignores a legacy start-time deadline but respects existing retry deadlines",
+  async () => {
+    const db = fixture();
+
+    db.rows.splice(
+      0,
+      db.rows.length,
+      {
+        ...structuredClone(row()),
+        id: "legacy-first-activation",
+        startsAt: new Date(+now + 10 * 60 * 1000),
+        endsAt: new Date(+now + 70 * 60 * 1000),
+        nextCheckAt: new Date(+now + 10 * 60 * 1000),
+        lastCheckedAt: null,
+      },
+      {
+        ...structuredClone(row()),
+        id: "already-checked",
+        startsAt: new Date(+now + 10 * 60 * 1000),
+        endsAt: new Date(+now + 70 * 60 * 1000),
+        nextCheckAt: new Date(+now + 20 * 60 * 1000),
+        lastCheckedAt: new Date(+now - 5 * 60 * 1000),
+      },
+    );
+
+    const checked = [];
+    const result = await pollOnlineMeetings({
+      db,
+      now,
+      check: async (classId) => checked.push(classId),
+    });
+
+    assert.deepEqual(checked, ["legacy-first-activation"]);
+    assert.equal(result.nextDelayMs, 20 * 60 * 1000);
+  },
+);
+
+test(
   "polling selects the earliest retry or upcoming-class deadline",
   async () => {
     const db = fixture();
@@ -1470,6 +1517,7 @@ test(
       {
         ...structuredClone(row()),
         id: "retry-later",
+        lastCheckedAt: new Date(+now - 5 * 60 * 1000),
         startsAt: new Date(+now + 5 * 60 * 1000),
         nextCheckAt: new Date(+now + 60 * 60 * 1000),
       },
@@ -1734,7 +1782,7 @@ test(
     assert.equal(result.verificationPending, true);
     assert.equal(result.status, "SCHEDULED");
     assert.equal(db.entries.length, 0);
-    assert.equal(+db.rows[0].nextCheckAt, +now + 60000);
+    assert.equal(+db.rows[0].nextCheckAt, +now + 30 * 60 * 1000);
 
     const retry = await checkOnlineMeeting(
       "class-one",
@@ -1827,6 +1875,33 @@ test(
 );
 
 test(
+  "Google Retry-After delays longer than one hour are preserved",
+  async () => {
+    const client = meetClient({
+      token: "controlled",
+      refresh: async () => null,
+      fetcher: async () => ({
+        ok: false,
+        status: 429,
+        headers: {
+          get: (name) =>
+            name.toLowerCase() === "retry-after" ? "7200" : null,
+        },
+      }),
+    });
+
+    await assert.rejects(
+      client.get("conferenceRecords"),
+      (error) => {
+        assert.equal(error.code, "API_BACKOFF");
+        assert.equal(error.retryMs, 7200000);
+        return true;
+      },
+    );
+  },
+);
+
+test(
   "overlapping tolerance windows on duplicate classes require review without credit",
   async () => {
     const db = fixture();
@@ -1900,7 +1975,7 @@ test(
 // -----------------------------------------------------------------------------
 
 test(
-  "all conference/participant/session pages persist; reconnect overlap merges and configured rate is credited once",
+  "all conference and participant pages persist; reconnect overlap merges and configured rate is credited once",
   async () => {
     const db = fixture();
     const p = provider();
@@ -1916,20 +1991,15 @@ test(
     assert.equal(result.attendance.totalParticipants, 2);
     assert.equal(result.attendance.excludingTeacher, 1);
 
-    assert.equal(
-      result.attendance.participants[0].durationSeconds,
-      3660,
-    );
-
-    assert.equal(
-      result.attendance.participants[0].sessions.length,
-      4,
-    );
-
     assert.ok(
-      p.calls.some((path) =>
-        path.endsWith("participantSessionss-next"),
+      result.attendance.participants.every(
+        (participant) => participant.attendanceStatus === "PRESENT",
       ),
+    );
+
+    assert.equal(
+      p.calls.some((path) => path.includes("participantSessions")),
+      false,
     );
 
     assert.equal(db.entries.length, 1);
@@ -2101,7 +2171,7 @@ test(
   "API failures persist partial evidence and account backoff without marking paid or completed by schedule",
   async () => {
     const db = fixture();
-    const p = provider({ sessionFailure: true });
+    const p = provider({ participantFailure: true });
 
     const result = await checkOnlineMeeting(
       "class-one",

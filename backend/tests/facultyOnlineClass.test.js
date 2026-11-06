@@ -3,11 +3,21 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   validateOnlineClass,
-  saveOnlineClass,
+  saveOnlineClass as saveOnlineClassWithClock,
   transitionOnlineClass,
   listOnlineClasses,
 } from "../services/facultyOnlineClassService.js";
+const TEST_NOW = new Date("2026-10-09T11:00:00.000Z");
 
+async function saveOnlineClass(
+  facultyId,
+  body,
+  id = null,
+  db,
+  now = TEST_NOW,
+) {
+  return saveOnlineClassWithClock(facultyId, body, id, db, now);
+}
 const body = {
   batchIds: ["batch-one", "batch-two"],
   topic: "Algebra",
@@ -206,6 +216,7 @@ test("new sessions need no scheduled end; editing preserves a historical end wit
     },
     legacy.id,
     db,
+    new Date("2026-10-10T11:00:00.000Z"),
   );
 
   assert.equal(+edited.endsAt, +legacy.endsAt);
@@ -505,5 +516,77 @@ test("retrying a scheduling request preserves its original Meet URL snapshot", a
     retry.meetUrl,
     "https://meet.google.com/def-ghij-klm",
   );
+  assert.equal(db.rows.length, 1);
+});
+
+test("scheduling rejects classes beyond 3 days or already started", async () => {
+  const db = database();
+
+  await assert.rejects(
+    saveOnlineClass(
+      "faculty-one",
+      {
+        ...body,
+        date: "2026-10-14",
+        requestId: "beyond-horizon-one",
+      },
+      null,
+      db,
+    ),
+    (error) => error.status === 400,
+  );
+
+  await assert.rejects(
+    saveOnlineClass(
+      "faculty-one",
+      { ...body, requestId: "already-started-one", startTime: "16:29" },
+      null,
+      db,
+    ),
+    (error) => error.status === 400,
+  );
+});
+
+test("rescheduling within the 3-day window updates the next check deadline", async () => {
+  const db = database();
+  const row = await saveOnlineClass("faculty-one", body, null, db);
+
+  const updated = await saveOnlineClass(
+    "faculty-one",
+    {
+      ...body,
+      startTime: "17:31",
+      expectedUpdatedAt: row.updatedAt.toISOString(),
+    },
+    row.id,
+    db,
+  );
+
+  assert.equal(updated.startsAt.toISOString(), "2026-10-09T12:01:00.000Z");
+  assert.equal(
+    db.rows.find((item) => item.id === row.id).nextCheckAt.toISOString(),
+    "2026-10-09T11:46:00.000Z",
+  );
+});
+
+test("duplicate request retry succeeds even after its scheduling window", async () => {
+  const db = database();
+
+  const first = await saveOnlineClass(
+    "faculty-one",
+    body,
+    null,
+    db,
+  );
+
+  const retry = await saveOnlineClass(
+    "faculty-one",
+    body,
+    null,
+    db,
+    new Date("2026-10-09T12:00:00.000Z"),
+  );
+
+  assert.equal(retry.id, first.id);
   assert.equal(db.rows.length, 1);
 });

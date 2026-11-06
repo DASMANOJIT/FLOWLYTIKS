@@ -117,80 +117,51 @@ function retainConferenceEnd(fresh, previous, row) {
 }
 
 export function attendanceSummary(participants, conference, teacherId) {
-  const start = stamp(conference.startTime),
-    end = stamp(conference.endTime);
+  const start = stamp(conference.startTime);
+  const end = stamp(conference.endTime);
   const groups = new Map();
-  let complete = Boolean(start && end);
+
   for (const participant of participants) {
     const user = participant.googleUserId || null;
-    const key = user || participant.name; // Anonymous identities must never be guessed from names.
+    const resourceName = participant.name || `unknown-${groups.size}`;
+    const key = user || resourceName;
+
     const group = groups.get(key) || {
       identity: key,
       googleUserId: user,
       displayName: participant.displayName || "Unknown participant",
       resourceNames: [],
-      sessions: [],
+      attendanceStatus: "PRESENT",
     };
-    group.resourceNames.push(participant.name);
-    for (const session of participant.sessions) {
-      const from = stamp(session.startTime),
-        to = stamp(session.endTime);
-      if (!from || !to || to < from) {
-        complete = false;
-        continue;
-      }
-      group.sessions.push({
-        name: session.name,
-        startTime: from.toISOString(),
-        endTime: to.toISOString(),
-      });
+
+    if (!group.resourceNames.includes(resourceName)) {
+      group.resourceNames.push(resourceName);
     }
-    if (!participant.sessions.length) complete = false;
+
+    if (
+      group.displayName === "Unknown participant" &&
+      participant.displayName
+    ) {
+      group.displayName = participant.displayName;
+    }
+
     groups.set(key, group);
   }
-  const people = [...groups.values()].map((group) => {
-    const intervals = group.sessions
-      .map((s) => [
-        Math.max(+new Date(s.startTime), +start),
-        Math.min(+new Date(s.endTime), +(end || new Date())),
-      ])
-      .filter(([a, b]) => b > a)
-      .sort((a, b) => a[0] - b[0]);
-    const merged = [];
-    for (const interval of intervals) {
-      const last = merged.at(-1);
-      if (last && interval[0] <= last[1])
-        last[1] = Math.max(last[1], interval[1]);
-      else merged.push([...interval]);
-    }
-    return {
-      ...group,
-      durationSeconds: merged.reduce((sum, [a, b]) => sum + (b - a) / 1000, 0),
-      mergedIntervals: merged.map(([a, b]) => ({
-        startTime: new Date(a).toISOString(),
-        endTime: new Date(b).toISOString(),
-      })),
-    };
-  });
+
+  const people = [...groups.values()];
   const teacher = teacherId
-    ? people.find((p) => p.googleUserId === teacherId)
+    ? people.find((person) => person.googleUserId === teacherId)
     : null;
-  // Only a different signed-in Google identity proves a non-teacher attendee.
-  const verifiedNonTeacher = teacher
-    ? people.filter(
-        (p) =>
-          p.googleUserId &&
-          p.googleUserId !== teacherId &&
-          p.durationSeconds > 0,
-      ).length
-    : null;
+
+  const excludingTeacher = teacher ? people.length - 1 : null;
+
   return {
     participants: people,
     totalParticipants: people.length,
-    excludingTeacher: teacher ? people.length - 1 : null,
-    teacherVerified: Boolean(teacher?.durationSeconds > 0),
-    verifiedNonTeacher,
-    complete,
+    excludingTeacher,
+    teacherVerified: Boolean(teacher),
+    verifiedNonTeacher: teacher ? excludingTeacher : null,
+    complete: Boolean(start && end && end >= start),
   };
 }
 
@@ -241,7 +212,7 @@ export function meetClient({
           "Google Meet is temporarily unavailable. Checking will retry automatically.",
           503,
           "API_BACKOFF",
-          Math.max(60000, Math.min(3600000, retryMs)),
+          Math.max(60000, retryMs),
         );
       }
       if (response.status === 404)
@@ -459,14 +430,20 @@ export async function checkOnlineMeeting(
       409,
       "LEGACY",
     );
-  if (row.status === "CANCELLED" || row.verificationStatus === "VERIFIED")
+  if (
+    row.status === "CANCELLED" ||
+    (TERMINAL_MEET_VERIFICATION_STATUSES.includes(row.verificationStatus) &&
+      row.verificationStatus !== "TEACHER_IDENTITY_REVIEW")
+  )
     return onlineClassDto(row);
   const repairEndedLive =
     row.verificationStatus === "LIVE" &&
     row.actualEndAt &&
     establishedConference(row);
+  const firstActivation =
+    !row.lastCheckedAt && conferenceWindow(row).start <= now;
   if (
-    (row.nextCheckAt > now && !repairEndedLive) ||
+    (row.nextCheckAt > now && !repairEndedLive && !firstActivation) ||
     conferenceWindow(row).start > now
   )
     return {
@@ -480,7 +457,10 @@ export async function checkOnlineMeeting(
     where: {
       id,
       status: { not: "CANCELLED" },
-      verificationStatus: { not: "VERIFIED" },
+      OR: [
+        { verificationStatus: { notIn: TERMINAL_MEET_VERIFICATION_STATUSES } },
+        { verificationStatus: "TEACHER_IDENTITY_REVIEW" },
+      ],
       trackingEnabled: true,
       AND: [
         { OR: [{ pollLeaseUntil: null }, { pollLeaseUntil: { lte: now } }] },
@@ -488,6 +468,7 @@ export async function checkOnlineMeeting(
           OR: [
             { nextCheckAt: null },
             { nextCheckAt: { lte: now } },
+            ...(firstActivation ? [{ lastCheckedAt: null }] : []),
             ...(repairEndedLive
               ? [{ verificationStatus: "LIVE", actualEndAt: { not: null } }]
               : []),
@@ -540,12 +521,11 @@ export async function checkOnlineMeeting(
     ).map((p) => [p.name, p]),
   );
   const cacheParticipant = (p) => {
-    const cached = participantCache.get(p.name) || { ...p, sessions: [] };
-    cached.displayName = p.displayName;
-    cached.googleUserId = p.googleUserId;
-    const sessions = new Map(cached.sessions.map((s) => [s.name, s]));
-    for (const s of p.sessions) sessions.set(s.name, { ...s });
-    cached.sessions = [...sessions.values()];
+    const cached = {
+      name: p.name,
+      googleUserId: p.googleUserId || null,
+      displayName: p.displayName || "Unknown participant",
+    };
     participantCache.set(p.name, cached);
     evidence.participantCache = [...participantCache.values()];
   };
@@ -828,32 +808,10 @@ if (candidates.length === 0) {
                 p.phoneUser?.displayName ||
                 "Unknown participant",
             ).slice(0, 500),
-            sessions: [],
           };
           evidence.partialParticipants.push(participant);
           cacheParticipant(participant);
           await progress({ attendanceEvidence: evidence });
-          await client.pages(
-            `${p.name}/participantSessions`,
-            "participantSessions",
-            { pageSize: 250 },
-            async (sessions) => {
-              for (const s of sessions) {
-                resource(
-                  s.name,
-                  new RegExp(`^${p.name}/participantSessions/[a-zA-Z0-9_-]+$`),
-                );
-                if (!participant.sessions.some((old) => old.name === s.name))
-                  participant.sessions.push({
-                    name: s.name,
-                    startTime: s.startTime || null,
-                    endTime: s.endTime || null,
-                  });
-              }
-              cacheParticipant(participant);
-              await progress({ attendanceEvidence: evidence });
-            },
-          );
         }
       },
     );
@@ -902,15 +860,7 @@ if (candidates.length === 0) {
       finalizeMeeting(tx, row, summary, now, connection.connectedAt),
     );
 
-    const retryMs =
-  !conference.endTime &&
-  finalized?.verificationStatus === "LIVE"
-    ? 30 * 60 * 1000
-    : conference.endTime &&
-        finalized?.verificationStatus !== "ATTENDANCE_PENDING"
-      ? 3600000
-      : 60000;
-
+    const retryMs = 30 * 60 * 1000;
     await db.facultyOnlineClass.updateMany({
       where: { id, pollLeaseToken },
       data: {
@@ -931,16 +881,10 @@ if (candidates.length === 0) {
         where: { facultyId: row.facultyId },
         data: { status: "RECONNECT_REQUIRED" },
       });
-    const backoff =
-      error.code === "MISSING_DATA"
-        ? 60000
-        : Math.min(
-            3600000,
-            Math.max(
-              error.retryMs || 60000,
-              60000 * 2 ** Math.min(row.pollAttempts || 0, 6),
-            ),
-          );
+    const backoff = Math.max(
+      30 * 60 * 1000,
+      Number(error.retryMs) || 0,
+    );
     if (error.code === "API_BACKOFF")
       await db.facultyGoogleConnection.updateMany({
         where: { facultyId: row.facultyId },
@@ -1026,39 +970,21 @@ export async function pollOnlineMeetings({
     trackingEnabled: true,
     deletedAt: null,
     status: { not: "CANCELLED" },
-    AND: [
-      {
-        OR: [
-          {
-            verificationStatus: {
-              notIn: TERMINAL_MEET_VERIFICATION_STATUSES,
-            },
-          },
-          {
-            verificationStatus: "AMBIGUOUS_REVIEW",
-            conferenceName: { not: null },
-            conferenceSpace: { not: null },
-            actualStartAt: { not: null },
-          },
-        ],
-      },
-    ],
+    verificationStatus: {
+      notIn: TERMINAL_MEET_VERIFICATION_STATUSES,
+    },
   };
 
   const rows = await db.facultyOnlineClass.findMany({
     where: {
       ...eligibleWhere,
-      AND: [
-        ...eligibleWhere.AND,
+      OR: [
+        { nextCheckAt: null },
+        { nextCheckAt: { lte: now } },
+        { lastCheckedAt: null },
         {
-          OR: [
-            { nextCheckAt: null },
-            { nextCheckAt: { lte: now } },
-            {
-              verificationStatus: "LIVE",
-              actualEndAt: { not: null },
-            },
-          ],
+          verificationStatus: "LIVE",
+          actualEndAt: { not: null },
         },
       ],
       startsAt: {
@@ -1091,14 +1017,7 @@ export async function pollOnlineMeetings({
       while (nextIndex < rows.length) {
         const row = rows[nextIndex++];
 
-        if (
-          row.verificationStatus === "AMBIGUOUS_REVIEW" &&
-          !establishedConference(row)
-        ) {
-          continue;
-        }
-
-        try {
+try {
           await check(row.id, null, { db, now });
         } catch (error) {
           if (!["CHECK_RUNNING", "CHECK_NOT_DUE"].includes(error.code)) {
@@ -1127,6 +1046,7 @@ export async function pollOnlineMeetings({
         lte: new Date(+now + MEET_START_TOLERANCE_MS),
       },
       nextCheckAt: { gt: now },
+      lastCheckedAt: { not: null },
     },
     orderBy: [
       { nextCheckAt: "asc" },
@@ -1151,7 +1071,6 @@ export async function pollOnlineMeetings({
     ],
     select: {
       startsAt: true,
-      nextCheckAt: true,
     },
   });
 
@@ -1162,14 +1081,9 @@ export async function pollOnlineMeetings({
   }
 
   if (upcomingRow) {
-    const windowStart =
-      +upcomingRow.startsAt - MEET_START_TOLERANCE_MS;
-
-    const nextCheck = upcomingRow.nextCheckAt
-      ? +upcomingRow.nextCheckAt
-      : Number.NEGATIVE_INFINITY;
-
-    deadlines.push(Math.max(windowStart, nextCheck));
+    deadlines.push(
+      +upcomingRow.startsAt - MEET_START_TOLERANCE_MS,
+    );
   }
 
   const nextDeadline = deadlines.length
@@ -1190,7 +1104,7 @@ export async function pollOnlineMeetings({
 export function startMeetPollingWorker({
   env = process.env,
   poll = pollOnlineMeetings,
-  intervalMs = 5 * 60 * 1000,
+  intervalMs = 30 * 60 * 1000,
   schedule = setTimeout,
   cancelSchedule = clearTimeout,
 } = {}) {
@@ -1250,9 +1164,9 @@ export function startMeetPollingWorker({
       ? Math.max(0, result.nextDelayMs)
       : intervalMs;
 
-    // The recovery interval is the maximum sleep time.
+    // The recovery interval is the default sleep time.
     // It also discovers work created by other backend instances.
-    scheduleNext(Math.min(suggestedDelay, intervalMs));
+    scheduleNext(suggestedDelay);
   };
 
   const startRun = () => {
